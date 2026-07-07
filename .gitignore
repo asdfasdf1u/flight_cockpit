@@ -53,3 +53,7 @@ dkms.conf
 
 # debug information files
 *.dwo
+# 项目编译输出文件夹
+build/
+# VSCode 本地配置（可选，推荐加上）
+.vscode/
