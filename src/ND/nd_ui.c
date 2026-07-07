@@ -6,15 +6,23 @@
 
 #define ND_DEG_TO_RAD 0.01745329251994329577f
 
-static const SDL_Color COLOR_BG = {5, 10, 14, 255};
-static const SDL_Color COLOR_PANEL = {11, 23, 28, 255};
-static const SDL_Color COLOR_GRID = {24, 100, 82, 255};
-static const SDL_Color COLOR_TEXT = {225, 242, 238, 255};
-static const SDL_Color COLOR_GREEN = {90, 255, 135, 255};
-static const SDL_Color COLOR_CYAN = {70, 210, 255, 255};
-static const SDL_Color COLOR_MAGENTA = {255, 95, 230, 255};
-static const SDL_Color COLOR_AMBER = {255, 185, 65, 255};
-static const SDL_Color COLOR_DIM = {95, 120, 118, 255};
+typedef struct ND_Layout
+{
+    int width;
+    int height;
+    int center_x;
+    int aircraft_y;
+    int arc_center_y;
+    int arc_radius;
+    int arc_top_y;
+} ND_Layout;
+
+static const SDL_Color COLOR_BLACK = {0, 0, 0, 255};
+static const SDL_Color COLOR_WHITE = {236, 238, 232, 255};
+static const SDL_Color COLOR_GRAY = {170, 176, 172, 255};
+static const SDL_Color COLOR_GREEN = {30, 230, 45, 255};
+static const SDL_Color COLOR_BLUE = {0, 70, 255, 255};
+static const SDL_Color COLOR_MAGENTA = {238, 46, 210, 255};
 
 static void set_color(SDL_Renderer *renderer, SDL_Color color)
 {
@@ -25,12 +33,6 @@ static void fill_rect(SDL_Renderer *renderer, const SDL_Rect *rect, SDL_Color co
 {
     set_color(renderer, color);
     SDL_RenderFillRect(renderer, rect);
-}
-
-static void draw_rect(SDL_Renderer *renderer, const SDL_Rect *rect, SDL_Color color)
-{
-    set_color(renderer, color);
-    SDL_RenderDrawRect(renderer, rect);
 }
 
 static void draw_text(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, int x, int y, const char *format, ...)
@@ -88,189 +90,267 @@ static void draw_centered_text(SDL_Renderer *renderer, TTF_Font *font, SDL_Color
     draw_text(renderer, font, color, rect->x + (rect->w - text_w) / 2, rect->y + (rect->h - text_h) / 2, "%s", text);
 }
 
-static void draw_circle(SDL_Renderer *renderer, int cx, int cy, int radius, SDL_Color color)
+static float normalize_signed_degrees(float degrees)
+{
+    while (degrees > 180.0f)
+    {
+        degrees -= 360.0f;
+    }
+
+    while (degrees < -180.0f)
+    {
+        degrees += 360.0f;
+    }
+
+    return degrees;
+}
+
+static ND_Layout build_layout(int width, int height)
+{
+    ND_Layout layout;
+    layout.width = width;
+    layout.height = height;
+    layout.center_x = width / 2;
+    layout.aircraft_y = height - 92;
+    layout.arc_center_y = height + 8;
+    layout.arc_radius = (int)((float)height * 0.86f);
+
+    const int max_radius = (int)((float)width * 0.92f);
+    if (layout.arc_radius > max_radius)
+    {
+        layout.arc_radius = max_radius;
+    }
+
+    if (layout.arc_radius < 280)
+    {
+        layout.arc_radius = 280;
+    }
+
+    if (layout.arc_center_y - layout.arc_radius < 112)
+    {
+        layout.arc_radius = layout.arc_center_y - 112;
+    }
+
+    layout.arc_top_y = layout.arc_center_y - layout.arc_radius;
+    return layout;
+}
+
+static void arc_point(const ND_Layout *layout, float relative_degrees, int radius, int *x, int *y)
+{
+    const float radians = relative_degrees * ND_DEG_TO_RAD;
+    *x = layout->center_x + (int)(sinf(radians) * (float)radius);
+    *y = layout->arc_center_y - (int)(cosf(radians) * (float)radius);
+}
+
+static void draw_filled_circle(SDL_Renderer *renderer, int cx, int cy, int radius, SDL_Color color)
 {
     set_color(renderer, color);
-    int prev_x = cx + radius;
-    int prev_y = cy;
 
-    for (int degree = 1; degree <= 360; ++degree)
+    for (int y = -radius; y <= radius; ++y)
     {
-        const float radians = (float)degree * ND_DEG_TO_RAD;
-        const int x = cx + (int)(cosf(radians) * (float)radius);
-        const int y = cy + (int)(sinf(radians) * (float)radius);
+        for (int x = -radius; x <= radius; ++x)
+        {
+            if (x * x + y * y <= radius * radius)
+            {
+                SDL_RenderDrawPoint(renderer, cx + x, cy + y);
+            }
+        }
+    }
+}
+
+static void draw_circle_dot(SDL_Renderer *renderer, int cx, int cy, int circle_radius, float angle_degrees, int dot_radius)
+{
+    const float radians = angle_degrees * ND_DEG_TO_RAD;
+    const int x = cx + (int)(sinf(radians) * (float)circle_radius);
+    const int y = cy - (int)(cosf(radians) * (float)circle_radius);
+
+    draw_filled_circle(renderer, x, y, dot_radius, COLOR_WHITE);
+}
+
+static void draw_nd_background(SDL_Renderer *renderer, const ND_Layout *layout)
+{
+    fill_rect(renderer, &(SDL_Rect){0, 0, layout->width, layout->height}, COLOR_BLACK);
+}
+
+static void draw_active_waypoint_info(SDL_Renderer *renderer, TTF_Font *font, const ND_Layout *layout, const ND_Data *data)
+{
+    char distance_text[32];
+    snprintf(distance_text, sizeof(distance_text), "%04.1fNM", data->active_waypoint_distance_nm);
+
+    const SDL_Rect name_rect = {layout->width - 180, 16, 150, 24};
+    const SDL_Rect min_rect = {layout->width - 180, 42, 150, 22};
+    const SDL_Rect distance_rect = {layout->width - 180, 63, 150, 22};
+
+    draw_centered_text(renderer, font, COLOR_MAGENTA, &name_rect, "%s", data->active_waypoint_name);
+    draw_centered_text(renderer, font, COLOR_WHITE, &min_rect, "MIN");
+    draw_centered_text(renderer, font, COLOR_WHITE, &distance_rect, "%s", distance_text);
+}
+
+static void draw_top_status(SDL_Renderer *renderer, TTF_Font *font, const ND_Layout *layout, const ND_Data *data)
+{
+    draw_text(renderer, font, COLOR_WHITE, 14, 16, "GS: %03.0f TAS: %03.0f", data->ground_speed, data->true_air_speed);
+    draw_text(renderer, font, COLOR_WHITE, 20, 39, "---\302\260/---");
+
+    const int center_x = layout->center_x;
+    const SDL_Rect track_box = {center_x - 48, 46, 96, 30};
+
+    draw_text(renderer, font, COLOR_GREEN, center_x - 125, 52, "TRK");
+    draw_text(renderer, font, COLOR_GREEN, center_x + 65, 52, "MAG");
+
+    set_color(renderer, COLOR_WHITE);
+    SDL_RenderDrawLine(renderer, track_box.x, track_box.y, track_box.x, track_box.y + track_box.h);
+    SDL_RenderDrawLine(renderer, track_box.x, track_box.y + track_box.h, track_box.x + track_box.w, track_box.y + track_box.h);
+    SDL_RenderDrawLine(renderer, track_box.x + track_box.w, track_box.y, track_box.x + track_box.w, track_box.y + track_box.h);
+
+    draw_centered_text(renderer, font, COLOR_WHITE, &track_box, "%03d", ((int)(data->track + 0.5f)) % 360);
+}
+
+static void draw_heading_arc(SDL_Renderer *renderer, TTF_Font *font, const ND_Layout *layout, const ND_Data *data)
+{
+    int prev_x = 0;
+    int prev_y = 0;
+    arc_point(layout, -88.0f, layout->arc_radius, &prev_x, &prev_y);
+
+    set_color(renderer, COLOR_WHITE);
+    for (int degree = -87; degree <= 88; ++degree)
+    {
+        int x = 0;
+        int y = 0;
+        arc_point(layout, (float)degree, layout->arc_radius, &x, &y);
         SDL_RenderDrawLine(renderer, prev_x, prev_y, x, y);
         prev_x = x;
         prev_y = y;
     }
-}
 
-static void draw_dashed_line(SDL_Renderer *renderer, int x1, int y1, int x2, int y2, SDL_Color color)
-{
-    set_color(renderer, color);
-
-    const int segments = 18;
-    for (int i = 0; i < segments; i += 2)
+    for (int mark = 0; mark < 360; mark += 5)
     {
-        const float a0 = (float)i / (float)segments;
-        const float a1 = (float)(i + 1) / (float)segments;
-        const int sx = x1 + (int)((float)(x2 - x1) * a0);
-        const int sy = y1 + (int)((float)(y2 - y1) * a0);
-        const int ex = x1 + (int)((float)(x2 - x1) * a1);
-        const int ey = y1 + (int)((float)(y2 - y1) * a1);
-        SDL_RenderDrawLine(renderer, sx, sy, ex, ey);
-    }
-}
-
-static int waypoint_screen_x(const SDL_Rect *map_rect, int radius, const ND_Waypoint *waypoint)
-{
-    return map_rect->x + map_rect->w / 2 + (int)(waypoint->rel_x * (float)radius);
-}
-
-static int waypoint_screen_y(const SDL_Rect *map_rect, int radius, const ND_Waypoint *waypoint)
-{
-    return map_rect->y + map_rect->h / 2 + (int)(waypoint->rel_y * (float)radius);
-}
-
-static void draw_nd_background(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *map_rect)
-{
-    fill_rect(renderer, map_rect, COLOR_PANEL);
-    draw_rect(renderer, map_rect, COLOR_CYAN);
-    draw_text(renderer, font, COLOR_CYAN, map_rect->x + 18, map_rect->y + 14, "ND - Navigation Display");
-}
-
-static void draw_range_rings(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *map_rect, int radius)
-{
-    const int cx = map_rect->x + map_rect->w / 2;
-    const int cy = map_rect->y + map_rect->h / 2;
-
-    draw_circle(renderer, cx, cy, radius, COLOR_GRID);
-    draw_circle(renderer, cx, cy, radius * 2 / 3, COLOR_GRID);
-    draw_circle(renderer, cx, cy, radius / 3, COLOR_GRID);
-
-    set_color(renderer, COLOR_GRID);
-    SDL_RenderDrawLine(renderer, cx - radius, cy, cx + radius, cy);
-    SDL_RenderDrawLine(renderer, cx, cy - radius, cx, cy + radius);
-
-    draw_text(renderer, font, COLOR_DIM, cx + radius / 3 + 8, cy - 18, "20");
-    draw_text(renderer, font, COLOR_DIM, cx + radius * 2 / 3 + 8, cy - 18, "40");
-    draw_text(renderer, font, COLOR_DIM, cx + radius + 8, cy - 18, "60 NM");
-}
-
-static void draw_aircraft_symbol(SDL_Renderer *renderer, const SDL_Rect *map_rect)
-{
-    const int cx = map_rect->x + map_rect->w / 2;
-    const int cy = map_rect->y + map_rect->h / 2;
-
-    set_color(renderer, COLOR_TEXT);
-    SDL_RenderDrawLine(renderer, cx, cy - 24, cx - 12, cy + 18);
-    SDL_RenderDrawLine(renderer, cx, cy - 24, cx + 12, cy + 18);
-    SDL_RenderDrawLine(renderer, cx - 12, cy + 18, cx + 12, cy + 18);
-    SDL_RenderDrawLine(renderer, cx - 36, cy + 2, cx - 10, cy + 2);
-    SDL_RenderDrawLine(renderer, cx + 10, cy + 2, cx + 36, cy + 2);
-    SDL_RenderDrawLine(renderer, cx, cy + 18, cx, cy + 34);
-}
-
-static void draw_route(SDL_Renderer *renderer, const SDL_Rect *map_rect, int radius, const ND_Data *data)
-{
-    const int cx = map_rect->x + map_rect->w / 2;
-    const int cy = map_rect->y + map_rect->h / 2;
-
-    if (data->waypoint_count <= 0)
-    {
-        return;
-    }
-
-    int previous_x = cx;
-    int previous_y = cy;
-    for (int i = 0; i < data->waypoint_count; ++i)
-    {
-        const ND_Waypoint *waypoint = &data->waypoints[i];
-        const int x = waypoint_screen_x(map_rect, radius, waypoint);
-        const int y = waypoint_screen_y(map_rect, radius, waypoint);
-        draw_dashed_line(renderer, previous_x, previous_y, x, y, i == data->active_waypoint_index ? COLOR_MAGENTA : COLOR_GREEN);
-        previous_x = x;
-        previous_y = y;
-    }
-}
-
-static void draw_waypoints(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *map_rect, int radius, const ND_Data *data)
-{
-    for (int i = 0; i < data->waypoint_count; ++i)
-    {
-        const ND_Waypoint *waypoint = &data->waypoints[i];
-        const int x = waypoint_screen_x(map_rect, radius, waypoint);
-        const int y = waypoint_screen_y(map_rect, radius, waypoint);
-        const int active = i == data->active_waypoint_index;
-
-        SDL_Rect box = {x - 6, y - 6, 12, 12};
-        draw_rect(renderer, &box, active ? COLOR_MAGENTA : COLOR_GREEN);
-        if (active)
+        const float relative = normalize_signed_degrees((float)mark - data->track);
+        if (relative < -76.0f || relative > 76.0f)
         {
-            SDL_Rect outer = {x - 10, y - 10, 20, 20};
-            draw_rect(renderer, &outer, COLOR_MAGENTA);
+            continue;
         }
 
-        set_color(renderer, active ? COLOR_MAGENTA : COLOR_GREEN);
-        SDL_RenderDrawLine(renderer, x - 12, y, x - 6, y);
-        SDL_RenderDrawLine(renderer, x + 6, y, x + 12, y);
-        SDL_RenderDrawLine(renderer, x, y - 12, x, y - 6);
-        SDL_RenderDrawLine(renderer, x, y + 6, x, y + 12);
+        const int label_mark = mark % 10 == 0;
+        const int major_mark = mark % 30 == 0;
+        const int tick_length = major_mark ? 22 : (label_mark ? 16 : 9);
+        int x1 = 0;
+        int y1 = 0;
+        int x2 = 0;
+        int y2 = 0;
+        arc_point(layout, relative, layout->arc_radius - tick_length, &x1, &y1);
+        arc_point(layout, relative, layout->arc_radius - 2, &x2, &y2);
 
-        draw_text(renderer, font, active ? COLOR_MAGENTA : COLOR_GREEN, x + 14, y - 15, "%s", waypoint->name);
-        draw_text(renderer, font, COLOR_DIM, x + 14, y + 8, "%.0fNM %03.0f", waypoint->distance_nm, waypoint->bearing_deg);
-    }
-}
-
-static void draw_compass_marks(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *map_rect, int radius, const ND_Data *data)
-{
-    const int cx = map_rect->x + map_rect->w / 2;
-    const int cy = map_rect->y + map_rect->h / 2;
-
-    for (int mark = 0; mark < 360; mark += 30)
-    {
-        const float relative = ((float)mark - data->heading) * ND_DEG_TO_RAD - 1.5707963f;
-        const int x1 = cx + (int)(cosf(relative) * (float)(radius - 16));
-        const int y1 = cy + (int)(sinf(relative) * (float)(radius - 16));
-        const int x2 = cx + (int)(cosf(relative) * (float)(radius - 2));
-        const int y2 = cy + (int)(sinf(relative) * (float)(radius - 2));
-
-        set_color(renderer, COLOR_TEXT);
+        set_color(renderer, COLOR_WHITE);
         SDL_RenderDrawLine(renderer, x1, y1, x2, y2);
 
-        const int tx = cx + (int)(cosf(relative) * (float)(radius - 38));
-        const int ty = cy + (int)(sinf(relative) * (float)(radius - 38));
-        draw_text(renderer, font, COLOR_TEXT, tx - 15, ty - 12, "%02d", mark / 10);
+        if (label_mark)
+        {
+            int label_x = 0;
+            int label_y = 0;
+            arc_point(layout, relative, layout->arc_radius - 48, &label_x, &label_y);
+            draw_centered_text(renderer, font, COLOR_WHITE, &(SDL_Rect){label_x - 20, label_y - 13, 40, 24}, "%d", mark / 10);
+        }
+    }
+
+    const int pointer_y = layout->arc_top_y + 7;
+    set_color(renderer, COLOR_WHITE);
+    SDL_RenderDrawLine(renderer, layout->center_x - 8, pointer_y - 12, layout->center_x, pointer_y + 4);
+    SDL_RenderDrawLine(renderer, layout->center_x + 8, pointer_y - 12, layout->center_x, pointer_y + 4);
+}
+
+static void draw_track_line(SDL_Renderer *renderer, const ND_Layout *layout)
+{
+    const int top_y = layout->arc_top_y - 22;
+    const int bottom_y = layout->aircraft_y - 34;
+
+    set_color(renderer, COLOR_GRAY);
+    SDL_RenderDrawLine(renderer, layout->center_x, top_y, layout->center_x, bottom_y);
+
+    for (int y = bottom_y - 70; y > top_y + 42; y -= 72)
+    {
+        SDL_RenderDrawLine(renderer, layout->center_x - 5, y, layout->center_x + 5, y);
     }
 }
 
-static void draw_status_bar(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *rect, const ND_Data *data)
+static void waypoint_to_screen(const ND_Layout *layout, const ND_Waypoint *waypoint, int *x, int *y)
 {
-    fill_rect(renderer, rect, COLOR_PANEL);
-    draw_rect(renderer, rect, COLOR_CYAN);
+    const float lateral_scale = (float)layout->arc_radius * 0.54f;
+    const float forward_scale = (float)layout->arc_radius * 0.78f;
 
-    draw_text(renderer, font, COLOR_CYAN, rect->x + 20, rect->y + 15, "HDG");
-    draw_text(renderer, font, COLOR_GREEN, rect->x + 72, rect->y + 15, "%03.0f", data->heading);
+    *x = layout->center_x + (int)(waypoint->rel_x * lateral_scale);
+    *y = layout->aircraft_y - (int)(waypoint->rel_y * forward_scale);
+}
 
-    draw_text(renderer, font, COLOR_CYAN, rect->x + 165, rect->y + 15, "TRK");
-    draw_text(renderer, font, COLOR_GREEN, rect->x + 217, rect->y + 15, "%03.0f", data->track);
+static void draw_waypoint_triangle(SDL_Renderer *renderer, int x, int y, SDL_Color color)
+{
+    set_color(renderer, color);
+    SDL_RenderDrawLine(renderer, x, y - 7, x - 6, y + 6);
+    SDL_RenderDrawLine(renderer, x - 6, y + 6, x + 6, y + 6);
+    SDL_RenderDrawLine(renderer, x + 6, y + 6, x, y - 7);
+}
 
-    draw_text(renderer, font, COLOR_CYAN, rect->x + 310, rect->y + 15, "GS");
-    draw_text(renderer, font, COLOR_GREEN, rect->x + 352, rect->y + 15, "%03.0f KT", data->ground_speed);
+static void draw_active_waypoint_symbol(SDL_Renderer *renderer, int x, int y)
+{
+    set_color(renderer, COLOR_MAGENTA);
+    SDL_RenderDrawLine(renderer, x, y - 9, x + 9, y);
+    SDL_RenderDrawLine(renderer, x + 9, y, x, y + 9);
+    SDL_RenderDrawLine(renderer, x, y + 9, x - 9, y);
+    SDL_RenderDrawLine(renderer, x - 9, y, x, y - 9);
+}
 
-    draw_text(renderer, font, COLOR_CYAN, rect->x + 500, rect->y + 15, "LAT");
-    draw_text(renderer, font, COLOR_TEXT, rect->x + 550, rect->y + 15, "%.5f", data->latitude);
-
-    draw_text(renderer, font, COLOR_CYAN, rect->x + 710, rect->y + 15, "LON");
-    draw_text(renderer, font, COLOR_TEXT, rect->x + 760, rect->y + 15, "%.5f", data->longitude);
-
-    if (data->active_waypoint_index >= 0 && data->active_waypoint_index < data->waypoint_count)
+static void draw_waypoints(SDL_Renderer *renderer, TTF_Font *font, const ND_Layout *layout, const ND_Data *data)
+{
+    for (int i = 0; i < data->waypoint_count; ++i)
     {
-        const ND_Waypoint *active = &data->waypoints[data->active_waypoint_index];
-        draw_text(renderer, font, COLOR_AMBER, rect->x + 20, rect->y + 48, "ACTIVE");
-        draw_text(renderer, font, COLOR_MAGENTA, rect->x + 100, rect->y + 48, "%s", active->name);
-        draw_text(renderer, font, COLOR_TEXT, rect->x + 190, rect->y + 48, "%.1f NM / %03.0f DEG", active->distance_nm, active->bearing_deg);
+        const ND_Waypoint *waypoint = &data->waypoints[i];
+        const int active = i == data->active_waypoint_index;
+        int x = 0;
+        int y = 0;
+        waypoint_to_screen(layout, waypoint, &x, &y);
+
+        if (active)
+        {
+            draw_active_waypoint_symbol(renderer, x, y);
+            draw_text(renderer, font, COLOR_MAGENTA, x + 13, y - 13, "%s", waypoint->name);
+        }
+        else
+        {
+            draw_waypoint_triangle(renderer, x, y, COLOR_BLUE);
+            draw_text(renderer, font, COLOR_WHITE, x + 11, y - 12, "%s", waypoint->name);
+        }
     }
+}
+
+static void draw_aircraft_symbol(SDL_Renderer *renderer, const ND_Layout *layout)
+{
+    const int cx = layout->center_x;
+    const int cy = layout->aircraft_y;
+    const int center_y = cy - 34;
+    const int base_y = center_y + 78;
+    const int base_half_width = 34;
+    const int circle_radius = 56;
+
+    set_color(renderer, COLOR_WHITE);
+    SDL_RenderDrawLine(renderer, cx, center_y, cx - base_half_width, base_y);
+    SDL_RenderDrawLine(renderer, cx, center_y, cx + base_half_width, base_y);
+    SDL_RenderDrawLine(renderer, cx - base_half_width, base_y, cx + base_half_width, base_y);
+    SDL_RenderDrawLine(renderer, cx, center_y + 28, cx - 18, base_y - 6);
+    SDL_RenderDrawLine(renderer, cx - 18, base_y - 6, cx + 18, base_y - 6);
+    SDL_RenderDrawLine(renderer, cx + 18, base_y - 6, cx, center_y + 28);
+
+    draw_circle_dot(renderer, cx, center_y, circle_radius, 0.0f, 5);
+    draw_circle_dot(renderer, cx, center_y, circle_radius, 90.0f, 5);
+    draw_circle_dot(renderer, cx, center_y, circle_radius, 180.0f, 5);
+    draw_circle_dot(renderer, cx, center_y, circle_radius, 270.0f, 5);
+
+    draw_circle_dot(renderer, cx, center_y, circle_radius, -58.0f, 2);
+    draw_circle_dot(renderer, cx, center_y, circle_radius, -35.0f, 2);
+    draw_circle_dot(renderer, cx, center_y, circle_radius, 35.0f, 2);
+    draw_circle_dot(renderer, cx, center_y, circle_radius, 58.0f, 2);
+    draw_circle_dot(renderer, cx, center_y, circle_radius, 122.0f, 2);
+    draw_circle_dot(renderer, cx, center_y, circle_radius, 145.0f, 2);
+    draw_circle_dot(renderer, cx, center_y, circle_radius, -145.0f, 2);
+    draw_circle_dot(renderer, cx, center_y, circle_radius, -122.0f, 2);
 }
 
 void nd_ui_render(SDL_Renderer *renderer, TTF_Font *font, const ND_Data *data)
@@ -286,21 +366,16 @@ void nd_ui_render(SDL_Renderer *renderer, TTF_Font *font, const ND_Data *data)
     if (width <= 0 || height <= 0)
     {
         width = 1000;
-        height = 700;
+        height = 752;
     }
 
-    fill_rect(renderer, &(SDL_Rect){0, 0, width, height}, COLOR_BG);
+    const ND_Layout layout = build_layout(width, height);
 
-    const SDL_Rect map_rect = {80, 30, 840, 545};
-    const SDL_Rect status_rect = {80, 595, 840, 82};
-    const int radius = 248;
-
-    draw_nd_background(renderer, font, &map_rect);
-    draw_range_rings(renderer, font, &map_rect, radius);
-    draw_compass_marks(renderer, font, &map_rect, radius, data);
-    draw_route(renderer, &map_rect, radius, data);
-    draw_waypoints(renderer, font, &map_rect, radius, data);
-    draw_aircraft_symbol(renderer, &map_rect);
-    draw_centered_text(renderer, font, COLOR_AMBER, &(SDL_Rect){map_rect.x + map_rect.w / 2 - 60, map_rect.y + 45, 120, 34}, "HDG %03.0f", data->heading);
-    draw_status_bar(renderer, font, &status_rect, data);
+    draw_nd_background(renderer, &layout);
+    draw_heading_arc(renderer, font, &layout, data);
+    draw_waypoints(renderer, font, &layout, data);
+    draw_track_line(renderer, &layout);
+    draw_aircraft_symbol(renderer, &layout);
+    draw_top_status(renderer, font, &layout, data);
+    draw_active_waypoint_info(renderer, font, &layout, data);
 }

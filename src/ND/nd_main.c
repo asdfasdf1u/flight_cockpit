@@ -7,8 +7,8 @@
 #include "nd_data.h"
 #include "nd_ui.h"
 
-#define ND_WINDOW_WIDTH 1000
-#define ND_WINDOW_HEIGHT 700
+#define ND_WINDOW_WIDTH 752
+#define ND_WINDOW_HEIGHT 752
 #define ND_TARGET_FRAME_MS 16
 
 static TTF_Font *open_nd_font(void)
@@ -44,7 +44,7 @@ int nd_main_run(void)
     }
 
     SDL_Window *window = SDL_CreateWindow(
-        "ND - Navigation Display",
+        "ND",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         ND_WINDOW_WIDTH,

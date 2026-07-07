@@ -19,8 +19,14 @@ typedef struct ND_Data
     double longitude;
 
     float heading;
-    float ground_speed;
     float track;
+    float ground_speed;
+    float true_air_speed;
+    float range_nm;
+
+    char active_waypoint_name[ND_NAME_LEN];
+    float active_waypoint_distance_nm;
+    float active_waypoint_eta_min;
 
     ND_Waypoint waypoints[ND_MAX_WAYPOINTS];
     int waypoint_count;

@@ -1,8 +1,8 @@
 /* #define TEST_MODULE_PFD */
-/* #define TEST_MODULE_ND */
+#define TEST_MODULE_ND
 /* #define TEST_MODULE_EICAS */
 /* #define TEST_MODULE_FMC */
-#define TEST_MODULE_COCKPIT
+/* #define TEST_MODULE_COCKPIT */
 
 #ifdef TEST_MODULE_PFD
 #include "PFD/pfd_main.h"
