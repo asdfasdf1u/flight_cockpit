@@ -1,9 +1,11 @@
 #include "cockpit_main.h"
 
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
 
+#include "cockpit_layout.h"
 #include "cockpit_ui.h"
 
 #include "../PFD/pfd_data.h"
@@ -18,9 +20,37 @@
 #include "../FMC/fmc_data.h"
 #include "../FMC/fmc_ui.h"
 
-#define COCKPIT_WINDOW_WIDTH 1400
+#define COCKPIT_WINDOW_WIDTH 1600
 #define COCKPIT_WINDOW_HEIGHT 900
 #define COCKPIT_TARGET_FRAME_MS 16
+
+#define COCKPIT_PFD_TEXTURE_WIDTH 1000
+#define COCKPIT_PFD_TEXTURE_HEIGHT 700
+#define COCKPIT_ND_TEXTURE_WIDTH 1000
+#define COCKPIT_ND_TEXTURE_HEIGHT 700
+#define COCKPIT_EICAS_TEXTURE_WIDTH 1000
+#define COCKPIT_EICAS_TEXTURE_HEIGHT 700
+#define COCKPIT_FMC_TEXTURE_WIDTH 700
+#define COCKPIT_FMC_TEXTURE_HEIGHT 900
+
+#define COCKPIT_MIN_SCALE 0.5f
+#define COCKPIT_MAX_SCALE 3.0f
+
+typedef struct Cockpit_RenderTargets
+{
+    SDL_Texture *pfd_texture;
+    SDL_Texture *nd_texture;
+    SDL_Texture *eicas_texture;
+    SDL_Texture *fmc_texture;
+    SDL_Texture *scene_texture;
+} Cockpit_RenderTargets;
+
+typedef struct Cockpit_Camera
+{
+    float scale;
+    float offset_x;
+    float offset_y;
+} Cockpit_Camera;
 
 static TTF_Font *open_cockpit_font(void)
 {
@@ -39,40 +69,240 @@ static TTF_Font *open_cockpit_font(void)
     return TTF_OpenFont("C:/Windows/Fonts/simhei.ttf", 18);
 }
 
-static int cockpit_key_to_page(SDL_Keycode key, Cockpit_Page *page)
+static float clamp_float(float value, float min_value, float max_value)
 {
-    if (page == NULL)
+    if (value < min_value)
+    {
+        return min_value;
+    }
+
+    if (value > max_value)
+    {
+        return max_value;
+    }
+
+    return value;
+}
+
+static SDL_Texture *load_texture_optional(SDL_Renderer *renderer, const char *path, int *width, int *height)
+{
+    if (width != NULL)
+    {
+        *width = 0;
+    }
+    if (height != NULL)
+    {
+        *height = 0;
+    }
+
+    SDL_Texture *texture = IMG_LoadTexture(renderer, path);
+    if (texture == NULL)
+    {
+        printf("IMG_LoadTexture failed for %s: %s\n", path, IMG_GetError());
+        return NULL;
+    }
+
+    if (SDL_QueryTexture(texture, NULL, NULL, width, height) != 0)
+    {
+        printf("SDL_QueryTexture failed for %s: %s\n", path, SDL_GetError());
+    }
+
+    return texture;
+}
+
+static SDL_Texture *create_target_texture(SDL_Renderer *renderer, int width, int height)
+{
+    SDL_Texture *texture = SDL_CreateTexture(
+        renderer,
+        SDL_PIXELFORMAT_RGBA8888,
+        SDL_TEXTUREACCESS_TARGET,
+        width,
+        height);
+    if (texture != NULL)
+    {
+        SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    }
+
+    return texture;
+}
+
+static int create_render_targets(SDL_Renderer *renderer, Cockpit_RenderTargets *targets, int world_width, int world_height)
+{
+    if (renderer == NULL || targets == NULL)
     {
         return 0;
     }
 
-    if (key == SDLK_0 || key == SDLK_KP_0)
+    targets->pfd_texture = create_target_texture(renderer, COCKPIT_PFD_TEXTURE_WIDTH, COCKPIT_PFD_TEXTURE_HEIGHT);
+    targets->nd_texture = create_target_texture(renderer, COCKPIT_ND_TEXTURE_WIDTH, COCKPIT_ND_TEXTURE_HEIGHT);
+    targets->eicas_texture = create_target_texture(renderer, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
+    targets->fmc_texture = create_target_texture(renderer, COCKPIT_FMC_TEXTURE_WIDTH, COCKPIT_FMC_TEXTURE_HEIGHT);
+    targets->scene_texture = create_target_texture(renderer, world_width, world_height);
+
+    return targets->pfd_texture != NULL &&
+           targets->nd_texture != NULL &&
+           targets->eicas_texture != NULL &&
+           targets->fmc_texture != NULL &&
+           targets->scene_texture != NULL;
+}
+
+static void destroy_render_targets(Cockpit_RenderTargets *targets)
+{
+    if (targets == NULL)
     {
-        *page = COCKPIT_PAGE_OVERVIEW;
-        return 1;
-    }
-    if (key == SDLK_1 || key == SDLK_KP_1)
-    {
-        *page = COCKPIT_PAGE_PFD;
-        return 1;
-    }
-    if (key == SDLK_2 || key == SDLK_KP_2)
-    {
-        *page = COCKPIT_PAGE_ND;
-        return 1;
-    }
-    if (key == SDLK_3 || key == SDLK_KP_3)
-    {
-        *page = COCKPIT_PAGE_EICAS;
-        return 1;
-    }
-    if (key == SDLK_4 || key == SDLK_KP_4)
-    {
-        *page = COCKPIT_PAGE_FMC;
-        return 1;
+        return;
     }
 
-    return 0;
+    if (targets->pfd_texture != NULL)
+    {
+        SDL_DestroyTexture(targets->pfd_texture);
+        targets->pfd_texture = NULL;
+    }
+    if (targets->nd_texture != NULL)
+    {
+        SDL_DestroyTexture(targets->nd_texture);
+        targets->nd_texture = NULL;
+    }
+    if (targets->eicas_texture != NULL)
+    {
+        SDL_DestroyTexture(targets->eicas_texture);
+        targets->eicas_texture = NULL;
+    }
+    if (targets->fmc_texture != NULL)
+    {
+        SDL_DestroyTexture(targets->fmc_texture);
+        targets->fmc_texture = NULL;
+    }
+    if (targets->scene_texture != NULL)
+    {
+        SDL_DestroyTexture(targets->scene_texture);
+        targets->scene_texture = NULL;
+    }
+}
+
+static void render_to_texture(SDL_Renderer *renderer, SDL_Texture *texture, void (*render_func)(SDL_Renderer *, TTF_Font *, const void *), TTF_Font *font, const void *data)
+{
+    if (renderer == NULL || texture == NULL || render_func == NULL || font == NULL || data == NULL)
+    {
+        return;
+    }
+
+    SDL_SetRenderTarget(renderer, texture);
+    SDL_RenderSetViewport(renderer, NULL);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+    render_func(renderer, font, data);
+}
+
+static void render_pfd_adapter(SDL_Renderer *renderer, TTF_Font *font, const void *data)
+{
+    pfd_ui_render(renderer, font, (const PFD_Data *)data);
+}
+
+static void render_nd_adapter(SDL_Renderer *renderer, TTF_Font *font, const void *data)
+{
+    nd_ui_render(renderer, font, (const ND_Data *)data);
+}
+
+static void render_eicas_adapter(SDL_Renderer *renderer, TTF_Font *font, const void *data)
+{
+    eicas_ui_render(renderer, font, (const EICAS_Data *)data);
+}
+
+static void render_fmc_adapter(SDL_Renderer *renderer, TTF_Font *font, const void *data)
+{
+    fmc_ui_render(renderer, font, (const FMC_Data *)data);
+}
+
+static void update_module_textures(
+    SDL_Renderer *renderer,
+    TTF_Font *font,
+    Cockpit_RenderTargets *targets,
+    const PFD_Data *pfd_data,
+    const ND_Data *nd_data,
+    const EICAS_Data *eicas_data,
+    const FMC_Data *fmc_data)
+{
+    render_to_texture(renderer, targets->pfd_texture, render_pfd_adapter, font, pfd_data);
+    render_to_texture(renderer, targets->nd_texture, render_nd_adapter, font, nd_data);
+    render_to_texture(renderer, targets->eicas_texture, render_eicas_adapter, font, eicas_data);
+    render_to_texture(renderer, targets->fmc_texture, render_fmc_adapter, font, fmc_data);
+    SDL_SetRenderTarget(renderer, NULL);
+    SDL_RenderSetViewport(renderer, NULL);
+}
+
+static void update_scene_texture(
+    SDL_Renderer *renderer,
+    TTF_Font *font,
+    Cockpit_RenderTargets *targets,
+    const Cockpit_Layout *layout,
+    SDL_Texture *background_texture)
+{
+    SDL_SetRenderTarget(renderer, targets->scene_texture);
+    SDL_RenderSetViewport(renderer, NULL);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+
+    cockpit_ui_render_scene(
+        renderer,
+        font,
+        layout,
+        background_texture,
+        targets->pfd_texture,
+        targets->nd_texture,
+        targets->eicas_texture,
+        targets->nd_texture,
+        targets->pfd_texture,
+        targets->fmc_texture);
+
+    SDL_SetRenderTarget(renderer, NULL);
+    SDL_RenderSetViewport(renderer, NULL);
+}
+
+static void reset_camera(Cockpit_Camera *camera, int window_width, int window_height, int world_width, int world_height)
+{
+    if (camera == NULL || world_width <= 0 || world_height <= 0)
+    {
+        return;
+    }
+
+    const float scale_x = (float)window_width / (float)world_width;
+    const float scale_y = (float)window_height / (float)world_height;
+    camera->scale = scale_x < scale_y ? scale_x : scale_y;
+    camera->offset_x = ((float)window_width - (float)world_width * camera->scale) * 0.5f;
+    camera->offset_y = ((float)window_height - (float)world_height * camera->scale) * 0.5f;
+}
+
+static void screen_to_world(int screen_x, int screen_y, const Cockpit_Camera *camera, float *world_x, float *world_y)
+{
+    if (camera == NULL || world_x == NULL || world_y == NULL)
+    {
+        return;
+    }
+
+    *world_x = ((float)screen_x - camera->offset_x) / camera->scale;
+    *world_y = ((float)screen_y - camera->offset_y) / camera->scale;
+}
+
+static void zoom_camera_at(Cockpit_Camera *camera, int mouse_x, int mouse_y, float zoom_factor)
+{
+    if (camera == NULL)
+    {
+        return;
+    }
+
+    const float old_scale = camera->scale;
+    const float new_scale = clamp_float(old_scale * zoom_factor, COCKPIT_MIN_SCALE, COCKPIT_MAX_SCALE);
+    if (new_scale == old_scale)
+    {
+        return;
+    }
+
+    const float world_x = ((float)mouse_x - camera->offset_x) / old_scale;
+    const float world_y = ((float)mouse_y - camera->offset_y) / old_scale;
+    camera->scale = new_scale;
+    camera->offset_x = (float)mouse_x - world_x * new_scale;
+    camera->offset_y = (float)mouse_y - world_y * new_scale;
 }
 
 static void handle_fmc_text_input(FMC_Data *data, const char *text)
@@ -121,48 +351,56 @@ static void handle_fmc_keydown(FMC_Data *data, SDL_Keycode key)
     }
 }
 
-static void render_current_page(
+static void map_zoom_click_to_fmc(int screen_x, int screen_y, SDL_Rect zoom_rect, int *fmc_x, int *fmc_y)
+{
+    if (fmc_x == NULL || fmc_y == NULL)
+    {
+        return;
+    }
+
+    *fmc_x = (screen_x - zoom_rect.x) * COCKPIT_FMC_TEXTURE_WIDTH / zoom_rect.w;
+    *fmc_y = (screen_y - zoom_rect.y) * COCKPIT_FMC_TEXTURE_HEIGHT / zoom_rect.h;
+}
+
+static int point_in_rect(int x, int y, const SDL_Rect *rect)
+{
+    return rect != NULL &&
+           x >= rect->x &&
+           x < rect->x + rect->w &&
+           y >= rect->y &&
+           y < rect->y + rect->h;
+}
+
+static void render_window(
     SDL_Renderer *renderer,
     TTF_Font *font,
-    Cockpit_Page current_page,
-    const PFD_Data *pfd_data,
-    const ND_Data *nd_data,
-    const EICAS_Data *eicas_data,
-    const FMC_Data *fmc_data)
+    const Cockpit_RenderTargets *targets,
+    const Cockpit_Layout *layout,
+    const Cockpit_Camera *camera,
+    Cockpit_ViewMode view_mode,
+    Cockpit_FmcSide selected_fmc,
+    SDL_Texture *fmc_background_texture,
+    int window_width,
+    int window_height)
 {
-    if (current_page == COCKPIT_PAGE_PFD)
-    {
-        pfd_ui_render(renderer, font, pfd_data);
-    }
-    else if (current_page == COCKPIT_PAGE_ND)
-    {
-        nd_ui_render(renderer, font, nd_data);
-    }
-    else if (current_page == COCKPIT_PAGE_EICAS)
-    {
-        eicas_ui_render(renderer, font, eicas_data);
-    }
-    else if (current_page == COCKPIT_PAGE_FMC)
-    {
-        fmc_ui_render(renderer, font, fmc_data);
-    }
-    else
-    {
-        const char *active_waypoint = "--";
-        if (nd_data->active_waypoint_index >= 0 && nd_data->active_waypoint_index < nd_data->waypoint_count)
-        {
-            active_waypoint = nd_data->waypoints[nd_data->active_waypoint_index].name;
-        }
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
 
-        cockpit_ui_render_overview(
-            renderer,
-            font,
-            pfd_data->airspeed,
-            pfd_data->altitude,
-            pfd_data->heading,
-            eicas_data->fuel_quantity,
-            active_waypoint);
+    SDL_Rect scene_dest = {
+        (int)camera->offset_x,
+        (int)camera->offset_y,
+        (int)((float)layout->world_width * camera->scale),
+        (int)((float)layout->world_height * camera->scale)};
+
+    SDL_RenderCopy(renderer, targets->scene_texture, NULL, &scene_dest);
+
+    if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
+    {
+        SDL_Rect zoom_rect = cockpit_ui_fmc_zoom_rect(window_width, window_height);
+        cockpit_ui_render_fmc_zoom_overlay(renderer, font, targets->fmc_texture, fmc_background_texture, zoom_rect, selected_fmc);
     }
+
+    SDL_RenderPresent(renderer);
 }
 
 int cockpit_main_run(void)
@@ -180,16 +418,22 @@ int cockpit_main_run(void)
         return -1;
     }
 
+    if ((IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) == 0)
+    {
+        printf("IMG_Init PNG failed: %s\n", IMG_GetError());
+    }
+
     SDL_Window *window = SDL_CreateWindow(
         "Cockpit - Integrated Flight Deck",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         COCKPIT_WINDOW_WIDTH,
         COCKPIT_WINDOW_HEIGHT,
-        SDL_WINDOW_SHOWN);
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     if (window == NULL)
     {
         printf("SDL_CreateWindow failed: %s\n", SDL_GetError());
+        IMG_Quit();
         TTF_Quit();
         SDL_Quit();
         return -1;
@@ -198,16 +442,17 @@ int cockpit_main_run(void)
     SDL_Renderer *renderer = SDL_CreateRenderer(
         window,
         -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_TARGETTEXTURE);
     if (renderer == NULL)
     {
-        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE | SDL_RENDERER_TARGETTEXTURE);
     }
 
     if (renderer == NULL)
     {
         printf("SDL_CreateRenderer failed: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
+        IMG_Quit();
         TTF_Quit();
         SDL_Quit();
         return -1;
@@ -219,6 +464,35 @@ int cockpit_main_run(void)
         printf("TTF_OpenFont failed: %s\n", TTF_GetError());
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
+        IMG_Quit();
+        TTF_Quit();
+        SDL_Quit();
+        return -1;
+    }
+
+    int world_width = 8026;
+    int world_height = 3136;
+    SDL_Texture *background_texture = load_texture_optional(renderer, cockpit_layout_background_path(), &world_width, &world_height);
+    SDL_Texture *fmc_background_texture = load_texture_optional(renderer, cockpit_layout_fmc_background_path(), NULL, NULL);
+
+    Cockpit_Layout layout = cockpit_layout_default(world_width, world_height);
+    Cockpit_RenderTargets targets = {NULL, NULL, NULL, NULL, NULL};
+    if (!create_render_targets(renderer, &targets, layout.world_width, layout.world_height))
+    {
+        printf("SDL_CreateTexture target failed: %s\n", SDL_GetError());
+        destroy_render_targets(&targets);
+        if (background_texture != NULL)
+        {
+            SDL_DestroyTexture(background_texture);
+        }
+        if (fmc_background_texture != NULL)
+        {
+            SDL_DestroyTexture(fmc_background_texture);
+        }
+        TTF_CloseFont(font);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        IMG_Quit();
         TTF_Quit();
         SDL_Quit();
         return -1;
@@ -233,8 +507,16 @@ int cockpit_main_run(void)
     eicas_data_init(&eicas_data);
     fmc_data_init(&fmc_data);
 
-    Cockpit_Page current_page = COCKPIT_PAGE_OVERVIEW;
-    int suppress_next_text_input = 0;
+    int window_width = COCKPIT_WINDOW_WIDTH;
+    int window_height = COCKPIT_WINDOW_HEIGHT;
+    Cockpit_Camera camera;
+    reset_camera(&camera, window_width, window_height, layout.world_width, layout.world_height);
+
+    Cockpit_ViewMode view_mode = COCKPIT_VIEW_MAIN;
+    Cockpit_FmcSide selected_fmc = COCKPIT_FMC_NONE;
+    int dragging = 0;
+    int last_mouse_x = 0;
+    int last_mouse_y = 0;
 
     SDL_StartTextInput();
 
@@ -252,29 +534,78 @@ int cockpit_main_run(void)
             {
                 running = 0;
             }
+            else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
+            {
+                window_width = event.window.data1;
+                window_height = event.window.data2;
+            }
+            else if (event.type == SDL_MOUSEWHEEL && view_mode == COCKPIT_VIEW_MAIN)
+            {
+                int mouse_x = 0;
+                int mouse_y = 0;
+                SDL_GetMouseState(&mouse_x, &mouse_y);
+                zoom_camera_at(&camera, mouse_x, mouse_y, event.wheel.y > 0 ? 1.12f : 0.89f);
+            }
             else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
             {
-                if (current_page == COCKPIT_PAGE_FMC)
+                if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
                 {
-                    int hit = 0;
-                    FMC_Page page = fmc_ui_hit_test_page_button(event.button.x, event.button.y, &hit);
-                    if (hit)
+                    SDL_Rect zoom_rect = cockpit_ui_fmc_zoom_rect(window_width, window_height);
+                    if (!point_in_rect(event.button.x, event.button.y, &zoom_rect))
                     {
-                        fmc_data_set_page(&fmc_data, page);
+                        view_mode = COCKPIT_VIEW_MAIN;
+                        selected_fmc = COCKPIT_FMC_NONE;
                     }
-                    else if (fmc_ui_hit_test_clear_button(event.button.x, event.button.y))
+                    else
                     {
-                        fmc_data_clear_scratchpad(&fmc_data);
+                        int fmc_x = 0;
+                        int fmc_y = 0;
+                        int hit = 0;
+                        map_zoom_click_to_fmc(event.button.x, event.button.y, zoom_rect, &fmc_x, &fmc_y);
+                        FMC_Page page = fmc_ui_hit_test_page_button(fmc_x, fmc_y, &hit);
+                        if (hit)
+                        {
+                            fmc_data_set_page(&fmc_data, page);
+                        }
+                        else if (fmc_ui_hit_test_clear_button(fmc_x, fmc_y))
+                        {
+                            fmc_data_clear_scratchpad(&fmc_data);
+                        }
+                    }
+                }
+                else
+                {
+                    float world_x = 0.0f;
+                    float world_y = 0.0f;
+                    screen_to_world(event.button.x, event.button.y, &camera, &world_x, &world_y);
+                    Cockpit_FmcSide side = cockpit_layout_hit_test_fmc(&layout, world_x, world_y);
+                    if (side != COCKPIT_FMC_NONE)
+                    {
+                        view_mode = COCKPIT_VIEW_FMC_ZOOM;
+                        selected_fmc = side;
+                    }
+                    else
+                    {
+                        dragging = 1;
+                        last_mouse_x = event.button.x;
+                        last_mouse_y = event.button.y;
                     }
                 }
             }
+            else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT)
+            {
+                dragging = 0;
+            }
+            else if (event.type == SDL_MOUSEMOTION && dragging && view_mode == COCKPIT_VIEW_MAIN)
+            {
+                camera.offset_x += (float)(event.motion.x - last_mouse_x);
+                camera.offset_y += (float)(event.motion.y - last_mouse_y);
+                last_mouse_x = event.motion.x;
+                last_mouse_y = event.motion.y;
+            }
             else if (event.type == SDL_TEXTINPUT)
             {
-                if (suppress_next_text_input)
-                {
-                    suppress_next_text_input = 0;
-                }
-                else if (current_page == COCKPIT_PAGE_FMC)
+                if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
                 {
                     handle_fmc_text_input(&fmc_data, event.text.text);
                 }
@@ -283,20 +614,23 @@ int cockpit_main_run(void)
             {
                 if (event.key.keysym.sym == SDLK_ESCAPE)
                 {
-                    running = 0;
+                    if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
+                    {
+                        view_mode = COCKPIT_VIEW_MAIN;
+                        selected_fmc = COCKPIT_FMC_NONE;
+                    }
+                    else
+                    {
+                        running = 0;
+                    }
                 }
-                else
+                else if (event.key.keysym.sym == SDLK_w)
                 {
-                    Cockpit_Page requested_page = current_page;
-                    if (cockpit_key_to_page(event.key.keysym.sym, &requested_page))
-                    {
-                        current_page = requested_page;
-                        suppress_next_text_input = 1;
-                    }
-                    else if (current_page == COCKPIT_PAGE_FMC)
-                    {
-                        handle_fmc_keydown(&fmc_data, event.key.keysym.sym);
-                    }
+                    reset_camera(&camera, window_width, window_height, layout.world_width, layout.world_height);
+                }
+                else if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
+                {
+                    handle_fmc_keydown(&fmc_data, event.key.keysym.sym);
                 }
             }
         }
@@ -314,10 +648,9 @@ int cockpit_main_run(void)
         eicas_data_update_mock(&eicas_data, delta_time);
         fmc_data_update_mock(&fmc_data, delta_time);
 
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        SDL_RenderClear(renderer);
-        render_current_page(renderer, font, current_page, &pfd_data, &nd_data, &eicas_data, &fmc_data);
-        SDL_RenderPresent(renderer);
+        update_module_textures(renderer, font, &targets, &pfd_data, &nd_data, &eicas_data, &fmc_data);
+        update_scene_texture(renderer, font, &targets, &layout, background_texture);
+        render_window(renderer, font, &targets, &layout, &camera, view_mode, selected_fmc, fmc_background_texture, window_width, window_height);
 
         const Uint32 frame_time = SDL_GetTicks() - frame_start;
         if (frame_time < COCKPIT_TARGET_FRAME_MS)
@@ -327,9 +660,19 @@ int cockpit_main_run(void)
     }
 
     SDL_StopTextInput();
+    destroy_render_targets(&targets);
+    if (background_texture != NULL)
+    {
+        SDL_DestroyTexture(background_texture);
+    }
+    if (fmc_background_texture != NULL)
+    {
+        SDL_DestroyTexture(fmc_background_texture);
+    }
     TTF_CloseFont(font);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+    IMG_Quit();
     TTF_Quit();
     SDL_Quit();
 

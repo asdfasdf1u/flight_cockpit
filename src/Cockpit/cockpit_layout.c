@@ -1,0 +1,78 @@
+#include "cockpit_layout.h"
+
+static SDL_Rect scale_rect(int x, int y, int w, int h, float sx, float sy)
+{
+    SDL_Rect rect;
+    rect.x = (int)((float)x * sx);
+    rect.y = (int)((float)y * sy);
+    rect.w = (int)((float)w * sx);
+    rect.h = (int)((float)h * sy);
+    return rect;
+}
+
+const char *cockpit_layout_background_path(void)
+{
+    return "assets/main.png";
+}
+
+const char *cockpit_layout_fmc_background_path(void)
+{
+    return "assets/fmc.png";
+}
+
+Cockpit_Layout cockpit_layout_default(int world_width, int world_height)
+{
+    if (world_width <= 0)
+    {
+        world_width = 8026;
+    }
+    if (world_height <= 0)
+    {
+        world_height = 3136;
+    }
+
+    const float sx = (float)world_width / 8026.0f;
+    const float sy = (float)world_height / 3136.0f;
+
+    Cockpit_Layout layout;
+    layout.world_width = world_width;
+    layout.world_height = world_height;
+
+    layout.capt_pfd_rect = scale_rect(1320, 960, 600, 700, sx, sy);
+    layout.capt_nd_rect = scale_rect(2210, 955, 760, 700, sx, sy);
+    layout.eicas_rect = scale_rect(3705, 955, 680, 700, sx, sy);
+    layout.fo_nd_rect = scale_rect(4865, 955, 760, 700, sx, sy);
+    layout.fo_pfd_rect = scale_rect(5790, 960, 600, 700, sx, sy);
+
+    layout.left_fmc_rect = scale_rect(2850, 1930, 510, 820, sx, sy);
+    layout.lower_eicas_rect = scale_rect(3570, 1965, 740, 760, sx, sy);
+    layout.right_fmc_rect = scale_rect(4535, 1930, 510, 820, sx, sy);
+
+    return layout;
+}
+
+Cockpit_FmcSide cockpit_layout_hit_test_fmc(const Cockpit_Layout *layout, float world_x, float world_y)
+{
+    if (layout == 0)
+    {
+        return COCKPIT_FMC_NONE;
+    }
+
+    if (world_x >= (float)layout->left_fmc_rect.x &&
+        world_x < (float)(layout->left_fmc_rect.x + layout->left_fmc_rect.w) &&
+        world_y >= (float)layout->left_fmc_rect.y &&
+        world_y < (float)(layout->left_fmc_rect.y + layout->left_fmc_rect.h))
+    {
+        return COCKPIT_FMC_LEFT;
+    }
+
+    if (world_x >= (float)layout->right_fmc_rect.x &&
+        world_x < (float)(layout->right_fmc_rect.x + layout->right_fmc_rect.w) &&
+        world_y >= (float)layout->right_fmc_rect.y &&
+        world_y < (float)(layout->right_fmc_rect.y + layout->right_fmc_rect.h))
+    {
+        return COCKPIT_FMC_RIGHT;
+    }
+
+    return COCKPIT_FMC_NONE;
+}

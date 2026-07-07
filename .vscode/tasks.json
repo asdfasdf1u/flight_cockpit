@@ -10,6 +10,7 @@
                 "${workspaceFolder}/src/test.c",
                 "${workspaceFolder}/src/Cockpit/cockpit_main.c",
                 "${workspaceFolder}/src/Cockpit/cockpit_ui.c",
+                "${workspaceFolder}/src/Cockpit/cockpit_layout.c",
                 "${workspaceFolder}/src/FMC/fmc_main.c",
                 "${workspaceFolder}/src/FMC/fmc_ui.c",
                 "${workspaceFolder}/src/FMC/fmc_data.c",
