@@ -40,12 +40,12 @@ Cockpit_Layout cockpit_layout_default(int world_width, int world_height)
 
     layout.capt_pfd_rect = scale_rect(1320, 960, 600, 700, sx, sy);
     layout.capt_nd_rect = scale_rect(2210, 955, 760, 700, sx, sy);
-    layout.eicas_rect = scale_rect(3705, 955, 680, 700, sx, sy);
+    layout.eicas1_rect = scale_rect(3705, 955, 680, 700, sx, sy);
     layout.fo_nd_rect = scale_rect(4865, 955, 760, 700, sx, sy);
     layout.fo_pfd_rect = scale_rect(5790, 960, 600, 700, sx, sy);
 
     layout.left_fmc_rect = scale_rect(2850, 1930, 510, 820, sx, sy);
-    layout.lower_eicas_rect = scale_rect(3570, 1965, 740, 760, sx, sy);
+    layout.eicas2_rect = scale_rect(3570, 1965, 740, 760, sx, sy);
     layout.right_fmc_rect = scale_rect(4535, 1930, 510, 820, sx, sy);
 
     return layout;

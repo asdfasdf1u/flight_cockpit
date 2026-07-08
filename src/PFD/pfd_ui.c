@@ -11,7 +11,6 @@
 
 static const SDL_Color COLOR_BLACK = {0, 0, 0, 255};
 static const SDL_Color COLOR_WHITE = {236, 244, 248, 255};
-static const SDL_Color COLOR_CYAN = {55, 220, 255, 255};
 static const SDL_Color COLOR_GREEN = {75, 255, 105, 255};
 static const SDL_Color COLOR_MAGENTA = {230, 55, 220, 255};
 static const SDL_Color COLOR_AMBER = {255, 190, 55, 255};
@@ -172,24 +171,129 @@ static void draw_thick_line(SDL_Renderer *renderer, int x1, int y1, int x2, int 
     const float ny = dx / length;
     const int half = thickness / 2;
     set_color(renderer, color);
-    for (int i = -half; i <= half; ++i)
+    for (int i = 0; i < thickness; ++i)
     {
-        const int ox = (int)lrintf(nx * (float)i);
-        const int oy = (int)lrintf(ny * (float)i);
+        const float offset = (float)(i - half);
+        const int ox = (int)lrintf(nx * offset);
+        const int oy = (int)lrintf(ny * offset);
         SDL_RenderDrawLine(renderer, x1 + ox, y1 + oy, x2 + ox, y2 + oy);
+    }
+}
+
+static void plot_aa(SDL_Renderer *renderer, int x, int y, SDL_Color color, float coverage)
+{
+    if (coverage <= 0.0f)
+    {
+        return;
+    }
+    if (coverage > 1.0f)
+    {
+        coverage = 1.0f;
+    }
+
+    SDL_Color c = color;
+    c.a = (Uint8)lrintf((float)color.a * coverage);
+    set_color(renderer, c);
+    SDL_RenderDrawPoint(renderer, x, y);
+}
+
+static float frac_part(float value)
+{
+    return value - floorf(value);
+}
+
+static void draw_aa_line(SDL_Renderer *renderer, float x1, float y1, float x2, float y2, SDL_Color color)
+{
+    const int steep = fabsf(y2 - y1) > fabsf(x2 - x1);
+    if (steep)
+    {
+        float temp = x1;
+        x1 = y1;
+        y1 = temp;
+        temp = x2;
+        x2 = y2;
+        y2 = temp;
+    }
+
+    if (x1 > x2)
+    {
+        float temp = x1;
+        x1 = x2;
+        x2 = temp;
+        temp = y1;
+        y1 = y2;
+        y2 = temp;
+    }
+
+    const float dx = x2 - x1;
+    const float dy = y2 - y1;
+    if (fabsf(dx) < 0.001f)
+    {
+        draw_line(renderer, (int)lrintf(steep ? y1 : x1), (int)lrintf(steep ? x1 : y1),
+                  (int)lrintf(steep ? y2 : x2), (int)lrintf(steep ? x2 : y2), color);
+        return;
+    }
+
+    const float gradient = dy / dx;
+    float y = y1 + gradient * (ceilf(x1) - x1);
+    const int start_x = (int)ceilf(x1);
+    const int end_x = (int)floorf(x2);
+
+    for (int x = start_x; x <= end_x; ++x)
+    {
+        const int yi = (int)floorf(y);
+        const float frac = frac_part(y);
+        if (steep)
+        {
+            plot_aa(renderer, yi, x, color, 1.0f - frac);
+            plot_aa(renderer, yi + 1, x, color, frac);
+        }
+        else
+        {
+            plot_aa(renderer, x, yi, color, 1.0f - frac);
+            plot_aa(renderer, x, yi + 1, color, frac);
+        }
+        y += gradient;
+    }
+}
+
+static void draw_smooth_line(SDL_Renderer *renderer, int x1, int y1, int x2, int y2, int thickness, SDL_Color color)
+{
+    const float dx = (float)(x2 - x1);
+    const float dy = (float)(y2 - y1);
+    const float length = sqrtf(dx * dx + dy * dy);
+    if (length < 0.5f)
+    {
+        return;
+    }
+
+    if (abs(y2 - y1) <= 1 || abs(x2 - x1) <= 1)
+    {
+        draw_thick_line(renderer, x1, y1, x2, y2, thickness, color);
+        return;
+    }
+
+    const float nx = -dy / length;
+    const float ny = dx / length;
+    const int half = thickness / 2;
+    for (int i = 0; i < thickness; ++i)
+    {
+        const float offset = (float)(i - half);
+        const float ox = nx * offset;
+        const float oy = ny * offset;
+        draw_aa_line(renderer, (float)x1 + ox, (float)y1 + oy, (float)x2 + ox, (float)y2 + oy, color);
     }
 }
 
 static void draw_arc(SDL_Renderer *renderer, int cx, int cy, int radius, int start_deg, int end_deg, SDL_Color color)
 {
-    set_color(renderer, color);
-    int last_x = cx + (int)lrintf(cosf((float)start_deg * PFD_DEG_TO_RAD) * (float)radius);
-    int last_y = cy + (int)lrintf(sinf((float)start_deg * PFD_DEG_TO_RAD) * (float)radius);
-    for (int deg = start_deg + 3; deg <= end_deg; deg += 3)
+    float last_x = (float)cx + cosf((float)start_deg * PFD_DEG_TO_RAD) * (float)radius;
+    float last_y = (float)cy + sinf((float)start_deg * PFD_DEG_TO_RAD) * (float)radius;
+    for (float deg = (float)start_deg + 0.35f; deg <= (float)end_deg + 0.01f; deg += 0.35f)
     {
-        const int x = cx + (int)lrintf(cosf((float)deg * PFD_DEG_TO_RAD) * (float)radius);
-        const int y = cy + (int)lrintf(sinf((float)deg * PFD_DEG_TO_RAD) * (float)radius);
-        SDL_RenderDrawLine(renderer, last_x, last_y, x, y);
+        const float x = (float)cx + cosf(deg * PFD_DEG_TO_RAD) * (float)radius;
+        const float y = (float)cy + sinf(deg * PFD_DEG_TO_RAD) * (float)radius;
+        draw_aa_line(renderer, last_x, last_y, x, y, color);
         last_x = x;
         last_y = y;
     }
@@ -239,6 +343,21 @@ static void fill_polygon(SDL_Renderer *renderer, const SDL_Point *points, int co
             }
             SDL_RenderDrawLine(renderer, (int)floorf(intersections[i]), y, (int)ceilf(intersections[i + 1]), y);
         }
+    }
+}
+
+static void draw_smooth_polygon_outline(SDL_Renderer *renderer, const SDL_Point *points, int count, int thickness, SDL_Color color)
+{
+    if (points == NULL || count < 2)
+    {
+        return;
+    }
+
+    for (int i = 0; i < count; ++i)
+    {
+        const SDL_Point a = points[i];
+        const SDL_Point b = points[(i + 1) % count];
+        draw_smooth_line(renderer, a.x, a.y, b.x, b.y, thickness, color);
     }
 }
 
@@ -341,7 +460,6 @@ static void draw_text_center(SDL_Renderer *renderer, TTF_Font *font, SDL_Color c
 static void draw_panel(SDL_Renderer *renderer, SDL_Rect rect)
 {
     fill_rect(renderer, rect, COLOR_BLACK);
-    draw_rect(renderer, rect, (SDL_Color){28, 34, 38, 255});
 }
 
 static void draw_speed_bug(SDL_Renderer *renderer, int x, int y)
@@ -360,7 +478,7 @@ static void draw_left_pointer(SDL_Renderer *renderer, TTF_Font *font, SDL_Rect r
 {
     const int x = rect.x + rect.w - 88;
     const int y = center_y - 22;
-    SDL_Point pointer[7] = {
+    SDL_Point outer[7] = {
         {x, y},
         {x + 62, y},
         {x + 62, y + 11},
@@ -369,12 +487,19 @@ static void draw_left_pointer(SDL_Renderer *renderer, TTF_Font *font, SDL_Rect r
         {x + 62, y + 44},
         {x, y + 44},
     };
-    fill_polygon(renderer, pointer, 7, COLOR_BLACK);
-    draw_thick_line(renderer, x, y, x + 62, y, 2, COLOR_WHITE);
-    draw_thick_line(renderer, x + 62, y, x + 78, y + 22, 2, COLOR_WHITE);
-    draw_thick_line(renderer, x + 78, y + 22, x + 62, y + 44, 2, COLOR_WHITE);
-    draw_thick_line(renderer, x + 62, y + 44, x, y + 44, 2, COLOR_WHITE);
-    draw_thick_line(renderer, x, y + 44, x, y, 2, COLOR_WHITE);
+    SDL_Point inner[7] = {
+        {x + 3, y + 3},
+        {x + 60, y + 3},
+        {x + 60, y + 13},
+        {x + 73, y + 22},
+        {x + 60, y + 31},
+        {x + 60, y + 41},
+        {x + 3, y + 41},
+    };
+    fill_polygon(renderer, outer, 7, COLOR_WHITE);
+    fill_polygon(renderer, inner, 7, COLOR_BLACK);
+    draw_smooth_polygon_outline(renderer, outer, 7, 1, COLOR_WHITE);
+    draw_smooth_polygon_outline(renderer, inner, 7, 1, COLOR_BLACK);
     draw_text_center(renderer, font, COLOR_WHITE, (SDL_Rect){x + 2, y + 3, 62, 38}, "%03.0f", value);
 }
 
@@ -382,7 +507,7 @@ static void draw_right_pointer(SDL_Renderer *renderer, TTF_Font *font, SDL_Rect 
 {
     const int x = rect.x + 10;
     const int y = center_y - 22;
-    SDL_Point pointer[7] = {
+    SDL_Point outer[7] = {
         {x, y + 22},
         {x + 16, y + 11},
         {x + 16, y},
@@ -391,12 +516,19 @@ static void draw_right_pointer(SDL_Renderer *renderer, TTF_Font *font, SDL_Rect 
         {x + 16, y + 44},
         {x + 16, y + 33},
     };
-    fill_polygon(renderer, pointer, 7, COLOR_BLACK);
-    draw_thick_line(renderer, x, y + 22, x + 16, y + 11, 2, COLOR_WHITE);
-    draw_thick_line(renderer, x + 16, y, x + 98, y, 2, COLOR_WHITE);
-    draw_thick_line(renderer, x + 98, y, x + 98, y + 44, 2, COLOR_WHITE);
-    draw_thick_line(renderer, x + 98, y + 44, x + 16, y + 44, 2, COLOR_WHITE);
-    draw_thick_line(renderer, x + 16, y + 33, x, y + 22, 2, COLOR_WHITE);
+    SDL_Point inner[7] = {
+        {x + 5, y + 22},
+        {x + 18, y + 13},
+        {x + 18, y + 3},
+        {x + 95, y + 3},
+        {x + 95, y + 41},
+        {x + 18, y + 41},
+        {x + 18, y + 31},
+    };
+    fill_polygon(renderer, outer, 7, COLOR_WHITE);
+    fill_polygon(renderer, inner, 7, COLOR_BLACK);
+    draw_smooth_polygon_outline(renderer, outer, 7, 1, COLOR_WHITE);
+    draw_smooth_polygon_outline(renderer, inner, 7, 1, COLOR_BLACK);
     draw_text_center(renderer, font, COLOR_WHITE, (SDL_Rect){x + 18, y + 3, 78, 38}, "%05.0f", value);
 }
 
@@ -405,8 +537,8 @@ static void draw_speed_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Da
     draw_panel(renderer, rect);
     const int center_y = rect.y + rect.h / 2;
     const float pixels_per_knot = 4.4f;
-    const int base = ((int)data->airspeed / 10) * 10;
-    const float target_speed = 250.0f;
+    const int base = ((int)data->airspeed_current / 10) * 10;
+    const float target_speed = data->airspeed_target;
 
     SDL_RenderSetClipRect(renderer, &rect);
     draw_line(renderer, rect.x + rect.w - 28, rect.y + 30, rect.x + rect.w - 28, rect.y + rect.h - 20, COLOR_GRAY);
@@ -417,7 +549,7 @@ static void draw_speed_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Da
         {
             continue;
         }
-        const int y = center_y - (int)lrintf((value - data->airspeed) * pixels_per_knot);
+        const int y = center_y - (int)lrintf((value - data->airspeed_current) * pixels_per_knot);
         if (y < rect.y + 24 || y > rect.y + rect.h - 24)
         {
             continue;
@@ -431,7 +563,7 @@ static void draw_speed_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Da
         }
     }
 
-    const int bug_y = center_y - (int)lrintf((target_speed - data->airspeed) * pixels_per_knot);
+    const int bug_y = center_y - (int)lrintf((target_speed - data->airspeed_current) * pixels_per_knot);
     if (bug_y > rect.y + 28 && bug_y < rect.y + rect.h - 24)
     {
         draw_speed_bug(renderer, rect.x + rect.w - 24, bug_y);
@@ -439,7 +571,7 @@ static void draw_speed_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Da
     SDL_RenderSetClipRect(renderer, NULL);
 
     draw_text_at(renderer, font, COLOR_MAGENTA, rect.x + 14, rect.y + 8, "%03.0f", target_speed);
-    draw_left_pointer(renderer, font, rect, center_y, data->airspeed);
+    draw_left_pointer(renderer, font, rect, center_y, data->airspeed_current);
 }
 
 static void draw_altitude_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
@@ -448,7 +580,7 @@ static void draw_altitude_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD
     const int center_y = rect.y + rect.h / 2;
     const float pixels_per_foot = 0.084f;
     const int base = ((int)data->altitude / 100) * 100;
-    const float selected_altitude = 12000.0f;
+    const float selected_altitude = data->altitude_target;
 
     SDL_RenderSetClipRect(renderer, &rect);
     draw_line(renderer, rect.x + 28, rect.y + 30, rect.x + 28, rect.y + rect.h - 20, COLOR_GRAY);
@@ -520,7 +652,7 @@ static void draw_attitude(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data
     fill_polygon(renderer, sky, 4, COLOR_SKY);
     fill_polygon(renderer, ground, 4, COLOR_GROUND);
 
-    draw_thick_line(renderer, left_h.x, left_h.y, right_h.x, right_h.y, 3, COLOR_WHITE);
+    draw_smooth_line(renderer, left_h.x, left_h.y, right_h.x, right_h.y, 3, COLOR_WHITE);
 
     for (int pitch = -30; pitch <= 30; pitch += 5)
     {
@@ -533,7 +665,7 @@ static void draw_attitude(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data
         const float half = major ? 58.0f : 34.0f;
         SDL_Point a = attitude_point(rect, roll_rad, pitch_offset, (float)pitch, -half);
         SDL_Point b = attitude_point(rect, roll_rad, pitch_offset, (float)pitch, half);
-        draw_thick_line(renderer, a.x, a.y, b.x, b.y, major ? 2 : 1, COLOR_WHITE);
+        draw_smooth_line(renderer, a.x, a.y, b.x, b.y, major ? 2 : 1, COLOR_WHITE);
         if (major)
         {
             SDL_Point t1 = attitude_point(rect, roll_rad, pitch_offset, (float)pitch, -half - 28.0f);
@@ -567,7 +699,7 @@ static void draw_attitude(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data
         const int y1 = rect.y + 20 + (int)lrintf((1.0f - cosf(angle)) * 74.0f);
         const int x2 = cx + (int)lrintf(sinf(angle) * (roll_span - (float)tick_len));
         const int y2 = rect.y + 20 + tick_len + (int)lrintf((1.0f - cosf(angle)) * 74.0f);
-        draw_thick_line(renderer, x1, y1, x2, y2, 2, COLOR_WHITE);
+        draw_smooth_line(renderer, x1, y1, x2, y2, 2, COLOR_WHITE);
 
     }
 
@@ -622,7 +754,6 @@ static void draw_heading(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data 
     const float heading = normalize_heading(data->heading);
     SDL_RenderSetClipRect(renderer, &rect);
     draw_arc(renderer, center_x, center_y, radius, 205, 335, COLOR_WHITE);
-    draw_arc(renderer, center_x, center_y, radius - 1, 205, 335, (SDL_Color){85, 92, 96, 255});
 
     for (int offset = -60; offset <= 60; offset += 5)
     {
@@ -635,7 +766,14 @@ static void draw_heading(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data 
         const int y1 = center_y + (int)lrintf(sinf(angle) * (float)r1);
         const int x2 = center_x + (int)lrintf(cosf(angle) * (float)r2);
         const int y2 = center_y + (int)lrintf(sinf(angle) * (float)r2);
-        draw_line(renderer, x1, y1, x2, y2, COLOR_WHITE);
+        if (major)
+        {
+            draw_smooth_line(renderer, x1, y1, x2, y2, 2, COLOR_WHITE);
+        }
+        else
+        {
+            draw_aa_line(renderer, (float)x1, (float)y1, (float)x2, (float)y2, COLOR_WHITE);
+        }
         if (major)
         {
             const int value = (int)normalize_heading(heading + (float)offset);
@@ -673,19 +811,40 @@ static void draw_fma(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *dat
                      "%s", data->autopilot_on ? "CMD" : "FD");
 }
 
-static void draw_throttle(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
+static void draw_thrust_indicator(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
-    draw_panel(renderer, rect);
+    fill_rect(renderer, rect, COLOR_BLACK);
+
+    const int cx = rect.x + rect.w / 2;
+    const int cy = rect.y + rect.h / 2 + 4;
+    const int radius = rect.w / 2 - 10;
+
+    draw_arc(renderer, cx, cy, radius, 225, 450, COLOR_GRAY);
+    for (int mark = 0; mark <= 100; mark += 20)
+    {
+        const float angle = (450.0f - (float)mark * 2.25f) * PFD_DEG_TO_RAD;
+        const int r1 = radius;
+        const int r2 = radius - 8;
+        const int x1 = cx + (int)lrintf(cosf(angle) * (float)r1);
+        const int y1 = cy + (int)lrintf(sinf(angle) * (float)r1);
+        const int x2 = cx + (int)lrintf(cosf(angle) * (float)r2);
+        const int y2 = cy + (int)lrintf(sinf(angle) * (float)r2);
+        draw_line(renderer, x1, y1, x2, y2, COLOR_GRAY);
+    }
+
     const float throttle = clamp_float(data->throttle, 0.0f, 100.0f);
-    const int bar_x = rect.x + 24;
-    const int bar_y = rect.y + 30;
-    const int bar_h = rect.h - 46;
-    const int fill_h = (int)lrintf((throttle / 100.0f) * (float)bar_h);
-    fill_rect(renderer, (SDL_Rect){bar_x, bar_y, 24, bar_h}, COLOR_BLACK);
-    fill_rect(renderer, (SDL_Rect){bar_x + 4, bar_y + bar_h - fill_h, 16, fill_h}, throttle > 84.0f ? COLOR_AMBER : COLOR_GREEN);
-    draw_rect(renderer, (SDL_Rect){bar_x, bar_y, 24, bar_h}, COLOR_WHITE);
-    draw_text_at(renderer, font, COLOR_CYAN, rect.x + 62, rect.y + 8, "N1");
-    draw_text_at(renderer, font, COLOR_GREEN, rect.x + 60, rect.y + 40, "%03.0f%%", throttle);
+    const float pointer_angle = (450.0f - throttle * 2.25f) * PFD_DEG_TO_RAD;
+    const int pointer_x = cx + (int)lrintf(cosf(pointer_angle) * (float)(radius - 8));
+    const int pointer_y = cy + (int)lrintf(sinf(pointer_angle) * (float)(radius - 8));
+
+    draw_text_at(renderer, font, COLOR_WHITE, rect.x + 8, rect.y + rect.h - 34, "%.0f", throttle);
+    draw_thick_line(renderer, cx, cy, pointer_x, pointer_y, 2, COLOR_WHITE);
+    SDL_Point arrow[3] = {
+        {pointer_x, pointer_y},
+        {pointer_x - 5, pointer_y + 8},
+        {pointer_x + 5, pointer_y + 8},
+    };
+    fill_polygon(renderer, arrow, 3, COLOR_WHITE);
 }
 
 void pfd_ui_render(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data)
@@ -713,10 +872,10 @@ void pfd_ui_render(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data)
 
     draw_fma(renderer, font, data, SR(250, 14, 500, 54));
     draw_speed_tape(renderer, font, data, SR(150, 92, 122, 474));
-    draw_attitude(renderer, font, data, SR(360, 146, 281, 350));
+    draw_attitude(renderer, font, data, SR(350, 146, 296, 350));
+    draw_thrust_indicator(renderer, font, data, SR(650, 146, 78, 78));
     draw_altitude_tape(renderer, font, data, SR(728, 92, 122, 474));
     draw_vertical_speed(renderer, font, data, SR(854, 148, 70, 350));
-    draw_throttle(renderer, font, data, SR(150, 586, 122, 86));
     draw_heading(renderer, font, data, SR(320, 500, 360, 188));
 
 #undef SR

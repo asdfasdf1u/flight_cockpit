@@ -1,17 +1,19 @@
-#include "eicas_main.h"
+﻿#include "eicas1_main.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
 
-#include "eicas_data.h"
-#include "eicas_ui.h"
+#include "../Systems/aircraft_systems_data.h"
+#include "eicas1_ui.h"
 
-#define EICAS_WINDOW_WIDTH 1000
-#define EICAS_WINDOW_HEIGHT 700
-#define EICAS_TARGET_FRAME_MS 16
+#define EICAS1_WINDOW_WIDTH 768
+#define EICAS1_WINDOW_HEIGHT 768
+#define EICAS1_WINDOW_MIN_WIDTH 384
+#define EICAS1_WINDOW_MIN_HEIGHT 384
+#define EICAS1_TARGET_FRAME_MS 16
 
-static TTF_Font *open_eicas_font(void)
+static TTF_Font *open_eicas1_font(void)
 {
     TTF_Font *font = TTF_OpenFont("assets/ALIBABAPUHUITI-2-45-LIGHT.TTF", 18);
     if (font != NULL)
@@ -28,7 +30,7 @@ static TTF_Font *open_eicas_font(void)
     return TTF_OpenFont("C:/Windows/Fonts/simhei.ttf", 18);
 }
 
-int eicas_main_run(void)
+int eicas1_main_run(void)
 {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
     {
@@ -44,12 +46,12 @@ int eicas_main_run(void)
     }
 
     SDL_Window *window = SDL_CreateWindow(
-        "EICAS - Engine Indication and Crew Alerting System",
+        "EICAS1",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
-        EICAS_WINDOW_WIDTH,
-        EICAS_WINDOW_HEIGHT,
-        SDL_WINDOW_SHOWN);
+        EICAS1_WINDOW_WIDTH,
+        EICAS1_WINDOW_HEIGHT,
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     if (window == NULL)
     {
         printf("SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -57,6 +59,7 @@ int eicas_main_run(void)
         SDL_Quit();
         return -1;
     }
+    SDL_SetWindowMinimumSize(window, EICAS1_WINDOW_MIN_WIDTH, EICAS1_WINDOW_MIN_HEIGHT);
 
     SDL_Renderer *renderer = SDL_CreateRenderer(
         window,
@@ -76,7 +79,7 @@ int eicas_main_run(void)
         return -1;
     }
 
-    TTF_Font *font = open_eicas_font();
+    TTF_Font *font = open_eicas1_font();
     if (font == NULL)
     {
         printf("TTF_OpenFont failed: %s\n", TTF_GetError());
@@ -87,8 +90,8 @@ int eicas_main_run(void)
         return -1;
     }
 
-    EICAS_Data data;
-    eicas_data_init(&data);
+    AircraftSystems_Data data;
+    aircraft_systems_data_init(&data);
 
     int running = 1;
     SDL_Event event;
@@ -118,17 +121,17 @@ int eicas_main_run(void)
             delta_time = 0.1f;
         }
 
-        eicas_data_update_mock(&data, delta_time);
+        aircraft_systems_data_update_mock(&data, delta_time);
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-        eicas_ui_render(renderer, font, &data);
+        eicas1_ui_render(renderer, font, &data);
         SDL_RenderPresent(renderer);
 
         const Uint32 frame_time = SDL_GetTicks() - frame_start;
-        if (frame_time < EICAS_TARGET_FRAME_MS)
+        if (frame_time < EICAS1_TARGET_FRAME_MS)
         {
-            SDL_Delay(EICAS_TARGET_FRAME_MS - frame_time);
+            SDL_Delay(EICAS1_TARGET_FRAME_MS - frame_time);
         }
     }
 
@@ -140,3 +143,4 @@ int eicas_main_run(void)
 
     return 0;
 }
+

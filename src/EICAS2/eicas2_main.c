@@ -1,35 +1,36 @@
-#include "pfd_main.h"
+﻿#include "eicas2_main.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
 
-#include "pfd_data.h"
-#include "pfd_ui.h"
+#include "../Systems/aircraft_systems_data.h"
+#include "eicas2_ui.h"
 
-#define PFD_WINDOW_WIDTH 1000
-#define PFD_WINDOW_HEIGHT 700
-#define PFD_TARGET_FRAME_MS 16
+#define EICAS2_WINDOW_WIDTH 768
+#define EICAS2_WINDOW_HEIGHT 768
+#define EICAS2_WINDOW_MIN_WIDTH 384
+#define EICAS2_WINDOW_MIN_HEIGHT 384
+#define EICAS2_TARGET_FRAME_MS 16
 
-static TTF_Font *open_pfd_font(void)
+static TTF_Font *open_eicas2_font(void)
 {
-    TTF_Font *font = TTF_OpenFont("assets/ALIBABAPUHUITI-2-45-LIGHT.TTF", 20);
+    TTF_Font *font = TTF_OpenFont("assets/ALIBABAPUHUITI-2-45-LIGHT.TTF", 18);
     if (font != NULL)
     {
         return font;
     }
 
-    font = TTF_OpenFont("C:/Windows/Fonts/arial.ttf", 20);
+    font = TTF_OpenFont("C:/Windows/Fonts/arial.ttf", 18);
     if (font != NULL)
     {
         return font;
     }
 
-    font = TTF_OpenFont("C:/Windows/Fonts/simhei.ttf", 20);
-    return font;
+    return TTF_OpenFont("C:/Windows/Fonts/simhei.ttf", 18);
 }
 
-int pfd_main_run(void)
+int eicas2_main_run(void)
 {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
     {
@@ -45,12 +46,12 @@ int pfd_main_run(void)
     }
 
     SDL_Window *window = SDL_CreateWindow(
-        "PFD - Primary Flight Display",
+        "EICAS2",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
-        PFD_WINDOW_WIDTH,
-        PFD_WINDOW_HEIGHT,
-        SDL_WINDOW_SHOWN);
+        EICAS2_WINDOW_WIDTH,
+        EICAS2_WINDOW_HEIGHT,
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     if (window == NULL)
     {
         printf("SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -58,6 +59,7 @@ int pfd_main_run(void)
         SDL_Quit();
         return -1;
     }
+    SDL_SetWindowMinimumSize(window, EICAS2_WINDOW_MIN_WIDTH, EICAS2_WINDOW_MIN_HEIGHT);
 
     SDL_Renderer *renderer = SDL_CreateRenderer(
         window,
@@ -77,7 +79,7 @@ int pfd_main_run(void)
         return -1;
     }
 
-    TTF_Font *font = open_pfd_font();
+    TTF_Font *font = open_eicas2_font();
     if (font == NULL)
     {
         printf("TTF_OpenFont failed: %s\n", TTF_GetError());
@@ -88,8 +90,8 @@ int pfd_main_run(void)
         return -1;
     }
 
-    PFDData data;
-    pfd_data_init(&data);
+    AircraftSystems_Data data;
+    aircraft_systems_data_init(&data);
 
     int running = 1;
     SDL_Event event;
@@ -119,17 +121,17 @@ int pfd_main_run(void)
             delta_time = 0.1f;
         }
 
-        pfd_data_update_mock(&data, delta_time);
+        aircraft_systems_data_update_mock(&data, delta_time);
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-        pfd_ui_render(renderer, font, &data);
+        eicas2_ui_render(renderer, font, &data);
         SDL_RenderPresent(renderer);
 
         const Uint32 frame_time = SDL_GetTicks() - frame_start;
-        if (frame_time < PFD_TARGET_FRAME_MS)
+        if (frame_time < EICAS2_TARGET_FRAME_MS)
         {
-            SDL_Delay(PFD_TARGET_FRAME_MS - frame_time);
+            SDL_Delay(EICAS2_TARGET_FRAME_MS - frame_time);
         }
     }
 
@@ -141,3 +143,4 @@ int pfd_main_run(void)
 
     return 0;
 }
+

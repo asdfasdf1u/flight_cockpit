@@ -104,23 +104,6 @@ static void draw_display_texture(SDL_Renderer *renderer, TTF_Font *font, const S
     draw_centered_text(renderer, font, COLOR_CYAN, &(SDL_Rect){bezel.x, bezel.y + bezel.h - 28, bezel.w, 22}, "%s", label);
 }
 
-static void draw_lower_eicas_placeholder(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *rect)
-{
-    SDL_Rect bezel = {rect->x - 18, rect->y - 22, rect->w + 36, rect->h + 54};
-    fill_rect(renderer, &bezel, COLOR_BEZEL);
-    draw_rect(renderer, &bezel, COLOR_EDGE);
-    fill_rect(renderer, rect, COLOR_BLACK);
-    draw_rect(renderer, rect, COLOR_DIM);
-
-    draw_centered_text(renderer, font, COLOR_CYAN, &(SDL_Rect){rect->x, rect->y + 28, rect->w, 34}, "EICAS LOWER");
-    for (int i = 0; i < 6; ++i)
-    {
-        const int y = rect->y + 115 + i * 72;
-        draw_text(renderer, font, COLOR_DIM, rect->x + 85, y, "SYS %d", i + 1);
-        draw_text(renderer, font, COLOR_GREEN, rect->x + rect->w - 250, y, "NORMAL");
-    }
-}
-
 static void draw_fmc_hotspot_hint(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *rect, const char *label)
 {
     draw_rect(renderer, rect, COLOR_AMBER);
@@ -143,9 +126,10 @@ void cockpit_ui_render_scene(
     SDL_Texture *background_texture,
     SDL_Texture *capt_pfd_texture,
     SDL_Texture *capt_nd_texture,
-    SDL_Texture *eicas_texture,
+    SDL_Texture *eicas1_texture,
     SDL_Texture *fo_nd_texture,
     SDL_Texture *fo_pfd_texture,
+    SDL_Texture *eicas2_texture,
     SDL_Texture *fmc_texture)
 {
     if (renderer == NULL || font == NULL || layout == NULL)
@@ -164,11 +148,11 @@ void cockpit_ui_render_scene(
 
     draw_display_texture(renderer, font, &layout->capt_pfd_rect, capt_pfd_texture, "CAPT PFD");
     draw_display_texture(renderer, font, &layout->capt_nd_rect, capt_nd_texture, "CAPT ND");
-    draw_display_texture(renderer, font, &layout->eicas_rect, eicas_texture, "EICAS");
+    draw_display_texture(renderer, font, &layout->eicas1_rect, eicas1_texture, "EICAS1");
     draw_display_texture(renderer, font, &layout->fo_nd_rect, fo_nd_texture, "FO ND");
     draw_display_texture(renderer, font, &layout->fo_pfd_rect, fo_pfd_texture, "FO PFD");
     draw_display_texture(renderer, font, &layout->left_fmc_rect, fmc_texture, "LEFT FMC");
-    draw_lower_eicas_placeholder(renderer, font, &layout->lower_eicas_rect);
+    draw_display_texture(renderer, font, &layout->eicas2_rect, eicas2_texture, "EICAS2");
     draw_display_texture(renderer, font, &layout->right_fmc_rect, fmc_texture, "RIGHT FMC");
 
     draw_fmc_hotspot_hint(renderer, font, &layout->left_fmc_rect, "LEFT FMC");
@@ -203,6 +187,74 @@ SDL_Rect cockpit_ui_fmc_zoom_rect(int window_width, int window_height)
     rect.x = (window_width - rect.w) / 2;
     rect.y = (window_height - rect.h) / 2;
     return rect;
+}
+
+SDL_Rect cockpit_ui_module_zoom_rect(int window_width, int window_height, int texture_width, int texture_height)
+{
+    if (texture_width <= 0)
+    {
+        texture_width = 1000;
+    }
+    if (texture_height <= 0)
+    {
+        texture_height = 700;
+    }
+
+    const float max_w = (float)window_width * 0.88f;
+    const float max_h = (float)window_height * 0.84f;
+    float scale = max_w / (float)texture_width;
+    const float scale_y = max_h / (float)texture_height;
+    if (scale > scale_y)
+    {
+        scale = scale_y;
+    }
+    if (scale > 1.0f)
+    {
+        scale = 1.0f;
+    }
+
+    SDL_Rect rect;
+    rect.w = (int)((float)texture_width * scale);
+    rect.h = (int)((float)texture_height * scale);
+    rect.x = (window_width - rect.w) / 2;
+    rect.y = (window_height - rect.h) / 2;
+    return rect;
+}
+
+void cockpit_ui_render_module_zoom_overlay(
+    SDL_Renderer *renderer,
+    TTF_Font *font,
+    SDL_Texture *module_texture,
+    SDL_Rect zoom_rect,
+    const char *label)
+{
+    if (renderer == NULL || font == NULL)
+    {
+        return;
+    }
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    fill_rect(renderer, &(SDL_Rect){0, 0, 20000, 20000}, (SDL_Color){0, 0, 0, 178});
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+    SDL_Rect frame = {zoom_rect.x - 18, zoom_rect.y - 18, zoom_rect.w + 36, zoom_rect.h + 56};
+    fill_rect(renderer, &frame, COLOR_PANEL);
+    draw_rect(renderer, &frame, COLOR_EDGE);
+
+    fill_rect(renderer, &zoom_rect, COLOR_BLACK);
+    if (module_texture != NULL)
+    {
+        SDL_RenderCopy(renderer, module_texture, NULL, &zoom_rect);
+    }
+    else
+    {
+        draw_centered_text(renderer, font, COLOR_DIM, &zoom_rect, "%s", label != NULL ? label : "MODULE");
+    }
+
+    draw_rect(renderer, &zoom_rect, COLOR_CYAN);
+    draw_centered_text(renderer, font, COLOR_CYAN, &(SDL_Rect){frame.x, frame.y + frame.h - 35, frame.w, 28},
+                       "%s - ESC / Click outside to return",
+                       label != NULL ? label : "MODULE");
 }
 
 void cockpit_ui_render_fmc_zoom_overlay(

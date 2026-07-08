@@ -17,11 +17,11 @@ typedef struct Cockpit_Layout
 
     SDL_Rect capt_pfd_rect;
     SDL_Rect capt_nd_rect;
-    SDL_Rect eicas_rect;
+    SDL_Rect eicas1_rect;
     SDL_Rect fo_nd_rect;
     SDL_Rect fo_pfd_rect;
     SDL_Rect left_fmc_rect;
-    SDL_Rect lower_eicas_rect;
+    SDL_Rect eicas2_rect;
     SDL_Rect right_fmc_rect;
 } Cockpit_Layout;
 

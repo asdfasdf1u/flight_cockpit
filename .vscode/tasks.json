@@ -1,4 +1,4 @@
-{
+﻿{
     "version": "2.0.0",
     "tasks": [
         {
@@ -14,9 +14,12 @@
                 "${workspaceFolder}/src/FMC/fmc_main.c",
                 "${workspaceFolder}/src/FMC/fmc_ui.c",
                 "${workspaceFolder}/src/FMC/fmc_data.c",
-                "${workspaceFolder}/src/EICAS/eicas_main.c",
-                "${workspaceFolder}/src/EICAS/eicas_ui.c",
-                "${workspaceFolder}/src/EICAS/eicas_data.c",
+                "${workspaceFolder}/src/Util/eicas_ui_common.c",
+                "${workspaceFolder}/src/Systems/aircraft_systems_data.c",
+                "${workspaceFolder}/src/EICAS1/eicas1_main.c",
+                "${workspaceFolder}/src/EICAS1/eicas1_ui.c",
+                "${workspaceFolder}/src/EICAS2/eicas2_main.c",
+                "${workspaceFolder}/src/EICAS2/eicas2_ui.c",
                 "${workspaceFolder}/src/ND/nd_main.c",
                 "${workspaceFolder}/src/ND/nd_ui.c",
                 "${workspaceFolder}/src/ND/nd_data.c",
@@ -66,3 +69,4 @@
         }
     ]
 }
+

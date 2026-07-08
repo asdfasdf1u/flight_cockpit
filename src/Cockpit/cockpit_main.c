@@ -1,4 +1,4 @@
-#include "cockpit_main.h"
+﻿#include "cockpit_main.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
@@ -14,8 +14,9 @@
 #include "../ND/nd_data.h"
 #include "../ND/nd_ui.h"
 
-#include "../EICAS/eicas_data.h"
-#include "../EICAS/eicas_ui.h"
+#include "../Systems/aircraft_systems_data.h"
+#include "../EICAS1/eicas1_ui.h"
+#include "../EICAS2/eicas2_ui.h"
 
 #include "../FMC/fmc_data.h"
 #include "../FMC/fmc_ui.h"
@@ -28,8 +29,8 @@
 #define COCKPIT_PFD_TEXTURE_HEIGHT 700
 #define COCKPIT_ND_TEXTURE_WIDTH 1000
 #define COCKPIT_ND_TEXTURE_HEIGHT 700
-#define COCKPIT_EICAS_TEXTURE_WIDTH 1000
-#define COCKPIT_EICAS_TEXTURE_HEIGHT 700
+#define COCKPIT_EICAS_TEXTURE_WIDTH 768
+#define COCKPIT_EICAS_TEXTURE_HEIGHT 768
 #define COCKPIT_FMC_TEXTURE_WIDTH 700
 #define COCKPIT_FMC_TEXTURE_HEIGHT 900
 
@@ -40,7 +41,8 @@ typedef struct Cockpit_RenderTargets
 {
     SDL_Texture *pfd_texture;
     SDL_Texture *nd_texture;
-    SDL_Texture *eicas_texture;
+    SDL_Texture *eicas1_texture;
+    SDL_Texture *eicas2_texture;
     SDL_Texture *fmc_texture;
     SDL_Texture *scene_texture;
 } Cockpit_RenderTargets;
@@ -135,13 +137,15 @@ static int create_render_targets(SDL_Renderer *renderer, Cockpit_RenderTargets *
 
     targets->pfd_texture = create_target_texture(renderer, COCKPIT_PFD_TEXTURE_WIDTH, COCKPIT_PFD_TEXTURE_HEIGHT);
     targets->nd_texture = create_target_texture(renderer, COCKPIT_ND_TEXTURE_WIDTH, COCKPIT_ND_TEXTURE_HEIGHT);
-    targets->eicas_texture = create_target_texture(renderer, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
+    targets->eicas1_texture = create_target_texture(renderer, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
+    targets->eicas2_texture = create_target_texture(renderer, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
     targets->fmc_texture = create_target_texture(renderer, COCKPIT_FMC_TEXTURE_WIDTH, COCKPIT_FMC_TEXTURE_HEIGHT);
     targets->scene_texture = create_target_texture(renderer, world_width, world_height);
 
     return targets->pfd_texture != NULL &&
            targets->nd_texture != NULL &&
-           targets->eicas_texture != NULL &&
+           targets->eicas1_texture != NULL &&
+           targets->eicas2_texture != NULL &&
            targets->fmc_texture != NULL &&
            targets->scene_texture != NULL;
 }
@@ -163,10 +167,15 @@ static void destroy_render_targets(Cockpit_RenderTargets *targets)
         SDL_DestroyTexture(targets->nd_texture);
         targets->nd_texture = NULL;
     }
-    if (targets->eicas_texture != NULL)
+    if (targets->eicas1_texture != NULL)
     {
-        SDL_DestroyTexture(targets->eicas_texture);
-        targets->eicas_texture = NULL;
+        SDL_DestroyTexture(targets->eicas1_texture);
+        targets->eicas1_texture = NULL;
+    }
+    if (targets->eicas2_texture != NULL)
+    {
+        SDL_DestroyTexture(targets->eicas2_texture);
+        targets->eicas2_texture = NULL;
     }
     if (targets->fmc_texture != NULL)
     {
@@ -204,9 +213,14 @@ static void render_nd_adapter(SDL_Renderer *renderer, TTF_Font *font, const void
     nd_ui_render(renderer, font, (const ND_Data *)data);
 }
 
-static void render_eicas_adapter(SDL_Renderer *renderer, TTF_Font *font, const void *data)
+static void render_eicas1_adapter(SDL_Renderer *renderer, TTF_Font *font, const void *data)
 {
-    eicas_ui_render(renderer, font, (const EICAS_Data *)data);
+    eicas1_ui_render(renderer, font, (const AircraftSystems_Data *)data);
+}
+
+static void render_eicas2_adapter(SDL_Renderer *renderer, TTF_Font *font, const void *data)
+{
+    eicas2_ui_render(renderer, font, (const AircraftSystems_Data *)data);
 }
 
 static void render_fmc_adapter(SDL_Renderer *renderer, TTF_Font *font, const void *data)
@@ -220,12 +234,13 @@ static void update_module_textures(
     Cockpit_RenderTargets *targets,
     const PFD_Data *pfd_data,
     const ND_Data *nd_data,
-    const EICAS_Data *eicas_data,
+    const AircraftSystems_Data *systems_data,
     const FMC_Data *fmc_data)
 {
     render_to_texture(renderer, targets->pfd_texture, render_pfd_adapter, font, pfd_data);
     render_to_texture(renderer, targets->nd_texture, render_nd_adapter, font, nd_data);
-    render_to_texture(renderer, targets->eicas_texture, render_eicas_adapter, font, eicas_data);
+    render_to_texture(renderer, targets->eicas1_texture, render_eicas1_adapter, font, systems_data);
+    render_to_texture(renderer, targets->eicas2_texture, render_eicas2_adapter, font, systems_data);
     render_to_texture(renderer, targets->fmc_texture, render_fmc_adapter, font, fmc_data);
     SDL_SetRenderTarget(renderer, NULL);
     SDL_RenderSetViewport(renderer, NULL);
@@ -250,9 +265,10 @@ static void update_scene_texture(
         background_texture,
         targets->pfd_texture,
         targets->nd_texture,
-        targets->eicas_texture,
+        targets->eicas1_texture,
         targets->nd_texture,
         targets->pfd_texture,
+        targets->eicas2_texture,
         targets->fmc_texture);
 
     SDL_SetRenderTarget(renderer, NULL);
@@ -362,6 +378,56 @@ static void map_zoom_click_to_fmc(int screen_x, int screen_y, SDL_Rect zoom_rect
     *fmc_y = (screen_y - zoom_rect.y) * COCKPIT_FMC_TEXTURE_HEIGHT / zoom_rect.h;
 }
 
+static Cockpit_ViewMode cockpit_module_hit_test(const Cockpit_Layout *layout, float world_x, float world_y)
+{
+    if (layout == NULL)
+    {
+        return COCKPIT_VIEW_MAIN;
+    }
+
+    if ((world_x >= (float)layout->capt_pfd_rect.x &&
+         world_x < (float)(layout->capt_pfd_rect.x + layout->capt_pfd_rect.w) &&
+         world_y >= (float)layout->capt_pfd_rect.y &&
+         world_y < (float)(layout->capt_pfd_rect.y + layout->capt_pfd_rect.h)) ||
+        (world_x >= (float)layout->fo_pfd_rect.x &&
+         world_x < (float)(layout->fo_pfd_rect.x + layout->fo_pfd_rect.w) &&
+         world_y >= (float)layout->fo_pfd_rect.y &&
+         world_y < (float)(layout->fo_pfd_rect.y + layout->fo_pfd_rect.h)))
+    {
+        return COCKPIT_VIEW_PFD_ZOOM;
+    }
+
+    if ((world_x >= (float)layout->capt_nd_rect.x &&
+         world_x < (float)(layout->capt_nd_rect.x + layout->capt_nd_rect.w) &&
+         world_y >= (float)layout->capt_nd_rect.y &&
+         world_y < (float)(layout->capt_nd_rect.y + layout->capt_nd_rect.h)) ||
+        (world_x >= (float)layout->fo_nd_rect.x &&
+         world_x < (float)(layout->fo_nd_rect.x + layout->fo_nd_rect.w) &&
+         world_y >= (float)layout->fo_nd_rect.y &&
+         world_y < (float)(layout->fo_nd_rect.y + layout->fo_nd_rect.h)))
+    {
+        return COCKPIT_VIEW_ND_ZOOM;
+    }
+
+    if (world_x >= (float)layout->eicas1_rect.x &&
+        world_x < (float)(layout->eicas1_rect.x + layout->eicas1_rect.w) &&
+        world_y >= (float)layout->eicas1_rect.y &&
+        world_y < (float)(layout->eicas1_rect.y + layout->eicas1_rect.h))
+    {
+        return COCKPIT_VIEW_EICAS1_ZOOM;
+    }
+
+    if (world_x >= (float)layout->eicas2_rect.x &&
+        world_x < (float)(layout->eicas2_rect.x + layout->eicas2_rect.w) &&
+        world_y >= (float)layout->eicas2_rect.y &&
+        world_y < (float)(layout->eicas2_rect.y + layout->eicas2_rect.h))
+    {
+        return COCKPIT_VIEW_EICAS2_ZOOM;
+    }
+
+    return COCKPIT_VIEW_MAIN;
+}
+
 static int point_in_rect(int x, int y, const SDL_Rect *rect)
 {
     return rect != NULL &&
@@ -398,6 +464,26 @@ static void render_window(
     {
         SDL_Rect zoom_rect = cockpit_ui_fmc_zoom_rect(window_width, window_height);
         cockpit_ui_render_fmc_zoom_overlay(renderer, font, targets->fmc_texture, fmc_background_texture, zoom_rect, selected_fmc);
+    }
+    else if (view_mode == COCKPIT_VIEW_PFD_ZOOM)
+    {
+        SDL_Rect zoom_rect = cockpit_ui_module_zoom_rect(window_width, window_height, COCKPIT_PFD_TEXTURE_WIDTH, COCKPIT_PFD_TEXTURE_HEIGHT);
+        cockpit_ui_render_module_zoom_overlay(renderer, font, targets->pfd_texture, zoom_rect, "PFD");
+    }
+    else if (view_mode == COCKPIT_VIEW_ND_ZOOM)
+    {
+        SDL_Rect zoom_rect = cockpit_ui_module_zoom_rect(window_width, window_height, COCKPIT_ND_TEXTURE_WIDTH, COCKPIT_ND_TEXTURE_HEIGHT);
+        cockpit_ui_render_module_zoom_overlay(renderer, font, targets->nd_texture, zoom_rect, "ND");
+    }
+    else if (view_mode == COCKPIT_VIEW_EICAS1_ZOOM)
+    {
+        SDL_Rect zoom_rect = cockpit_ui_module_zoom_rect(window_width, window_height, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
+        cockpit_ui_render_module_zoom_overlay(renderer, font, targets->eicas1_texture, zoom_rect, "EICAS1");
+    }
+    else if (view_mode == COCKPIT_VIEW_EICAS2_ZOOM)
+    {
+        SDL_Rect zoom_rect = cockpit_ui_module_zoom_rect(window_width, window_height, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
+        cockpit_ui_render_module_zoom_overlay(renderer, font, targets->eicas2_texture, zoom_rect, "EICAS2");
     }
 
     SDL_RenderPresent(renderer);
@@ -476,7 +562,7 @@ int cockpit_main_run(void)
     SDL_Texture *fmc_background_texture = load_texture_optional(renderer, cockpit_layout_fmc_background_path(), NULL, NULL);
 
     Cockpit_Layout layout = cockpit_layout_default(world_width, world_height);
-    Cockpit_RenderTargets targets = {NULL, NULL, NULL, NULL, NULL};
+    Cockpit_RenderTargets targets = {NULL, NULL, NULL, NULL, NULL, NULL};
     if (!create_render_targets(renderer, &targets, layout.world_width, layout.world_height))
     {
         printf("SDL_CreateTexture target failed: %s\n", SDL_GetError());
@@ -500,11 +586,11 @@ int cockpit_main_run(void)
 
     PFD_Data pfd_data;
     ND_Data nd_data;
-    EICAS_Data eicas_data;
+    AircraftSystems_Data systems_data;
     FMC_Data fmc_data;
     pfd_data_init(&pfd_data);
     nd_data_init(&nd_data);
-    eicas_data_init(&eicas_data);
+    aircraft_systems_data_init(&systems_data);
     fmc_data_init(&fmc_data);
 
     int window_width = COCKPIT_WINDOW_WIDTH;
@@ -573,6 +659,38 @@ int cockpit_main_run(void)
                         }
                     }
                 }
+                else if (view_mode == COCKPIT_VIEW_PFD_ZOOM)
+                {
+                    SDL_Rect zoom_rect = cockpit_ui_module_zoom_rect(window_width, window_height, COCKPIT_PFD_TEXTURE_WIDTH, COCKPIT_PFD_TEXTURE_HEIGHT);
+                    if (!point_in_rect(event.button.x, event.button.y, &zoom_rect))
+                    {
+                        view_mode = COCKPIT_VIEW_MAIN;
+                    }
+                }
+                else if (view_mode == COCKPIT_VIEW_ND_ZOOM)
+                {
+                    SDL_Rect zoom_rect = cockpit_ui_module_zoom_rect(window_width, window_height, COCKPIT_ND_TEXTURE_WIDTH, COCKPIT_ND_TEXTURE_HEIGHT);
+                    if (!point_in_rect(event.button.x, event.button.y, &zoom_rect))
+                    {
+                        view_mode = COCKPIT_VIEW_MAIN;
+                    }
+                }
+                else if (view_mode == COCKPIT_VIEW_EICAS1_ZOOM)
+                {
+                    SDL_Rect zoom_rect = cockpit_ui_module_zoom_rect(window_width, window_height, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
+                    if (!point_in_rect(event.button.x, event.button.y, &zoom_rect))
+                    {
+                        view_mode = COCKPIT_VIEW_MAIN;
+                    }
+                }
+                else if (view_mode == COCKPIT_VIEW_EICAS2_ZOOM)
+                {
+                    SDL_Rect zoom_rect = cockpit_ui_module_zoom_rect(window_width, window_height, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
+                    if (!point_in_rect(event.button.x, event.button.y, &zoom_rect))
+                    {
+                        view_mode = COCKPIT_VIEW_MAIN;
+                    }
+                }
                 else
                 {
                     float world_x = 0.0f;
@@ -586,9 +704,17 @@ int cockpit_main_run(void)
                     }
                     else
                     {
-                        dragging = 1;
-                        last_mouse_x = event.button.x;
-                        last_mouse_y = event.button.y;
+                        Cockpit_ViewMode module_view = cockpit_module_hit_test(&layout, world_x, world_y);
+                        if (module_view != COCKPIT_VIEW_MAIN)
+                        {
+                            view_mode = module_view;
+                        }
+                        else
+                        {
+                            dragging = 1;
+                            last_mouse_x = event.button.x;
+                            last_mouse_y = event.button.y;
+                        }
                     }
                 }
             }
@@ -614,7 +740,7 @@ int cockpit_main_run(void)
             {
                 if (event.key.keysym.sym == SDLK_ESCAPE)
                 {
-                    if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
+                    if (view_mode != COCKPIT_VIEW_MAIN)
                     {
                         view_mode = COCKPIT_VIEW_MAIN;
                         selected_fmc = COCKPIT_FMC_NONE;
@@ -645,10 +771,10 @@ int cockpit_main_run(void)
 
         pfd_data_update_mock(&pfd_data, delta_time);
         nd_data_update_mock(&nd_data, delta_time);
-        eicas_data_update_mock(&eicas_data, delta_time);
+        aircraft_systems_data_update_mock(&systems_data, delta_time);
         fmc_data_update_mock(&fmc_data, delta_time);
 
-        update_module_textures(renderer, font, &targets, &pfd_data, &nd_data, &eicas_data, &fmc_data);
+        update_module_textures(renderer, font, &targets, &pfd_data, &nd_data, &systems_data, &fmc_data);
         update_scene_texture(renderer, font, &targets, &layout, background_texture);
         render_window(renderer, font, &targets, &layout, &camera, view_mode, selected_fmc, fmc_background_texture, window_width, window_height);
 
@@ -678,3 +804,4 @@ int cockpit_main_run(void)
 
     return 0;
 }
+
