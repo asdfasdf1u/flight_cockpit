@@ -25,6 +25,7 @@ static const SDL_Color COLOR_GREEN = {30, 230, 45, 255};
 static const SDL_Color COLOR_DIM = {120, 130, 126, 255};
 static const SDL_Color COLOR_AMBER = {255, 198, 64, 255};
 static const SDL_Color COLOR_CYAN = {80, 220, 255, 255};
+static const SDL_Color COLOR_BLUE = {80, 150, 255, 255};
 static const SDL_Color COLOR_MAGENTA = {238, 46, 210, 255};
 
 static void set_color(SDL_Renderer *renderer, SDL_Color color)
@@ -298,67 +299,52 @@ static int nd_project_point_to_screen(const ND_Layout *layout, const ND_Data *da
     return *x >= 0 && *x < layout->width && *y >= 90 && *y < layout->height;
 }
 
-static void draw_waypoint_cross(SDL_Renderer *renderer, int x, int y, SDL_Color color)
+static void draw_waypoint_triangle(SDL_Renderer *renderer, int x, int y, SDL_Color color)
 {
     set_color(renderer, color);
-    SDL_RenderDrawLine(renderer, x - 5, y, x + 5, y);
-    SDL_RenderDrawLine(renderer, x, y - 5, x, y + 5);
+    SDL_RenderDrawLine(renderer, x, y - 6, x - 6, y + 5);
+    SDL_RenderDrawLine(renderer, x - 6, y + 5, x + 6, y + 5);
+    SDL_RenderDrawLine(renderer, x + 6, y + 5, x, y - 6);
 }
 
-static void draw_airport_symbol(SDL_Renderer *renderer, int x, int y, SDL_Color color)
+static void draw_cross_symbol(SDL_Renderer *renderer, int x, int y, SDL_Color color)
 {
     set_color(renderer, color);
-    SDL_Rect rect = {x - 6, y - 6, 12, 12};
-    SDL_RenderDrawRect(renderer, &rect);
-    SDL_RenderDrawLine(renderer, x - 8, y + 8, x + 8, y - 8);
+    SDL_RenderDrawLine(renderer, x - 7, y, x + 7, y);
+    SDL_RenderDrawLine(renderer, x, y - 7, x, y + 7);
+    SDL_RenderDrawLine(renderer, x - 4, y - 4, x + 4, y + 4);
+    SDL_RenderDrawLine(renderer, x - 4, y + 4, x + 4, y - 4);
 }
 
-static void draw_tower_symbol(SDL_Renderer *renderer, int x, int y, SDL_Color color)
+static SDL_Color nav_point_symbol_color(const ND_NavPoint *point)
 {
-    set_color(renderer, color);
-    SDL_RenderDrawLine(renderer, x, y - 7, x - 6, y + 6);
-    SDL_RenderDrawLine(renderer, x - 6, y + 6, x + 6, y + 6);
-    SDL_RenderDrawLine(renderer, x + 6, y + 6, x, y - 7);
-    SDL_RenderDrawLine(renderer, x, y + 6, x, y + 13);
-}
-
-static void draw_radio_nav_symbol(SDL_Renderer *renderer, int x, int y, SDL_Color color)
-{
-    set_color(renderer, color);
-    SDL_RenderDrawLine(renderer, x, y - 7, x + 7, y);
-    SDL_RenderDrawLine(renderer, x + 7, y, x, y + 7);
-    SDL_RenderDrawLine(renderer, x, y + 7, x - 7, y);
-    SDL_RenderDrawLine(renderer, x - 7, y, x, y - 7);
-}
-
-static void draw_active_waypoint_symbol(SDL_Renderer *renderer, int x, int y)
-{
-    set_color(renderer, COLOR_MAGENTA);
-    SDL_RenderDrawLine(renderer, x, y - 9, x + 9, y);
-    SDL_RenderDrawLine(renderer, x + 9, y, x, y + 9);
-    SDL_RenderDrawLine(renderer, x, y + 9, x - 9, y);
-    SDL_RenderDrawLine(renderer, x - 9, y, x, y - 9);
-}
-
-static SDL_Color nav_point_color(const ND_NavPoint *point)
-{
-    if (point->active)
-    {
-        return COLOR_MAGENTA;
-    }
-
     switch (point->type)
     {
     case ND_POINT_AIRPORT:
-        return COLOR_CYAN;
     case ND_POINT_TOWER:
-        return COLOR_AMBER;
     case ND_POINT_VOR:
     case ND_POINT_NDB:
-        return COLOR_DIM;
+    case ND_POINT_ILS:
+        return COLOR_MAGENTA;
     case ND_POINT_WAYPOINT:
     default:
+        return COLOR_BLUE;
+    }
+}
+
+static SDL_Color nav_point_label_color(const ND_NavPoint *point)
+{
+    switch (point->type)
+    {
+    case ND_POINT_WAYPOINT:
         return COLOR_WHITE;
+    case ND_POINT_AIRPORT:
+    case ND_POINT_TOWER:
+    case ND_POINT_VOR:
+    case ND_POINT_NDB:
+    case ND_POINT_ILS:
+    default:
+        return COLOR_MAGENTA;
     }
 }
 
@@ -384,6 +370,8 @@ static int nav_point_priority(const ND_NavPoint *point)
         return 2;
     case ND_POINT_VOR:
     case ND_POINT_NDB:
+        return 2;
+    case ND_POINT_ILS:
     default:
         return 1;
     }
@@ -391,27 +379,18 @@ static int nav_point_priority(const ND_NavPoint *point)
 
 static void draw_nav_point_symbol(SDL_Renderer *renderer, const ND_NavPoint *point, int x, int y, SDL_Color color)
 {
-    if (point->active)
-    {
-        draw_active_waypoint_symbol(renderer, x, y);
-        return;
-    }
-
     switch (point->type)
     {
     case ND_POINT_AIRPORT:
-        draw_airport_symbol(renderer, x, y, color);
-        break;
     case ND_POINT_TOWER:
-        draw_tower_symbol(renderer, x, y, color);
-        break;
     case ND_POINT_VOR:
     case ND_POINT_NDB:
-        draw_radio_nav_symbol(renderer, x, y, color);
+    case ND_POINT_ILS:
+        draw_cross_symbol(renderer, x, y, color);
         break;
     case ND_POINT_WAYPOINT:
     default:
-        draw_waypoint_cross(renderer, x, y, color);
+        draw_waypoint_triangle(renderer, x, y, color);
         break;
     }
 }
@@ -434,13 +413,9 @@ static void draw_nav_points(SDL_Renderer *renderer, TTF_Font *font, const ND_Lay
                 continue;
             }
 
-            const SDL_Color color = nav_point_color(point);
-            draw_nav_point_symbol(renderer, point, x, y, color);
-
-            if (point->type == ND_POINT_VOR || point->type == ND_POINT_NDB)
-            {
-                continue;
-            }
+            const SDL_Color symbol_color = nav_point_symbol_color(point);
+            const SDL_Color label_color = nav_point_label_color(point);
+            draw_nav_point_symbol(renderer, point, x, y, symbol_color);
 
             int text_w = 0;
             int text_h = 0;
@@ -487,7 +462,7 @@ static void draw_nav_points(SDL_Renderer *renderer, TTF_Font *font, const ND_Lay
                 continue;
             }
 
-            draw_text(renderer, font, color, chosen.x, chosen.y, "%s", point->ident);
+            draw_text(renderer, font, label_color, chosen.x, chosen.y, "%s", point->ident);
             if (label_count < ND_MAX_LABEL_RECTS)
             {
                 labels[label_count++] = chosen;
