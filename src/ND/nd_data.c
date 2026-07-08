@@ -21,60 +21,98 @@ static float normalize_degrees(float degrees)
     return degrees;
 }
 
-static void update_waypoint_metrics(ND_Data *data)
+static void set_nav_point(
+    ND_NavPoint *point,
+    const char *ident,
+    ND_PointType type,
+    double latitude,
+    double longitude,
+    int active)
 {
-    if (data == NULL)
+    if (point == NULL)
     {
         return;
     }
 
-    for (int i = 0; i < data->waypoint_count; ++i)
-    {
-        ND_Waypoint *waypoint = &data->waypoints[i];
-        const float lateral_nm = waypoint->rel_x * data->range_nm * 0.70f;
-        const float forward_nm = waypoint->rel_y * data->range_nm;
-        const float relative_bearing = atan2f(lateral_nm, forward_nm) * ND_RAD_TO_DEG;
-
-        waypoint->distance_nm = sqrtf(lateral_nm * lateral_nm + forward_nm * forward_nm);
-        waypoint->bearing_deg = normalize_degrees(data->track + relative_bearing);
-    }
+    snprintf(point->ident, sizeof(point->ident), "%s", ident);
+    point->type = type;
+    point->latitude = latitude;
+    point->longitude = longitude;
+    point->distance_nm = 0.0f;
+    point->bearing_deg = 0.0f;
+    point->visible = 1;
+    point->active = active;
 }
 
-static void update_active_waypoint_display(ND_Data *data)
+static void update_active_waypoint_info(ND_Data *data)
 {
     if (data == NULL)
     {
         return;
     }
 
-    if (data->active_waypoint_index >= 0 && data->active_waypoint_index < data->waypoint_count)
+    data->active_waypoint_name[0] = '\0';
+    data->active_waypoint_distance_nm = 0.0f;
+    data->active_waypoint_bearing_deg = 0.0f;
+    data->active_waypoint_eta_min = 0.0f;
+
+    if (data->active_point_index < 0 || data->active_point_index >= data->nav_point_count)
     {
-        const ND_Waypoint *active = &data->waypoints[data->active_waypoint_index];
-        snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "%s", active->name);
+        snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "----");
+        return;
     }
+
+    const ND_NavPoint *active = &data->nav_points[data->active_point_index];
+    snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "%s", active->ident);
+    data->active_waypoint_distance_nm = active->distance_nm;
+    data->active_waypoint_bearing_deg = active->bearing_deg;
 
     if (data->ground_speed > 1.0f)
     {
-        data->active_waypoint_eta_min = data->active_waypoint_distance_nm / data->ground_speed * 60.0f;
-    }
-    else
-    {
-        data->active_waypoint_eta_min = 0.0f;
+        data->active_waypoint_eta_min = active->distance_nm / data->ground_speed * 60.0f;
     }
 }
 
-static void set_waypoint(ND_Waypoint *waypoint, const char *name, float rel_x, float rel_y)
+void nd_data_recalculate_nav_points(ND_Data *data)
 {
-    if (waypoint == NULL)
+    if (data == NULL)
     {
         return;
     }
 
-    snprintf(waypoint->name, sizeof(waypoint->name), "%s", name);
-    waypoint->rel_x = rel_x;
-    waypoint->rel_y = rel_y;
-    waypoint->distance_nm = 0.0f;
-    waypoint->bearing_deg = 0.0f;
+    const float aircraft_lat_rad = (float)data->latitude * ND_DEG_TO_RAD;
+    const float lon_scale = cosf(aircraft_lat_rad);
+
+    for (int i = 0; i < data->nav_point_count; ++i)
+    {
+        ND_NavPoint *point = &data->nav_points[i];
+        const double delta_lat = point->latitude - data->latitude;
+        const double delta_lon = point->longitude - data->longitude;
+        const float north_nm = (float)(delta_lat * 60.0);
+        const float east_nm = (float)(delta_lon * 60.0 * (double)lon_scale);
+        float bearing = atan2f(east_nm, north_nm) * ND_RAD_TO_DEG;
+
+        point->distance_nm = sqrtf(north_nm * north_nm + east_nm * east_nm);
+        point->bearing_deg = normalize_degrees(bearing);
+        point->active = i == data->active_point_index;
+    }
+
+    update_active_waypoint_info(data);
+}
+
+void nd_data_set_range(ND_Data *data, float range_nm)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    if (range_nm < 5.0f)
+    {
+        range_nm = 5.0f;
+    }
+
+    data->range_nm = range_nm;
 }
 
 void nd_data_init(ND_Data *data)
@@ -90,21 +128,21 @@ void nd_data_init(ND_Data *data)
     data->track = 3.0f;
     data->ground_speed = 262.0f;
     data->true_air_speed = 262.0f;
-    data->range_nm = 40.0f;
-    data->active_waypoint_distance_nm = 1.0f;
-    data->active_waypoint_eta_min = 0.3f;
-    data->waypoint_count = 4;
-    data->active_waypoint_index = -1;
+    data->range_nm = 60.0f;
+    data->nav_point_count = 8;
+    data->active_point_index = 0;
     data->simulation_time = 0.0f;
-    snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "RWY02L");
 
-    set_waypoint(&data->waypoints[0], "WPT01", 0.00f, 0.90f);
-    set_waypoint(&data->waypoints[1], "WPT02", 0.18f, 0.78f);
-    set_waypoint(&data->waypoints[2], "WPT03", 0.36f, 0.65f);
-    set_waypoint(&data->waypoints[3], "WPT04", -0.30f, 0.98f);
+    set_nav_point(&data->nav_points[0], "WPT01", ND_POINT_WAYPOINT, 40.664200, 116.427400, 1);
+    set_nav_point(&data->nav_points[1], "WPT02", ND_POINT_WAYPOINT, 40.524200, 116.667400, 0);
+    set_nav_point(&data->nav_points[2], "WPT03", ND_POINT_WAYPOINT, 40.374200, 116.887400, 0);
+    set_nav_point(&data->nav_points[3], "WPT04", ND_POINT_WAYPOINT, 40.604200, 116.027400, 0);
+    set_nav_point(&data->nav_points[4], "ZBAA", ND_POINT_AIRPORT, 40.080100, 116.584600, 0);
+    set_nav_point(&data->nav_points[5], "TWR01", ND_POINT_TOWER, 40.075000, 116.592000, 0);
+    set_nav_point(&data->nav_points[6], "VOR01", ND_POINT_VOR, 40.324200, 116.157400, 0);
+    set_nav_point(&data->nav_points[7], "NDB01", ND_POINT_NDB, 40.024200, 116.087400, 0);
 
-    update_waypoint_metrics(data);
-    update_active_waypoint_display(data);
+    nd_data_recalculate_nav_points(data);
 }
 
 void nd_data_update_mock(ND_Data *data, float delta_time)
@@ -126,7 +164,6 @@ void nd_data_update_mock(ND_Data *data, float delta_time)
     data->track = normalize_degrees(data->heading + 1.0f + 0.4f * sinf(t * 0.20f));
     data->ground_speed = 262.0f + 2.0f * sinf(t * 0.35f) + 0.8f * cosf(t * 0.70f);
     data->true_air_speed = 262.0f + 1.5f * sinf(t * 0.28f + 0.8f);
-    data->active_waypoint_distance_nm = 1.0f + 0.03f * sinf(t * 0.60f);
 
     const float distance_nm = data->ground_speed * delta_time / 3600.0f;
     const float track_rad = data->track * ND_DEG_TO_RAD;
@@ -139,6 +176,5 @@ void nd_data_update_mock(ND_Data *data, float delta_time)
         data->longitude += (double)(sinf(track_rad) * distance_nm / (60.0f * longitude_scale));
     }
 
-    update_waypoint_metrics(data);
-    update_active_waypoint_display(data);
+    nd_data_recalculate_nav_points(data);
 }
