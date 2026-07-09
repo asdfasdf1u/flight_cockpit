@@ -1,14 +1,15 @@
 #include "fmc_main.h"
 
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
 
 #include "fmc_data.h"
 #include "fmc_ui.h"
 
-#define FMC_WINDOW_WIDTH 700
-#define FMC_WINDOW_HEIGHT 900
+#define FMC_WINDOW_WIDTH 638
+#define FMC_WINDOW_HEIGHT 998
 #define FMC_TARGET_FRAME_MS 16
 
 static TTF_Font *open_fmc_font(void)
@@ -56,16 +57,25 @@ int fmc_main_run(void)
         return -1;
     }
 
+    if ((IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) == 0)
+    {
+        printf("IMG_Init failed: %s\n", IMG_GetError());
+        TTF_Quit();
+        SDL_Quit();
+        return -1;
+    }
+
     SDL_Window *window = SDL_CreateWindow(
         "FMC - Flight Management Computer",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         FMC_WINDOW_WIDTH,
         FMC_WINDOW_HEIGHT,
-        SDL_WINDOW_SHOWN);
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     if (window == NULL)
     {
         printf("SDL_CreateWindow failed: %s\n", SDL_GetError());
+        IMG_Quit();
         TTF_Quit();
         SDL_Quit();
         return -1;
@@ -84,6 +94,7 @@ int fmc_main_run(void)
     {
         printf("SDL_CreateRenderer failed: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
+        IMG_Quit();
         TTF_Quit();
         SDL_Quit();
         return -1;
@@ -95,13 +106,20 @@ int fmc_main_run(void)
         printf("TTF_OpenFont failed: %s\n", TTF_GetError());
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
+        IMG_Quit();
         TTF_Quit();
         SDL_Quit();
         return -1;
     }
 
+    FMC_UI_Assets ui_assets;
+    fmc_ui_assets_load(renderer, &ui_assets);
+
     FMC_Data data;
     fmc_data_init(&data);
+
+    FMC_UI_State ui_state;
+    fmc_ui_state_init(&ui_state);
 
     SDL_StartTextInput();
 
@@ -119,18 +137,13 @@ int fmc_main_run(void)
             {
                 running = 0;
             }
+            else if (event.type == SDL_MOUSEMOTION)
+            {
+                fmc_ui_update_hover(renderer, &ui_state, event.motion.x, event.motion.y);
+            }
             else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
             {
-                int hit = 0;
-                FMC_Page page = fmc_ui_hit_test_page_button(event.button.x, event.button.y, &hit);
-                if (hit)
-                {
-                    fmc_data_set_page(&data, page);
-                }
-                else if (fmc_ui_hit_test_clear_button(event.button.x, event.button.y))
-                {
-                    fmc_data_clear_scratchpad(&data);
-                }
+                fmc_ui_handle_mouse_button(renderer, &ui_state, &data, event.button.x, event.button.y);
             }
             else if (event.type == SDL_TEXTINPUT)
             {
@@ -146,6 +159,11 @@ int fmc_main_run(void)
                 {
                     fmc_data_backspace(&data);
                 }
+                else if ((event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER) &&
+                         data.current_page == FMC_PAGE_ROUTE)
+                {
+                    fmc_data_exec_route_selection(&data);
+                }
                 else if (event.key.keysym.sym == SDLK_F1)
                 {
                     fmc_data_set_page(&data, FMC_PAGE_INDEX);
@@ -160,11 +178,23 @@ int fmc_main_run(void)
                 }
                 else if (event.key.keysym.sym == SDLK_F4)
                 {
-                    fmc_data_set_page(&data, FMC_PAGE_PERF);
+                    fmc_data_set_page(&data, FMC_PAGE_CLIMB);
                 }
                 else if (event.key.keysym.sym == SDLK_F5)
                 {
+                    fmc_data_set_page(&data, FMC_PAGE_CRUISE);
+                }
+                else if (event.key.keysym.sym == SDLK_F6)
+                {
+                    fmc_data_set_page(&data, FMC_PAGE_DESCENT);
+                }
+                else if (event.key.keysym.sym == SDLK_F7)
+                {
                     fmc_data_set_page(&data, FMC_PAGE_LEGS);
+                }
+                else if (event.key.keysym.sym == SDLK_F8)
+                {
+                    fmc_data_set_page(&data, FMC_PAGE_STATUS);
                 }
             }
         }
@@ -181,7 +211,7 @@ int fmc_main_run(void)
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-        fmc_ui_render(renderer, font, &data);
+        fmc_ui_render(renderer, font, &ui_assets, &ui_state, &data);
         SDL_RenderPresent(renderer);
 
         const Uint32 frame_time = SDL_GetTicks() - frame_start;
@@ -192,9 +222,12 @@ int fmc_main_run(void)
     }
 
     SDL_StopTextInput();
+    fmc_data_destroy(&data);
+    fmc_ui_assets_destroy(&ui_assets);
     TTF_CloseFont(font);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+    IMG_Quit();
     TTF_Quit();
     SDL_Quit();
 

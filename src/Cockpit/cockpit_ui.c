@@ -11,6 +11,7 @@ static const SDL_Color COLOR_DIM = {112, 132, 132, 255};
 static const SDL_Color COLOR_CYAN = {70, 210, 255, 255};
 static const SDL_Color COLOR_GREEN = {90, 255, 135, 255};
 static const SDL_Color COLOR_AMBER = {255, 190, 65, 255};
+static const SDL_Color COLOR_MAGENTA = {255, 80, 220, 255};
 
 static void set_color(SDL_Renderer *renderer, SDL_Color color)
 {
@@ -221,6 +222,27 @@ SDL_Rect cockpit_ui_module_zoom_rect(int window_width, int window_height, int te
     return rect;
 }
 
+static void draw_fmc_debug_rect(SDL_Renderer *renderer, SDL_Rect fmc_rect, const SDL_Rect *source_rect, SDL_Color color)
+{
+    SDL_Rect dest = cockpit_layout_fmc_source_to_dest_rect(fmc_rect, source_rect);
+    draw_rect(renderer, &dest, color);
+}
+
+static void draw_fmc_debug_overlay(SDL_Renderer *renderer, SDL_Rect fmc_rect)
+{
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    draw_rect(renderer, &fmc_rect, COLOR_CYAN);
+    draw_fmc_debug_rect(renderer, fmc_rect, &COCKPIT_FMC_SCREEN_RECT, COLOR_GREEN);
+    draw_fmc_debug_rect(renderer, fmc_rect, &COCKPIT_FMC_BUTTON_INIT_REF, COLOR_AMBER);
+    draw_fmc_debug_rect(renderer, fmc_rect, &COCKPIT_FMC_BUTTON_RTE, COLOR_AMBER);
+    draw_fmc_debug_rect(renderer, fmc_rect, &COCKPIT_FMC_BUTTON_LEGS, COLOR_AMBER);
+    draw_fmc_debug_rect(renderer, fmc_rect, &COCKPIT_FMC_BUTTON_DEP_ARR, COLOR_AMBER);
+    draw_fmc_debug_rect(renderer, fmc_rect, &COCKPIT_FMC_BUTTON_EXEC, COLOR_MAGENTA);
+    draw_fmc_debug_rect(renderer, fmc_rect, &COCKPIT_FMC_BUTTON_CLR, COLOR_MAGENTA);
+    draw_fmc_debug_rect(renderer, fmc_rect, &COCKPIT_FMC_BUTTON_DEL, COLOR_MAGENTA);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+}
+
 void cockpit_ui_render_module_zoom_overlay(
     SDL_Renderer *renderer,
     TTF_Font *font,
@@ -263,7 +285,8 @@ void cockpit_ui_render_fmc_zoom_overlay(
     SDL_Texture *fmc_texture,
     SDL_Texture *fmc_background_texture,
     SDL_Rect zoom_rect,
-    Cockpit_FmcSide selected_fmc)
+    Cockpit_FmcSide selected_fmc,
+    int show_debug)
 {
     if (renderer == NULL || font == NULL)
     {
@@ -278,13 +301,13 @@ void cockpit_ui_render_fmc_zoom_overlay(
     fill_rect(renderer, &frame, COLOR_PANEL);
     draw_rect(renderer, &frame, COLOR_EDGE);
 
-    if (fmc_background_texture != NULL)
-    {
-        SDL_RenderCopy(renderer, fmc_background_texture, NULL, &zoom_rect);
-    }
-    else if (fmc_texture != NULL)
+    if (fmc_texture != NULL)
     {
         SDL_RenderCopy(renderer, fmc_texture, NULL, &zoom_rect);
+    }
+    else if (fmc_background_texture != NULL)
+    {
+        SDL_RenderCopy(renderer, fmc_background_texture, NULL, &zoom_rect);
     }
     else
     {
@@ -292,15 +315,9 @@ void cockpit_ui_render_fmc_zoom_overlay(
         draw_centered_text(renderer, font, COLOR_DIM, &zoom_rect, "FMC");
     }
 
-    if (fmc_background_texture != NULL && fmc_texture != NULL)
+    if (show_debug)
     {
-        SDL_Rect screen = {
-            zoom_rect.x + zoom_rect.w * 15 / 100,
-            zoom_rect.y + zoom_rect.h * 7 / 100,
-            zoom_rect.w * 70 / 100,
-            zoom_rect.h * 43 / 100};
-        SDL_RenderCopy(renderer, fmc_texture, NULL, &screen);
-        draw_rect(renderer, &screen, COLOR_DIM);
+        draw_fmc_debug_overlay(renderer, zoom_rect);
     }
 
     draw_rect(renderer, &zoom_rect, COLOR_CYAN);

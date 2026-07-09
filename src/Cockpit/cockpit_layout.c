@@ -1,5 +1,14 @@
 #include "cockpit_layout.h"
 
+const SDL_Rect COCKPIT_FMC_SCREEN_RECT = {104, 74, 435, 345};
+const SDL_Rect COCKPIT_FMC_BUTTON_INIT_REF = {69, 477, 72, 51};
+const SDL_Rect COCKPIT_FMC_BUTTON_RTE = {153, 477, 72, 51};
+const SDL_Rect COCKPIT_FMC_BUTTON_DEP_ARR = {236, 536, 72, 51};
+const SDL_Rect COCKPIT_FMC_BUTTON_LEGS = {153, 536, 72, 51};
+const SDL_Rect COCKPIT_FMC_BUTTON_EXEC = {500, 536, 72, 51};
+const SDL_Rect COCKPIT_FMC_BUTTON_DEL = {401, 923, 49, 49};
+const SDL_Rect COCKPIT_FMC_BUTTON_CLR = {535, 923, 49, 49};
+
 static SDL_Rect scale_rect(int x, int y, int w, int h, float sx, float sy)
 {
     SDL_Rect rect;
@@ -75,4 +84,27 @@ Cockpit_FmcSide cockpit_layout_hit_test_fmc(const Cockpit_Layout *layout, float 
     }
 
     return COCKPIT_FMC_NONE;
+}
+
+SDL_Rect cockpit_layout_fmc_source_to_dest_rect(SDL_Rect fmc_dest, const SDL_Rect *source_rect)
+{
+    SDL_Rect dest = {0, 0, 0, 0};
+    if (source_rect == 0 || fmc_dest.w <= 0 || fmc_dest.h <= 0)
+    {
+        return dest;
+    }
+
+    dest.x = fmc_dest.x + source_rect->x * fmc_dest.w / COCKPIT_FMC_IMAGE_WIDTH;
+    dest.y = fmc_dest.y + source_rect->y * fmc_dest.h / COCKPIT_FMC_IMAGE_HEIGHT;
+    dest.w = source_rect->w * fmc_dest.w / COCKPIT_FMC_IMAGE_WIDTH;
+    dest.h = source_rect->h * fmc_dest.h / COCKPIT_FMC_IMAGE_HEIGHT;
+    if (dest.w < 1)
+    {
+        dest.w = 1;
+    }
+    if (dest.h < 1)
+    {
+        dest.h = 1;
+    }
+    return dest;
 }

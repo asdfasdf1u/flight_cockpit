@@ -43,6 +43,7 @@ void cockpit_ui_render_fmc_zoom_overlay(
     SDL_Texture *fmc_texture,
     SDL_Texture *fmc_background_texture,
     SDL_Rect zoom_rect,
-    Cockpit_FmcSide selected_fmc);
+    Cockpit_FmcSide selected_fmc,
+    int show_debug);
 
 #endif

@@ -15,6 +15,7 @@
 #include "../ND/nd_ui.h"
 
 #include "../Systems/aircraft_systems_data.h"
+#include "../EICAS1/eicas_data.h"
 #include "../EICAS1/eicas1_ui.h"
 #include "../EICAS2/eicas2_ui.h"
 
@@ -25,14 +26,14 @@
 #define COCKPIT_WINDOW_HEIGHT 900
 #define COCKPIT_TARGET_FRAME_MS 16
 
-#define COCKPIT_PFD_TEXTURE_WIDTH 1000
-#define COCKPIT_PFD_TEXTURE_HEIGHT 700
+#define COCKPIT_PFD_TEXTURE_WIDTH 900
+#define COCKPIT_PFD_TEXTURE_HEIGHT 800
 #define COCKPIT_ND_TEXTURE_WIDTH 1000
 #define COCKPIT_ND_TEXTURE_HEIGHT 700
 #define COCKPIT_EICAS_TEXTURE_WIDTH 768
 #define COCKPIT_EICAS_TEXTURE_HEIGHT 768
-#define COCKPIT_FMC_TEXTURE_WIDTH 700
-#define COCKPIT_FMC_TEXTURE_HEIGHT 900
+#define COCKPIT_FMC_TEXTURE_WIDTH COCKPIT_FMC_IMAGE_WIDTH
+#define COCKPIT_FMC_TEXTURE_HEIGHT COCKPIT_FMC_IMAGE_HEIGHT
 
 #define COCKPIT_MIN_SCALE 0.5f
 #define COCKPIT_MAX_SCALE 3.0f
@@ -223,9 +224,32 @@ static void render_eicas2_adapter(SDL_Renderer *renderer, TTF_Font *font, const 
     eicas2_ui_render(renderer, font, (const AircraftSystems_Data *)data);
 }
 
-static void render_fmc_adapter(SDL_Renderer *renderer, TTF_Font *font, const void *data)
+static void render_fmc_to_texture(
+    SDL_Renderer *renderer,
+    SDL_Texture *texture,
+    TTF_Font *font,
+    const FMC_UI_Assets *assets,
+    const FMC_UI_State *state,
+    const FMC_Data *data)
 {
-    fmc_ui_render(renderer, font, (const FMC_Data *)data);
+    if (renderer == NULL || texture == NULL || font == NULL || data == NULL)
+    {
+        return;
+    }
+
+    SDL_SetRenderTarget(renderer, texture);
+    SDL_RenderSetViewport(renderer, NULL);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+    if (assets != NULL && assets->panel_texture != NULL)
+    {
+        SDL_RenderCopy(renderer, assets->panel_texture, NULL, &(SDL_Rect){0, 0, COCKPIT_FMC_TEXTURE_WIDTH, COCKPIT_FMC_TEXTURE_HEIGHT});
+        fmc_ui_render_screen_only(renderer, font, data, &COCKPIT_FMC_SCREEN_RECT);
+    }
+    else
+    {
+        fmc_ui_render(renderer, font, assets, state, data);
+    }
 }
 
 static void update_module_textures(
@@ -235,13 +259,15 @@ static void update_module_textures(
     const PFD_Data *pfd_data,
     const ND_Data *nd_data,
     const AircraftSystems_Data *systems_data,
+    const FMC_UI_Assets *fmc_assets,
+    const FMC_UI_State *fmc_state,
     const FMC_Data *fmc_data)
 {
     render_to_texture(renderer, targets->pfd_texture, render_pfd_adapter, font, pfd_data);
     render_to_texture(renderer, targets->nd_texture, render_nd_adapter, font, nd_data);
     render_to_texture(renderer, targets->eicas1_texture, render_eicas1_adapter, font, systems_data);
     render_to_texture(renderer, targets->eicas2_texture, render_eicas2_adapter, font, systems_data);
-    render_to_texture(renderer, targets->fmc_texture, render_fmc_adapter, font, fmc_data);
+    render_fmc_to_texture(renderer, targets->fmc_texture, font, fmc_assets, fmc_state, fmc_data);
     SDL_SetRenderTarget(renderer, NULL);
     SDL_RenderSetViewport(renderer, NULL);
 }
@@ -378,6 +404,16 @@ static void map_zoom_click_to_fmc(int screen_x, int screen_y, SDL_Rect zoom_rect
     *fmc_y = (screen_y - zoom_rect.y) * COCKPIT_FMC_TEXTURE_HEIGHT / zoom_rect.h;
 }
 
+static int handle_cockpit_fmc_panel_button(FMC_UI_State *state, FMC_Data *data, int fmc_x, int fmc_y)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    return fmc_ui_handle_mouse_button_base(state, data, fmc_x, fmc_y);
+}
+
 static Cockpit_ViewMode cockpit_module_hit_test(const Cockpit_Layout *layout, float world_x, float world_y)
 {
     if (layout == NULL)
@@ -446,6 +482,7 @@ static void render_window(
     Cockpit_ViewMode view_mode,
     Cockpit_FmcSide selected_fmc,
     SDL_Texture *fmc_background_texture,
+    int show_fmc_debug,
     int window_width,
     int window_height)
 {
@@ -463,7 +500,7 @@ static void render_window(
     if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
     {
         SDL_Rect zoom_rect = cockpit_ui_fmc_zoom_rect(window_width, window_height);
-        cockpit_ui_render_fmc_zoom_overlay(renderer, font, targets->fmc_texture, fmc_background_texture, zoom_rect, selected_fmc);
+        cockpit_ui_render_fmc_zoom_overlay(renderer, font, targets->fmc_texture, fmc_background_texture, zoom_rect, selected_fmc, show_fmc_debug);
     }
     else if (view_mode == COCKPIT_VIEW_PFD_ZOOM)
     {
@@ -587,11 +624,29 @@ int cockpit_main_run(void)
     PFD_Data pfd_data;
     ND_Data nd_data;
     AircraftSystems_Data systems_data;
+    EICAS_Data eicas_data;
     FMC_Data fmc_data;
     pfd_data_init(&pfd_data);
     nd_data_init(&nd_data);
     aircraft_systems_data_init(&systems_data);
+    eicas_data_init(&eicas_data);
+    const int eicas_data_loaded = eicas_data_load_files(&eicas_data, "assets/eicas1.dat", "assets/eicas2.dat");
+    if (eicas_data_loaded)
+    {
+        eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
+    }
+    else
+    {
+        printf("Cockpit EICAS: using mock fallback data.\n");
+        fflush(stdout);
+    }
     fmc_data_init(&fmc_data);
+
+    FMC_UI_Assets fmc_ui_assets;
+    fmc_ui_assets_load(renderer, &fmc_ui_assets);
+
+    FMC_UI_State fmc_ui_state;
+    fmc_ui_state_init(&fmc_ui_state);
 
     int window_width = COCKPIT_WINDOW_WIDTH;
     int window_height = COCKPIT_WINDOW_HEIGHT;
@@ -600,6 +655,8 @@ int cockpit_main_run(void)
 
     Cockpit_ViewMode view_mode = COCKPIT_VIEW_MAIN;
     Cockpit_FmcSide selected_fmc = COCKPIT_FMC_NONE;
+    int show_fmc_debug = 0;
+    int suppress_debug_text_input = 0;
     int dragging = 0;
     int last_mouse_x = 0;
     int last_mouse_y = 0;
@@ -646,17 +703,8 @@ int cockpit_main_run(void)
                     {
                         int fmc_x = 0;
                         int fmc_y = 0;
-                        int hit = 0;
                         map_zoom_click_to_fmc(event.button.x, event.button.y, zoom_rect, &fmc_x, &fmc_y);
-                        FMC_Page page = fmc_ui_hit_test_page_button(fmc_x, fmc_y, &hit);
-                        if (hit)
-                        {
-                            fmc_data_set_page(&fmc_data, page);
-                        }
-                        else if (fmc_ui_hit_test_clear_button(fmc_x, fmc_y))
-                        {
-                            fmc_data_clear_scratchpad(&fmc_data);
-                        }
+                        handle_cockpit_fmc_panel_button(&fmc_ui_state, &fmc_data, fmc_x, fmc_y);
                     }
                 }
                 else if (view_mode == COCKPIT_VIEW_PFD_ZOOM)
@@ -722,18 +770,45 @@ int cockpit_main_run(void)
             {
                 dragging = 0;
             }
-            else if (event.type == SDL_MOUSEMOTION && dragging && view_mode == COCKPIT_VIEW_MAIN)
+            else if (event.type == SDL_MOUSEMOTION)
             {
-                camera.offset_x += (float)(event.motion.x - last_mouse_x);
-                camera.offset_y += (float)(event.motion.y - last_mouse_y);
-                last_mouse_x = event.motion.x;
-                last_mouse_y = event.motion.y;
+                if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
+                {
+                    SDL_Rect zoom_rect = cockpit_ui_fmc_zoom_rect(window_width, window_height);
+                    if (point_in_rect(event.motion.x, event.motion.y, &zoom_rect))
+                    {
+                        int fmc_x = 0;
+                        int fmc_y = 0;
+                        map_zoom_click_to_fmc(event.motion.x, event.motion.y, zoom_rect, &fmc_x, &fmc_y);
+                        fmc_ui_update_hover_base(&fmc_ui_state, fmc_x, fmc_y);
+                    }
+                    else
+                    {
+                        fmc_ui_state_init(&fmc_ui_state);
+                    }
+                }
+                else if (dragging && view_mode == COCKPIT_VIEW_MAIN)
+                {
+                    camera.offset_x += (float)(event.motion.x - last_mouse_x);
+                    camera.offset_y += (float)(event.motion.y - last_mouse_y);
+                    last_mouse_x = event.motion.x;
+                    last_mouse_y = event.motion.y;
+                }
             }
             else if (event.type == SDL_TEXTINPUT)
             {
                 if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
                 {
-                    handle_fmc_text_input(&fmc_data, event.text.text);
+                    if (suppress_debug_text_input &&
+                        (event.text.text[0] == 'd' || event.text.text[0] == 'D') &&
+                        event.text.text[1] == '\0')
+                    {
+                        suppress_debug_text_input = 0;
+                    }
+                    else
+                    {
+                        handle_fmc_text_input(&fmc_data, event.text.text);
+                    }
                 }
             }
             else if (event.type == SDL_KEYDOWN)
@@ -754,6 +829,11 @@ int cockpit_main_run(void)
                 {
                     reset_camera(&camera, window_width, window_height, layout.world_width, layout.world_height);
                 }
+                else if (event.key.keysym.sym == SDLK_d)
+                {
+                    show_fmc_debug = !show_fmc_debug;
+                    suppress_debug_text_input = view_mode == COCKPIT_VIEW_FMC_ZOOM;
+                }
                 else if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
                 {
                     handle_fmc_keydown(&fmc_data, event.key.keysym.sym);
@@ -771,12 +851,20 @@ int cockpit_main_run(void)
 
         pfd_data_update_mock(&pfd_data, delta_time);
         nd_data_update_mock(&nd_data, delta_time);
-        aircraft_systems_data_update_mock(&systems_data, delta_time);
+        if (eicas_data_loaded)
+        {
+            eicas_data_update(&eicas_data, delta_time);
+            eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
+        }
+        else
+        {
+            aircraft_systems_data_update_mock(&systems_data, delta_time);
+        }
         fmc_data_update_mock(&fmc_data, delta_time);
 
-        update_module_textures(renderer, font, &targets, &pfd_data, &nd_data, &systems_data, &fmc_data);
+        update_module_textures(renderer, font, &targets, &pfd_data, &nd_data, &systems_data, &fmc_ui_assets, &fmc_ui_state, &fmc_data);
         update_scene_texture(renderer, font, &targets, &layout, background_texture);
-        render_window(renderer, font, &targets, &layout, &camera, view_mode, selected_fmc, fmc_background_texture, window_width, window_height);
+        render_window(renderer, font, &targets, &layout, &camera, view_mode, selected_fmc, fmc_background_texture, show_fmc_debug, window_width, window_height);
 
         const Uint32 frame_time = SDL_GetTicks() - frame_start;
         if (frame_time < COCKPIT_TARGET_FRAME_MS)
@@ -786,6 +874,8 @@ int cockpit_main_run(void)
     }
 
     SDL_StopTextInput();
+    fmc_data_destroy(&fmc_data);
+    fmc_ui_assets_destroy(&fmc_ui_assets);
     destroy_render_targets(&targets);
     if (background_texture != NULL)
     {

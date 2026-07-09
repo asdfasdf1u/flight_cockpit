@@ -7,8 +7,8 @@
 #include "pfd_data.h"
 #include "pfd_ui.h"
 
-#define PFD_WINDOW_WIDTH 1000
-#define PFD_WINDOW_HEIGHT 700
+#define PFD_WINDOW_WIDTH 900
+#define PFD_WINDOW_HEIGHT 800
 #define PFD_TARGET_FRAME_MS 16
 
 static TTF_Font *open_pfd_font(void)

@@ -36,6 +36,7 @@ typedef struct AircraftSystems_Data
     AircraftSystems_EngineData engine_left;
     AircraftSystems_EngineData engine_right;
 
+    float total_air_temperature;
     float fuel_quantity;
     float hydraulic_pressure;
     float cabin_pressure;

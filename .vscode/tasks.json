@@ -1,4 +1,4 @@
-﻿{
+{
     "version": "2.0.0",
     "tasks": [
         {
@@ -11,11 +11,19 @@
                 "${workspaceFolder}/src/Cockpit/cockpit_main.c",
                 "${workspaceFolder}/src/Cockpit/cockpit_ui.c",
                 "${workspaceFolder}/src/Cockpit/cockpit_layout.c",
+                "${workspaceFolder}/src/Cabin/cabin_main.c",
+                "${workspaceFolder}/src/Cabin/cabin_ui.c",
+                "${workspaceFolder}/src/Cabin/cabin_data.c",
+                "${workspaceFolder}/src/Cabin/cabin_api.c",
                 "${workspaceFolder}/src/FMC/fmc_main.c",
                 "${workspaceFolder}/src/FMC/fmc_ui.c",
                 "${workspaceFolder}/src/FMC/fmc_data.c",
+                "${workspaceFolder}/src/FMC/fmc_airport.c",
+                "${workspaceFolder}/src/FMC/fmc_waypoint.c",
+                "${workspaceFolder}/src/FMC/fmc_xpc.c",
                 "${workspaceFolder}/src/Util/eicas_ui_common.c",
                 "${workspaceFolder}/src/Systems/aircraft_systems_data.c",
+                "${workspaceFolder}/src/EICAS1/eicas_data.c",
                 "${workspaceFolder}/src/EICAS1/eicas1_main.c",
                 "${workspaceFolder}/src/EICAS1/eicas1_ui.c",
                 "${workspaceFolder}/src/EICAS2/eicas2_main.c",
@@ -66,7 +74,29 @@
                 "isDefault": false
             },
             "detail": "Run the current test entry"
+        },
+        {
+            "type": "cppbuild",
+            "label": "C/C++: gcc.exe build active file",
+            "command": "D:\\msys2-x86\\mingw64\\bin\\gcc.exe",
+            "args": [
+                "-fdiagnostics-color=always",
+                "-g",
+                "${file}",
+                "-o",
+                "${fileDirname}\\${fileBasenameNoExtension}.exe"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Debugger generated task."
         }
     ]
 }
-

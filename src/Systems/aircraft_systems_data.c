@@ -146,6 +146,7 @@ void aircraft_systems_data_init(AircraftSystems_Data *data)
     data->engine_right.oil_temp = 91.5f;
     data->engine_right.vibration = 1.1f;
 
+    data->total_air_temperature = 11.9f;
     data->fuel_quantity = 82.0f;
     data->hydraulic_pressure = 3050.0f;
     data->cabin_pressure = 8.2f;
@@ -177,6 +178,7 @@ void aircraft_systems_data_update_mock(AircraftSystems_Data *data, float delta_t
     update_engine_mock(&data->engine_left, t, 0.0f);
     update_engine_mock(&data->engine_right, t, 0.85f);
 
+    data->total_air_temperature = 11.9f + 0.2f * sinf(t * 0.25f);
     data->fuel_quantity = clamp_float(data->fuel_quantity - 0.010f * delta_time, 0.0f, 100.0f);
     data->hydraulic_pressure = clamp_float(3020.0f + 90.0f * sinf(t * 0.40f), 0.0f, 3500.0f);
     data->cabin_pressure = clamp_float(8.1f + 0.3f * sinf(t * 0.18f), 0.0f, 12.0f);

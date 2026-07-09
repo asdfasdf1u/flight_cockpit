@@ -4,6 +4,7 @@
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
 
+#include "eicas_data.h"
 #include "../Systems/aircraft_systems_data.h"
 #include "eicas1_ui.h"
 
@@ -93,6 +94,19 @@ int eicas1_main_run(void)
     AircraftSystems_Data data;
     aircraft_systems_data_init(&data);
 
+    EICAS_Data eicas_data;
+    eicas_data_init(&eicas_data);
+    const int eicas1_data_loaded = eicas_data_load_upper_file(&eicas_data, "assets/eicas1.dat");
+    if (eicas1_data_loaded)
+    {
+        eicas_data_apply_upper_to_aircraft_systems(&eicas_data, &data);
+    }
+    else
+    {
+        printf("EICAS1: using mock fallback data for Upper display.\n");
+        fflush(stdout);
+    }
+
     int running = 1;
     SDL_Event event;
     Uint32 last_ticks = SDL_GetTicks();
@@ -121,7 +135,15 @@ int eicas1_main_run(void)
             delta_time = 0.1f;
         }
 
-        aircraft_systems_data_update_mock(&data, delta_time);
+        if (eicas1_data_loaded)
+        {
+            eicas_data_update(&eicas_data, delta_time);
+            eicas_data_apply_upper_to_aircraft_systems(&eicas_data, &data);
+        }
+        else
+        {
+            aircraft_systems_data_update_mock(&data, delta_time);
+        }
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
