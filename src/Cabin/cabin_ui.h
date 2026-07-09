@@ -10,6 +10,7 @@ typedef struct Cabin_Assets
 {
     SDL_Texture *map_texture;
     SDL_Texture *plane_texture;
+    SDL_Texture *fullscreen_texture;
     SDL_Texture *add_texture;
     SDL_Texture *sub_texture;
     TTF_Font *title_font;
@@ -17,6 +18,7 @@ typedef struct Cabin_Assets
     TTF_Font *small_font;
 } Cabin_Assets;
 
+void cabin_ui_handle_event(SDL_Window *window, const SDL_Event *event);
 void cabin_ui_render(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data);
 
 #endif

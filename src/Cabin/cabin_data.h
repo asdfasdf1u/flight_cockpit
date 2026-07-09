@@ -31,6 +31,8 @@ typedef struct Cabin_Data
     float remaining_time_min;
 
     char weather[CABIN_TEXT_LEN];
+    char weather_city[CABIN_TEXT_LEN];
+    char weather_adcode[CABIN_TEXT_LEN];
     float temperature;
     float humidity;
     char wind_direction[CABIN_TEXT_LEN];

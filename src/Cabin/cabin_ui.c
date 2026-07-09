@@ -3,8 +3,12 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 #define CABIN_PI 3.14159265358979323846f
+#define CABIN_MAP_ZOOM_MIN 0.85f
+#define CABIN_MAP_ZOOM_MAX 1.65f
+#define CABIN_MAP_ZOOM_STEP 0.15f
 
 static const SDL_Color COLOR_BG = {45, 72, 96, 255};
 static const SDL_Color COLOR_PANEL_TITLE = {31, 142, 237, 255};
@@ -15,7 +19,10 @@ static const SDL_Color COLOR_WHITE = {255, 255, 255, 255};
 static const SDL_Color COLOR_ROUTE = {24, 137, 235, 255};
 static const SDL_Color COLOR_ROUTE_SOFT = {126, 188, 242, 255};
 static const SDL_Color COLOR_GREEN = {68, 176, 68, 255};
-static const SDL_Color COLOR_BLACK_OVERLAY = {16, 26, 35, 205};
+static const SDL_Color COLOR_BLACK_OVERLAY = {16, 26, 35, 198};
+static const SDL_Color COLOR_PROGRESS_BG = {64, 80, 92, 255};
+
+static float g_map_zoom = 1.0f;
 
 typedef struct Cabin_Point
 {
@@ -78,6 +85,46 @@ static void draw_text(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, i
     SDL_FreeSurface(surface);
 }
 
+static void draw_text_clipped(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, const SDL_Rect *clip_rect, int x, int y, const char *format, ...)
+{
+    if (renderer == NULL || font == NULL || clip_rect == NULL || format == NULL)
+    {
+        return;
+    }
+
+    char text[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(text, sizeof(text), format, args);
+    va_end(args);
+
+    SDL_Rect old_clip;
+    const SDL_bool had_clip = SDL_RenderIsClipEnabled(renderer);
+    SDL_RenderGetClipRect(renderer, &old_clip);
+    SDL_RenderSetClipRect(renderer, clip_rect);
+    draw_text(renderer, font, color, x, y, "%s", text);
+    SDL_RenderSetClipRect(renderer, had_clip ? &old_clip : NULL);
+}
+
+static void draw_text_centered(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, const SDL_Rect *rect, const char *text)
+{
+    if (renderer == NULL || font == NULL || rect == NULL || text == NULL)
+    {
+        return;
+    }
+
+    int width = 0;
+    int height = 0;
+    if (TTF_SizeUTF8(font, text, &width, &height) != 0)
+    {
+        return;
+    }
+
+    const int x = rect->x + (rect->w - width) / 2;
+    const int y = rect->y + (rect->h - height) / 2;
+    draw_text_clipped(renderer, font, color, rect, x, y, "%s", text);
+}
+
 static void draw_filled_circle(SDL_Renderer *renderer, int cx, int cy, int radius, SDL_Color color)
 {
     set_color(renderer, color);
@@ -96,25 +143,29 @@ static void draw_filled_circle(SDL_Renderer *renderer, int cx, int cy, int radiu
 static void draw_thick_line(SDL_Renderer *renderer, int x1, int y1, int x2, int y2, SDL_Color color)
 {
     set_color(renderer, color);
-    for (int offset = -2; offset <= 2; ++offset)
+    for (int offset = -1; offset <= 1; ++offset)
     {
         SDL_RenderDrawLine(renderer, x1 + offset, y1, x2 + offset, y2);
         SDL_RenderDrawLine(renderer, x1, y1 + offset, x2, y2 + offset);
     }
 }
 
-static Cabin_Point bezier_point(Cabin_Point start, Cabin_Point control, Cabin_Point end, float t)
-{
-    const float u = 1.0f - t;
-    Cabin_Point point;
-    point.x = (int)(u * u * (float)start.x + 2.0f * u * t * (float)control.x + t * t * (float)end.x);
-    point.y = (int)(u * u * (float)start.y + 2.0f * u * t * (float)control.y + t * t * (float)end.y);
-    return point;
-}
-
 static double lerp_double(double start, double end, float t)
 {
     return start + (end - start) * (double)t;
+}
+
+static float clamp_float(float value, float min_value, float max_value)
+{
+    if (value < min_value)
+    {
+        return min_value;
+    }
+    if (value > max_value)
+    {
+        return max_value;
+    }
+    return value;
 }
 
 static int cabin_geo_bounds_valid(const Cabin_Data *data)
@@ -191,6 +242,7 @@ static void cabin_log_geo_debug(
     }
     printed = 1;
 
+    printf("Cabin Geo: map source=%s.\n", data->map_source);
     printf("Cabin Geo: map rect x=%d y=%d w=%d h=%d.\n", map_rect->x, map_rect->y, map_rect->w, map_rect->h);
     printf("Cabin Geo: bounds top-left lat=%.6f lon=%.6f, bottom-right lat=%.6f lon=%.6f.\n",
            data->map_top_left_lat,
@@ -228,7 +280,7 @@ static void cabin_log_geo_debug(
 
     if (!has_origin || !has_destination || !has_current)
     {
-        printf("Cabin Geo: invalid/out-of-range point detected, route drawing will use fallback or skip clipped points.\n");
+        printf("Cabin Geo: invalid/out-of-range point detected, route drawing will skip invalid points.\n");
     }
 }
 
@@ -282,7 +334,8 @@ static void draw_map_background(SDL_Renderer *renderer, SDL_Texture *map_texture
 static void draw_panel_header(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *rect, const char *title)
 {
     fill_rect(renderer, rect, COLOR_PANEL_TITLE);
-    draw_text(renderer, font, COLOR_WHITE, rect->x + 12, rect->y + 8, "%s", title);
+    draw_rect(renderer, rect, COLOR_PANEL_LINE);
+    draw_text_clipped(renderer, font, COLOR_WHITE, rect, rect->x + 14, rect->y + 8, "%s", title);
 }
 
 static void draw_panel_row(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *rect, const char *format, ...)
@@ -295,117 +348,226 @@ static void draw_panel_row(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rec
 
     fill_rect(renderer, rect, COLOR_PANEL_BODY);
     draw_rect(renderer, rect, COLOR_PANEL_LINE);
-    draw_text(renderer, font, COLOR_TEXT_DARK, rect->x + 12, rect->y + 10, "%s", text);
+    const SDL_Rect clip_rect = {rect->x + 12, rect->y + 2, rect->w - 24, rect->h - 4};
+    const int font_h = font != NULL ? TTF_FontHeight(font) : 20;
+    const int text_y = rect->y + (rect->h - font_h) / 2;
+    draw_text_clipped(renderer, font, COLOR_TEXT_DARK, &clip_rect, rect->x + 14, text_y, "%s", text);
 }
 
 static void draw_location_panel(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, int x, int y, int w)
 {
-    const int header_h = 45;
-    const int row_h = 44;
+    const int header_h = 44;
+    const int row_h = 46;
 
     draw_panel_header(renderer, assets->title_font, &(SDL_Rect){x, y, w, header_h}, "地点信息");
     draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "出发：%s", data->origin_city);
     draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "到达：%s", data->destination_city);
     draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "当前位置：%s", data->current_city);
+    draw_rect(renderer, &(SDL_Rect){x, y, w, header_h + row_h * 3}, COLOR_TEXT_DARK);
 }
 
 static void draw_weather_panel(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, int x, int y, int w)
 {
-    const int header_h = 45;
+    const int header_h = 44;
     const int row_h = 38;
 
     draw_panel_header(renderer, assets->title_font, &(SDL_Rect){x, y, w, header_h}, "天气信息");
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "天气：%s", data->weather);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "温度：%.1f°C", data->temperature);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "湿度：%.1f%%", data->humidity);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 3, w, row_h}, "风向：%s", data->wind_direction);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 4, w, row_h}, "风力：%s", data->wind_power);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 5, w, row_h}, "WEATHER SOURCE: %s", data->weather_source);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "城市：%s", data->weather_city);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "天气：%s", data->weather);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "温度：%.0f°C", data->temperature);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 3, w, row_h}, "湿度：%.0f%%", data->humidity);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 4, w, row_h}, "风向：%s", data->wind_direction);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 5, w, row_h}, "风力：%s", data->wind_power);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 6, w, row_h}, "来源：%s", data->weather_source);
+    draw_rect(renderer, &(SDL_Rect){x, y, w, header_h + row_h * 7}, COLOR_TEXT_DARK);
 }
 
-static void draw_zoom_button(SDL_Renderer *renderer, TTF_Font *font, SDL_Texture *texture, int x, int y, const char *fallback)
+static void draw_fullscreen_symbol(SDL_Renderer *renderer, const SDL_Rect *rect)
 {
-    const SDL_Rect rect = {x, y, 40, 40};
-    if (texture != NULL)
-    {
-        SDL_RenderCopy(renderer, texture, NULL, &rect);
-        return;
-    }
+    const int pad = 11;
+    const int len = 10;
+
+    set_color(renderer, COLOR_TEXT_DARK);
+    SDL_RenderDrawLine(renderer, rect->x + pad, rect->y + pad, rect->x + pad + len, rect->y + pad);
+    SDL_RenderDrawLine(renderer, rect->x + pad, rect->y + pad, rect->x + pad, rect->y + pad + len);
+    SDL_RenderDrawLine(renderer, rect->x + rect->w - pad, rect->y + pad, rect->x + rect->w - pad - len, rect->y + pad);
+    SDL_RenderDrawLine(renderer, rect->x + rect->w - pad, rect->y + pad, rect->x + rect->w - pad, rect->y + pad + len);
+    SDL_RenderDrawLine(renderer, rect->x + pad, rect->y + rect->h - pad, rect->x + pad + len, rect->y + rect->h - pad);
+    SDL_RenderDrawLine(renderer, rect->x + pad, rect->y + rect->h - pad, rect->x + pad, rect->y + rect->h - pad - len);
+    SDL_RenderDrawLine(renderer, rect->x + rect->w - pad, rect->y + rect->h - pad, rect->x + rect->w - pad - len, rect->y + rect->h - pad);
+    SDL_RenderDrawLine(renderer, rect->x + rect->w - pad, rect->y + rect->h - pad, rect->x + rect->w - pad, rect->y + rect->h - pad - len);
+}
+
+static void draw_map_control_button(SDL_Renderer *renderer, TTF_Font *font, SDL_Texture *texture, int x, int y, const char *fallback)
+{
+    const SDL_Rect rect = {x, y, 44, 44};
+    const SDL_Rect icon_rect = {x + 8, y + 8, 28, 28};
 
     fill_rect(renderer, &rect, COLOR_PANEL_BODY);
     draw_rect(renderer, &rect, COLOR_PANEL_LINE);
-    draw_text(renderer, font, COLOR_TEXT_DARK, x + 12, y + 4, "%s", fallback);
+
+    if (texture != NULL)
+    {
+        SDL_RenderCopy(renderer, texture, NULL, &icon_rect);
+        return;
+    }
+
+    if (fallback != NULL && strcmp(fallback, "FULL") == 0)
+    {
+        draw_fullscreen_symbol(renderer, &rect);
+        return;
+    }
+
+    draw_text_centered(renderer, font, COLOR_TEXT_DARK, &rect, fallback);
 }
 
-static void draw_zoom_controls(SDL_Renderer *renderer, const Cabin_Assets *assets, int width, int height)
+static SDL_Rect cabin_bottom_bar_rect(int width, int height)
 {
-    const int x = width - 60;
-    const int y = height - 90;
-    draw_zoom_button(renderer, assets->title_font, assets->add_texture, x, y, "+");
-    draw_zoom_button(renderer, assets->title_font, assets->sub_texture, x, y + 42, "-");
+    const int margin = 24;
+    const int bar_h = 104;
+    const int right_reserved = width >= 1000 ? 324 : 24;
+    SDL_Rect bar = {margin, height - bar_h - 22, width - margin - right_reserved - margin, bar_h};
+
+    if (bar.w < 520)
+    {
+        bar.w = width - margin * 2;
+    }
+    if (bar.w < 1)
+    {
+        bar.w = width;
+        bar.x = 0;
+    }
+
+    return bar;
 }
 
-static void draw_map_source_badge(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data)
+static void cabin_map_control_rects(int width, int height, SDL_Rect *fullscreen_rect, SDL_Rect *add_rect, SDL_Rect *sub_rect)
 {
-    const SDL_Rect badge = {16, 16, 128, 30};
+    const int button = 44;
+    const int gap = 6;
+    const int controls_h = button * 3 + gap * 2;
+    const SDL_Rect bottom_bar = cabin_bottom_bar_rect(width, height);
+    const int x = width - button - 24;
+    int y = bottom_bar.y - controls_h - 18;
+
+    if (y < 24)
+    {
+        y = height - controls_h - 24;
+    }
+
+    if (fullscreen_rect != NULL)
+    {
+        *fullscreen_rect = (SDL_Rect){x, y, button, button};
+    }
+    if (add_rect != NULL)
+    {
+        *add_rect = (SDL_Rect){x, y + button + gap, button, button};
+    }
+    if (sub_rect != NULL)
+    {
+        *sub_rect = (SDL_Rect){x, y + (button + gap) * 2, button, button};
+    }
+}
+
+static void draw_map_controls(SDL_Renderer *renderer, const Cabin_Assets *assets, int width, int height)
+{
+    SDL_Rect fullscreen_rect;
+    SDL_Rect add_rect;
+    SDL_Rect sub_rect;
+    cabin_map_control_rects(width, height, &fullscreen_rect, &add_rect, &sub_rect);
+
+    draw_map_control_button(renderer, assets->title_font, assets->fullscreen_texture, fullscreen_rect.x, fullscreen_rect.y, "FULL");
+    draw_map_control_button(renderer, assets->title_font, assets->add_texture, add_rect.x, add_rect.y, "+");
+    draw_map_control_button(renderer, assets->title_font, assets->sub_texture, sub_rect.x, sub_rect.y, "-");
+}
+
+static void draw_map_source_badge(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, const SDL_Rect *map_rect)
+{
+    if (map_rect == NULL)
+    {
+        return;
+    }
+
+    const SDL_Rect badge = {map_rect->x + 16, map_rect->y + 16, 132, 30};
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     fill_rect(renderer, &badge, COLOR_BLACK_OVERLAY);
     draw_rect(renderer, &badge, COLOR_ROUTE_SOFT);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-    draw_text(renderer, assets->small_font, COLOR_WHITE, badge.x + 10, badge.y + 5, "MAP: %s", data->map_source);
+    draw_text_clipped(renderer, assets->small_font, COLOR_WHITE, &badge, badge.x + 10, badge.y + 5, "MAP: %s", data->map_source);
 }
 
-static void draw_route_fallback(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, const SDL_Rect *map_rect)
+static int point_in_rect(int x, int y, const SDL_Rect *rect)
 {
-    Cabin_Point start = {map_rect->x + map_rect->w * 60 / 100, map_rect->y + map_rect->h * 36 / 100};
-    Cabin_Point control = {map_rect->x + map_rect->w * 50 / 100, map_rect->y + map_rect->h * 54 / 100};
-    Cabin_Point end = {map_rect->x + map_rect->w * 51 / 100, map_rect->y + map_rect->h - 20};
+    return rect != NULL &&
+           x >= rect->x &&
+           x < rect->x + rect->w &&
+           y >= rect->y &&
+           y < rect->y + rect->h;
+}
 
-    Cabin_Point prev = start;
-    for (int i = 1; i <= 64; ++i)
+static SDL_Rect cabin_zoomed_map_rect(int width, int height)
+{
+    const float zoom = clamp_float(g_map_zoom, CABIN_MAP_ZOOM_MIN, CABIN_MAP_ZOOM_MAX);
+    const int zoom_w = (int)((float)width * zoom + 0.5f);
+    const int zoom_h = (int)((float)height * zoom + 0.5f);
+    SDL_Rect rect = {(width - zoom_w) / 2, (height - zoom_h) / 2, zoom_w, zoom_h};
+
+    if (rect.w < 1)
     {
-        const float t = (float)i / 64.0f;
-        Cabin_Point current = bezier_point(start, control, end, t);
-        draw_thick_line(renderer, prev.x, prev.y, current.x, current.y, COLOR_ROUTE_SOFT);
-        prev = current;
+        rect.w = width;
+    }
+    if (rect.h < 1)
+    {
+        rect.h = height;
     }
 
-    prev = start;
-    const int progress_steps = (int)(data->progress * 64.0f);
-    for (int i = 1; i <= progress_steps; ++i)
+    return rect;
+}
+
+void cabin_ui_handle_event(SDL_Window *window, const SDL_Event *event)
+{
+    if (window == NULL || event == NULL)
     {
-        const float t = (float)i / 64.0f;
-        Cabin_Point current = bezier_point(start, control, end, t);
-        draw_thick_line(renderer, prev.x, prev.y, current.x, current.y, COLOR_ROUTE);
-        prev = current;
+        return;
     }
 
-    Cabin_Point plane = bezier_point(start, control, end, data->progress);
-    Cabin_Point angle_from = plane;
-    Cabin_Point angle_to = bezier_point(start, control, end, data->progress + 0.02f <= 1.0f ? data->progress + 0.02f : data->progress);
-    if (data->progress + 0.02f > 1.0f && data->progress - 0.02f >= 0.0f)
+    if (event->type != SDL_MOUSEBUTTONDOWN || event->button.button != SDL_BUTTON_LEFT)
     {
-        angle_from = bezier_point(start, control, end, data->progress - 0.02f);
-        angle_to = plane;
+        return;
     }
-    const double angle = atan2((double)(angle_to.y - angle_from.y), (double)(angle_to.x - angle_from.x)) * 180.0 / CABIN_PI + 90.0;
 
-    draw_filled_circle(renderer, start.x, start.y, 8, COLOR_GREEN);
-    draw_filled_circle(renderer, end.x, end.y, 8, COLOR_GREEN);
-    draw_text(renderer, assets->small_font, COLOR_TEXT_DARK, start.x - 24, start.y + 12, "%s", data->origin_city);
-    draw_text(renderer, assets->small_font, COLOR_TEXT_DARK, end.x - 24, end.y + 12, "%s", data->destination_city);
-
-    if (assets->plane_texture != NULL)
+    int width = 0;
+    int height = 0;
+    SDL_GetWindowSize(window, &width, &height);
+    if (width <= 0 || height <= 0)
     {
-        const SDL_Rect dest = {plane.x - 20, plane.y - 20, 40, 40};
-        SDL_RenderCopyEx(renderer, assets->plane_texture, NULL, &dest, angle, NULL, SDL_FLIP_NONE);
+        width = 1600;
+        height = 900;
     }
-    else
+
+    SDL_Rect fullscreen_rect;
+    SDL_Rect add_rect;
+    SDL_Rect sub_rect;
+    cabin_map_control_rects(width, height, &fullscreen_rect, &add_rect, &sub_rect);
+
+    const int mouse_x = event->button.x;
+    const int mouse_y = event->button.y;
+
+    if (point_in_rect(mouse_x, mouse_y, &fullscreen_rect))
     {
-        set_color(renderer, COLOR_ROUTE);
-        SDL_RenderDrawLine(renderer, plane.x, plane.y - 13, plane.x - 9, plane.y + 10);
-        SDL_RenderDrawLine(renderer, plane.x, plane.y - 13, plane.x + 9, plane.y + 10);
-        SDL_RenderDrawLine(renderer, plane.x - 9, plane.y + 10, plane.x + 9, plane.y + 10);
+        const Uint32 flags = SDL_GetWindowFlags(window);
+        const Uint32 fullscreen_flag = SDL_WINDOW_FULLSCREEN_DESKTOP;
+        SDL_SetWindowFullscreen(window, (flags & fullscreen_flag) ? 0 : fullscreen_flag);
+    }
+    else if (point_in_rect(mouse_x, mouse_y, &add_rect))
+    {
+        g_map_zoom = clamp_float(g_map_zoom + CABIN_MAP_ZOOM_STEP, CABIN_MAP_ZOOM_MIN, CABIN_MAP_ZOOM_MAX);
+        printf("Cabin UI: map zoom %.2f.\n", g_map_zoom);
+    }
+    else if (point_in_rect(mouse_x, mouse_y, &sub_rect))
+    {
+        g_map_zoom = clamp_float(g_map_zoom - CABIN_MAP_ZOOM_STEP, CABIN_MAP_ZOOM_MIN, CABIN_MAP_ZOOM_MAX);
+        printf("Cabin UI: map zoom %.2f.\n", g_map_zoom);
     }
 }
 
@@ -422,10 +584,16 @@ static void draw_route(SDL_Renderer *renderer, const Cabin_Assets *assets, const
 
     if (!has_start || !has_end || !has_plane)
     {
-        draw_route_fallback(renderer, assets, data, map_rect);
+        static int printed_skip_warning = 0;
+        if (!printed_skip_warning)
+        {
+            printf("Cabin Route: skip route draw because at least one route point is outside the configured map bounds.\n");
+            printed_skip_warning = 1;
+        }
         return;
     }
 
+    const float progress = clamp_float(data->progress, 0.0f, 1.0f);
     Cabin_Point prev = start;
     for (int i = 1; i <= 64; ++i)
     {
@@ -440,7 +608,7 @@ static void draw_route(SDL_Renderer *renderer, const Cabin_Assets *assets, const
     }
 
     prev = start;
-    const int progress_steps = (int)(data->progress * 64.0f);
+    const int progress_steps = (int)(progress * 64.0f);
     for (int i = 1; i <= progress_steps; ++i)
     {
         const float t = (float)i / 64.0f;
@@ -452,17 +620,21 @@ static void draw_route(SDL_Renderer *renderer, const Cabin_Assets *assets, const
             prev = current;
         }
     }
+    if (progress > 0.0f)
+    {
+        draw_thick_line(renderer, prev.x, prev.y, plane.x, plane.y, COLOR_ROUTE);
+    }
 
     Cabin_Point angle_from = plane;
     Cabin_Point angle_to = end;
-    const float tangent_t = data->progress + 0.02f <= 1.0f ? data->progress + 0.02f : data->progress - 0.02f;
+    const float tangent_t = progress + 0.02f <= 1.0f ? progress + 0.02f : progress - 0.02f;
     if (tangent_t >= 0.0f && tangent_t <= 1.0f)
     {
         const Cabin_Geo_Point tangent_geo = cabin_route_geo_point(data, tangent_t);
         Cabin_Point tangent_candidate;
         if (cabin_geo_to_pixel(data, map_rect, tangent_geo.lat, tangent_geo.lon, &tangent_candidate))
         {
-            if (data->progress + 0.02f <= 1.0f)
+            if (progress + 0.02f <= 1.0f)
             {
                 angle_to = tangent_candidate;
             }
@@ -482,7 +654,7 @@ static void draw_route(SDL_Renderer *renderer, const Cabin_Assets *assets, const
 
     if (assets->plane_texture != NULL)
     {
-        const SDL_Rect dest = {plane.x - 20, plane.y - 20, 40, 40};
+        const SDL_Rect dest = {plane.x - 15, plane.y - 15, 30, 30};
         SDL_RenderCopyEx(renderer, assets->plane_texture, NULL, &dest, angle, NULL, SDL_FLIP_NONE);
     }
     else
@@ -494,45 +666,45 @@ static void draw_route(SDL_Renderer *renderer, const Cabin_Assets *assets, const
     }
 }
 
-static void draw_flight_info_bar(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, int width, int height, int panel_x)
+static void draw_flight_info_bar(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, int width, int height)
 {
-    const int margin = 24;
-    const int bar_h = 102;
-    const SDL_Rect bar = {margin, height - bar_h - 24, panel_x - margin * 2, bar_h};
+    const SDL_Rect bar = cabin_bottom_bar_rect(width, height);
+    const int progress_w = bar.w > 820 ? 250 : 210;
+    const int progress_x = bar.x + bar.w - progress_w - 24;
+    const int progress_y = bar.y + 66;
+    const int text_w = progress_x - bar.x - 34;
+    const SDL_Rect text_clip = {bar.x + 14, bar.y + 8, text_w > 220 ? text_w : 220, bar.h - 16};
+    const SDL_Rect progress_clip = {progress_x, bar.y + 8, progress_w + 4, bar.h - 16};
 
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     fill_rect(renderer, &bar, COLOR_BLACK_OVERLAY);
     draw_rect(renderer, &bar, COLOR_ROUTE_SOFT);
 
-    draw_text(renderer, assets->title_font, COLOR_WHITE, bar.x + 18, bar.y + 12, "%s  %s -> %s",
+    draw_text_clipped(renderer, assets->title_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 10, "%s  %s -> %s",
               data->flight_no,
               data->origin_city,
               data->destination_city);
-    draw_text(renderer, assets->font, COLOR_WHITE, bar.x + 18, bar.y + 50, "高度 %.0fm   速度 %.0fkm/h   剩余 %.0f分钟",
+    draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   速度 %.0fkm/h   剩余 %.0f分钟",
               data->altitude,
               data->ground_speed,
               data->remaining_time_min);
-    draw_text(renderer, assets->font, COLOR_WHITE, bar.x + 18, bar.y + 74, "出发 %s  到达 %s",
+    draw_text_clipped(renderer, assets->small_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 73, "机场 %s -> %s",
               data->origin_airport,
               data->destination_airport);
 
-    const int progress_x = bar.x + bar.w - 285;
-    const int progress_y = bar.y + 62;
-    const SDL_Rect progress_bg = {progress_x, progress_y, 240, 12};
-    const SDL_Rect progress_fg = {progress_x, progress_y, (int)(240.0f * data->progress), 12};
-    draw_text(renderer, assets->font, COLOR_WHITE, progress_x, bar.y + 26, "飞行进度 %.0f%%", data->progress * 100.0f);
-    fill_rect(renderer, &progress_bg, (SDL_Color){64, 80, 92, 255});
+    const float progress = clamp_float(data->progress, 0.0f, 1.0f);
+    const SDL_Rect progress_bg = {progress_x, progress_y, progress_w, 12};
+    const SDL_Rect progress_fg = {progress_x, progress_y, (int)((float)progress_w * progress), 12};
+    draw_text_clipped(renderer, assets->font, COLOR_WHITE, &progress_clip, progress_x, bar.y + 34, "进度 %.0f%%", progress * 100.0f);
+    fill_rect(renderer, &progress_bg, COLOR_PROGRESS_BG);
     fill_rect(renderer, &progress_fg, COLOR_ROUTE);
     draw_rect(renderer, &progress_bg, COLOR_WHITE);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
-static SDL_Rect cabin_geo_map_rect(int width, int height, int panel_x)
+static SDL_Rect cabin_geo_map_rect(int width, int height)
 {
-    const int margin = 24;
-    const int bar_h = 102;
-    const int bottom_limit = height - bar_h - margin * 2;
-    SDL_Rect rect = {0, 0, panel_x - margin, bottom_limit};
+    SDL_Rect rect = {0, 0, width, height};
 
     if (rect.w < 1)
     {
@@ -562,18 +734,21 @@ void cabin_ui_render(SDL_Renderer *renderer, const Cabin_Assets *assets, const C
         height = 900;
     }
 
-    const SDL_Rect map_rect = {0, 0, width, height};
-    const int panel_w = width >= 1200 ? 208 : 190;
+    const SDL_Rect map_view_rect = cabin_geo_map_rect(width, height);
+    const SDL_Rect zoomed_map_rect = cabin_zoomed_map_rect(width, height);
+    const int panel_w = width >= 1200 ? 240 : 220;
     const int panel_x = width - panel_w - 32;
-    const SDL_Rect geo_map_rect = cabin_geo_map_rect(width, height, panel_x);
+    const int panel_y = 24;
+    const int location_h = 44 + 46 * 3;
+    const int weather_y = panel_y + location_h + 28;
 
-    draw_map_background(renderer, assets->map_texture, &map_rect);
-    SDL_RenderSetClipRect(renderer, &geo_map_rect);
-    draw_route(renderer, assets, data, &geo_map_rect);
+    draw_map_background(renderer, assets->map_texture, &zoomed_map_rect);
+    SDL_RenderSetClipRect(renderer, &map_view_rect);
+    draw_route(renderer, assets, data, &zoomed_map_rect);
     SDL_RenderSetClipRect(renderer, NULL);
-    draw_location_panel(renderer, assets, data, panel_x, 22, panel_w);
-    draw_weather_panel(renderer, assets, data, panel_x, 225, panel_w);
-    draw_flight_info_bar(renderer, assets, data, width, height, panel_x);
-    draw_zoom_controls(renderer, assets, width, height);
-    draw_map_source_badge(renderer, assets, data);
+    draw_location_panel(renderer, assets, data, panel_x, panel_y, panel_w);
+    draw_weather_panel(renderer, assets, data, panel_x, weather_y, panel_w);
+    draw_flight_info_bar(renderer, assets, data, width, height);
+    draw_map_controls(renderer, assets, width, height);
+    draw_map_source_badge(renderer, assets, data, &map_view_rect);
 }

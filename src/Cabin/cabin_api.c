@@ -18,14 +18,30 @@
 #define CABIN_AMAP_WEATHER_URL "https://restapi.amap.com/v3/weather/weatherInfo"
 #define CABIN_AMAP_STATIC_MAP_URL "https://restapi.amap.com/v3/staticmap"
 #define CABIN_AMAP_DEFAULT_CITY "110000"
-#define CABIN_AMAP_DEFAULT_CITY_NAME "Beijing"
-#define CABIN_AMAP_STATIC_CENTER "116.407400,39.904200"
-#define CABIN_AMAP_STATIC_ZOOM "8"
-#define CABIN_AMAP_STATIC_SIZE "1024*768"
+#define CABIN_AMAP_DEFAULT_CITY_NAME "北京"
+#define CABIN_AMAP_STATIC_CENTER "110.510000,35.200000"
+#define CABIN_AMAP_STATIC_ZOOM "5"
+#define CABIN_AMAP_STATIC_SIZE "1024*576"
 #define CABIN_MAP_CACHE_DIR "assets/cache"
-#define CABIN_MAP_CACHE_PATH "assets/cache/cabin_map.png"
+#define CABIN_MAP_CACHE_PATH "assets/cache/cabin_map_beijing_chengdu_z5_16x9.png"
 #define CABIN_AMAP_KEY_PLACEHOLDER ""
 #define CABIN_HTTP_RESPONSE_MAX 65536
+#define CABIN_WEATHER_CACHE_MAX 6
+
+typedef struct Cabin_Weather_Cache
+{
+    int valid;
+    char city[CABIN_TEXT_LEN];
+    char adcode[CABIN_TEXT_LEN];
+    char weather[CABIN_TEXT_LEN];
+    float temperature;
+    float humidity;
+    char wind_direction[CABIN_TEXT_LEN];
+    char wind_power[CABIN_TEXT_LEN];
+    char report_time[CABIN_TEXT_LEN];
+} Cabin_Weather_Cache;
+
+static Cabin_Weather_Cache g_weather_cache[CABIN_WEATHER_CACHE_MAX];
 
 static void copy_text(char *dest, size_t dest_size, const char *src)
 {
@@ -100,16 +116,107 @@ static int is_safe_api_key(const char *key)
     return 1;
 }
 
-static void set_weather_error(Cabin_Data *data, const char *message)
+static void apply_weather_values(
+    Cabin_Data *data,
+    const char *city,
+    const char *adcode,
+    const char *weather,
+    float temperature,
+    float humidity,
+    const char *wind_direction,
+    const char *wind_power,
+    const char *report_time,
+    const char *source)
 {
     if (data == NULL)
     {
         return;
     }
 
+    copy_text(data->weather_city, sizeof(data->weather_city), city);
+    copy_text(data->weather_adcode, sizeof(data->weather_adcode), adcode);
+    copy_text(data->weather, sizeof(data->weather), weather);
+    data->temperature = temperature;
+    data->humidity = humidity;
+    copy_text(data->wind_direction, sizeof(data->wind_direction), wind_direction);
+    copy_text(data->wind_power, sizeof(data->wind_power), wind_power);
+    copy_text(data->weather_report_time, sizeof(data->weather_report_time), report_time);
+    copy_text(data->weather_source, sizeof(data->weather_source), source);
+}
+
+static Cabin_Weather_Cache *find_weather_cache(const char *adcode)
+{
+    if (adcode == NULL || adcode[0] == '\0')
+    {
+        return NULL;
+    }
+
+    for (int i = 0; i < CABIN_WEATHER_CACHE_MAX; ++i)
+    {
+        if (g_weather_cache[i].valid && strcmp(g_weather_cache[i].adcode, adcode) == 0)
+        {
+            return &g_weather_cache[i];
+        }
+    }
+
+    return NULL;
+}
+
+static Cabin_Weather_Cache *alloc_weather_cache(void)
+{
+    for (int i = 0; i < CABIN_WEATHER_CACHE_MAX; ++i)
+    {
+        if (!g_weather_cache[i].valid)
+        {
+            return &g_weather_cache[i];
+        }
+    }
+
+    return &g_weather_cache[0];
+}
+
+static void apply_cached_weather(Cabin_Data *data, const Cabin_Weather_Cache *cache)
+{
+    if (data == NULL || cache == NULL || !cache->valid)
+    {
+        return;
+    }
+
+    apply_weather_values(data,
+                         cache->city,
+                         cache->adcode,
+                         cache->weather,
+                         cache->temperature,
+                         cache->humidity,
+                         cache->wind_direction,
+                         cache->wind_power,
+                         cache->report_time,
+                         "API");
+    copy_text(data->api_error_message, sizeof(data->api_error_message), "");
+    data->api_weather_loaded = 1;
+    data->api_weather_failed = 0;
+}
+
+static void set_mock_weather_for_city(Cabin_Data *data, const char *city, const char *adcode, const char *message)
+{
+    const char *safe_city = city != NULL && city[0] != '\0' ? city : "飞行途中";
+    const char *safe_adcode = adcode != NULL ? adcode : "";
+
+    if (strcmp(safe_city, "成都") == 0 || strcmp(safe_city, "成都市") == 0 || strcmp(safe_city, "Chengdu") == 0)
+    {
+        apply_weather_values(data, "成都", safe_adcode, "多云", 24.0f, 62.0f, "东南", "2级", "--", "MOCK");
+    }
+    else if (strcmp(safe_city, "北京") == 0 || strcmp(safe_city, "北京市") == 0 || strcmp(safe_city, "Beijing") == 0)
+    {
+        apply_weather_values(data, "北京", safe_adcode, "晴", 18.0f, 57.0f, "西南", "3级", "--", "MOCK");
+    }
+    else
+    {
+        apply_weather_values(data, safe_city, safe_adcode, "巡航", -45.0f, 20.0f, "西", "微风", "--", "MOCK");
+    }
+
     data->api_weather_loaded = 0;
     data->api_weather_failed = 1;
-    copy_text(data->weather_source, sizeof(data->weather_source), "MOCK");
     copy_text(data->api_error_message, sizeof(data->api_error_message), message);
 }
 
@@ -293,7 +400,7 @@ static int json_get_string(const char *json, const char *key, char *out, size_t 
     return write_index > 0;
 }
 
-static int parse_amap_weather_json(Cabin_Data *data, const char *json)
+static int parse_amap_weather_json(Cabin_Data *data, const char *json, const char *requested_city, const char *requested_adcode)
 {
     if (data == NULL || json == NULL || json[0] == '\0')
     {
@@ -335,17 +442,42 @@ static int parse_amap_weather_json(Cabin_Data *data, const char *json)
         copy_text(report_time, sizeof(report_time), "--");
     }
 
-    copy_text(data->current_city, sizeof(data->current_city), city);
-    copy_text(data->weather, sizeof(data->weather), weather);
-    data->temperature = (float)atof(temperature);
-    data->humidity = (float)atof(humidity);
-    copy_text(data->wind_direction, sizeof(data->wind_direction), wind_direction);
-    copy_text(data->wind_power, sizeof(data->wind_power), wind_power);
-    copy_text(data->weather_report_time, sizeof(data->weather_report_time), report_time);
-    copy_text(data->weather_source, sizeof(data->weather_source), "API");
+    const char *display_city = city[0] != '\0' ? city : requested_city;
+    const char *display_adcode = requested_adcode != NULL ? requested_adcode : "";
+    const float parsed_temperature = (float)atof(temperature);
+    const float parsed_humidity = (float)atof(humidity);
+
+    apply_weather_values(data,
+                         display_city,
+                         display_adcode,
+                         weather,
+                         parsed_temperature,
+                         parsed_humidity,
+                         wind_direction,
+                         wind_power,
+                         report_time,
+                         "API");
     copy_text(data->api_error_message, sizeof(data->api_error_message), "");
     data->api_weather_loaded = 1;
     data->api_weather_failed = 0;
+
+    Cabin_Weather_Cache *cache = find_weather_cache(display_adcode);
+    if (cache == NULL)
+    {
+        cache = alloc_weather_cache();
+    }
+    if (cache != NULL)
+    {
+        cache->valid = 1;
+        copy_text(cache->city, sizeof(cache->city), display_city);
+        copy_text(cache->adcode, sizeof(cache->adcode), display_adcode);
+        copy_text(cache->weather, sizeof(cache->weather), weather);
+        cache->temperature = parsed_temperature;
+        cache->humidity = parsed_humidity;
+        copy_text(cache->wind_direction, sizeof(cache->wind_direction), wind_direction);
+        copy_text(cache->wind_power, sizeof(cache->wind_power), wind_power);
+        copy_text(cache->report_time, sizeof(cache->report_time), report_time);
+    }
 
     return 1;
 }
@@ -378,11 +510,35 @@ static void print_weather_response_error(const char *response)
     printf("Cabin API: Amap weather response status=%s info=%s infocode=%s.\n", status, info, infocode);
 }
 
-int cabin_api_update_weather(Cabin_Data *data)
+int cabin_api_update_weather_for_city(Cabin_Data *data, const char *city_name, const char *adcode)
 {
     if (data == NULL)
     {
         return 0;
+    }
+
+    const char *safe_city = city_name != NULL && city_name[0] != '\0' ? city_name : "飞行途中";
+    const char *safe_adcode = adcode != NULL ? adcode : "";
+
+    printf("Cabin Weather: update request for current_city=%s adcode=%s lat=%.6f lon=%.6f.\n",
+           safe_city,
+           safe_adcode[0] != '\0' ? safe_adcode : "none",
+           data->current_lat,
+           data->current_lon);
+
+    if (safe_adcode[0] == '\0')
+    {
+        printf("Cabin Weather: no city adcode for %s, use mock enroute weather and skip API request.\n", safe_city);
+        set_mock_weather_for_city(data, safe_city, "", "No city adcode for current flight segment");
+        return 0;
+    }
+
+    Cabin_Weather_Cache *cache = find_weather_cache(safe_adcode);
+    if (cache != NULL)
+    {
+        printf("Cabin Weather: using cached weather for city=%s adcode=%s source=API.\n", cache->city, cache->adcode);
+        apply_cached_weather(data, cache);
+        return 1;
     }
 
     const char *api_key_source = "";
@@ -391,7 +547,7 @@ int cabin_api_update_weather(Cabin_Data *data)
     {
         printf("Cabin API: need Amap Web Service API Key. Set environment variable AMAP_API_KEY or GAODE_API_KEY.\n");
         printf("Cabin API: current key source=%s, key status=missing or placeholder, fallback to mock weather.\n", api_key_source);
-        set_weather_error(data, "Amap Web Service API Key missing");
+        set_mock_weather_for_city(data, safe_city, safe_adcode, "Amap Web Service API Key missing");
         return 0;
     }
 
@@ -399,8 +555,8 @@ int cabin_api_update_weather(Cabin_Data *data)
            api_key_source,
            (unsigned int)strlen(api_key));
     printf("Cabin API: weather request city=%s adcode=%s.\n",
-           CABIN_AMAP_DEFAULT_CITY_NAME,
-           CABIN_AMAP_DEFAULT_CITY);
+           safe_city,
+           safe_adcode);
     printf("Cabin API: sending weather request to Amap.\n");
 
     char url[1024];
@@ -409,28 +565,28 @@ int cabin_api_update_weather(Cabin_Data *data)
              "%s?key=%s&city=%s&extensions=base&output=JSON",
              CABIN_AMAP_WEATHER_URL,
              api_key,
-             CABIN_AMAP_DEFAULT_CITY);
+             safe_adcode);
 
     char response[CABIN_HTTP_RESPONSE_MAX];
     if (!http_get_with_curl(url, response, sizeof(response)))
     {
         printf("Cabin API: HTTP request failed or curl is unavailable, fallback to mock weather.\n");
-        set_weather_error(data, "Amap weather HTTP request failed");
+        set_mock_weather_for_city(data, safe_city, safe_adcode, "Amap weather HTTP request failed");
         return 0;
     }
 
     printf("Cabin API: HTTP request succeeded, response length=%u bytes.\n", (unsigned int)strlen(response));
 
-    if (!parse_amap_weather_json(data, response))
+    if (!parse_amap_weather_json(data, response, safe_city, safe_adcode))
     {
         printf("Cabin API: JSON parse failed or API returned non-success status, fallback to mock weather.\n");
         print_weather_response_error(response);
-        set_weather_error(data, "Amap weather JSON parse failed");
+        set_mock_weather_for_city(data, safe_city, safe_adcode, "Amap weather JSON parse failed");
         return 0;
     }
 
     printf("Cabin API: JSON parsed: city=%s weather=%s temperature=%.1f humidity=%.1f wind=%s/%s report=%s.\n",
-           data->current_city,
+           data->weather_city,
            data->weather,
            data->temperature,
            data->humidity,
@@ -439,6 +595,11 @@ int cabin_api_update_weather(Cabin_Data *data)
            data->weather_report_time);
 
     return 1;
+}
+
+int cabin_api_update_weather(Cabin_Data *data)
+{
+    return cabin_api_update_weather_for_city(data, CABIN_AMAP_DEFAULT_CITY_NAME, CABIN_AMAP_DEFAULT_CITY);
 }
 
 int cabin_api_prepare_static_map(Cabin_Data *data, char *map_path, int map_path_size)
@@ -477,13 +638,19 @@ int cabin_api_prepare_static_map(Cabin_Data *data, char *map_path, int map_path_
         printf("Cabin Map: no cache found at %s.\n", CABIN_MAP_CACHE_PATH);
     }
 
-    const char *api_key = get_api_key(NULL);
+    const char *api_key_source = "";
+    const char *api_key = get_api_key(&api_key_source);
     if (!is_safe_api_key(api_key))
     {
-        printf("Cabin Map: no valid API key found, skip Amap static map request and fallback to local map.\n");
+        printf("Cabin Map: no valid Amap Web Service API key found, skip static map request and fallback to local map.\n");
+        printf("Cabin Map: current key source=%s, key status=missing or placeholder.\n", api_key_source);
         set_map_error(data, "未配置高德 API Key");
         return 0;
     }
+
+    printf("Cabin Map: Amap Web Service API key detected from %s, length=%u.\n",
+           api_key_source,
+           (unsigned int)strlen(api_key));
 
     if (!ensure_cache_directory())
     {
@@ -502,10 +669,11 @@ int cabin_api_prepare_static_map(Cabin_Data *data, char *map_path, int map_path_
              CABIN_AMAP_STATIC_ZOOM,
              CABIN_AMAP_STATIC_SIZE);
 
-    printf("Cabin Map: requesting Amap static map center=%s zoom=%s size=%s.\n",
+    printf("Cabin Map: requesting Amap static map center=%s zoom=%s size=%s cache=%s.\n",
            CABIN_AMAP_STATIC_CENTER,
            CABIN_AMAP_STATIC_ZOOM,
-           CABIN_AMAP_STATIC_SIZE);
+           CABIN_AMAP_STATIC_SIZE,
+           CABIN_MAP_CACHE_PATH);
 
     if (!download_file_with_curl(url, CABIN_MAP_CACHE_PATH))
     {
