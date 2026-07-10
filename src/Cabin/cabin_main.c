@@ -37,12 +37,12 @@ static void resolve_weather_city(const Cabin_Data *data, char *city, size_t city
         return;
     }
 
-    if (strcmp(data->current_city, "北京") == 0)
+    if (strcmp(data->current_city, "北京") == 0 || strcmp(data->current_city, "北京市") == 0)
     {
         snprintf(city, city_size, "%s", "北京");
         snprintf(adcode, adcode_size, "%s", "110000");
     }
-    else if (strcmp(data->current_city, "成都") == 0)
+    else if (strcmp(data->current_city, "成都") == 0 || strcmp(data->current_city, "成都市") == 0)
     {
         snprintf(city, city_size, "%s", "成都");
         snprintf(adcode, adcode_size, "%s", "510100");

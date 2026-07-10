@@ -3,6 +3,17 @@
 
 #define CABIN_TEXT_LEN 64
 #define CABIN_ERROR_LEN 160
+#define CABIN_PLANNED_ROUTE_MAX_POINTS 12
+#define CABIN_FLOWN_TRACK_MAX_POINTS 160
+
+typedef struct Cabin_Trajectory_Point
+{
+    double latitude;
+    double longitude;
+    unsigned int sequence;
+    float altitude;
+    float ground_speed;
+} Cabin_Trajectory_Point;
 
 typedef struct Cabin_Data
 {
@@ -12,6 +23,8 @@ typedef struct Cabin_Data
     char destination_city[CABIN_TEXT_LEN];
     char destination_airport[CABIN_TEXT_LEN];
     char current_city[CABIN_TEXT_LEN];
+    char current_district[CABIN_TEXT_LEN];
+    char current_town[CABIN_TEXT_LEN];
 
     double origin_lat;
     double origin_lon;
@@ -29,6 +42,13 @@ typedef struct Cabin_Data
     float ground_speed;
     float progress;
     float remaining_time_min;
+    Cabin_Trajectory_Point planned_route[CABIN_PLANNED_ROUTE_MAX_POINTS];
+    int planned_route_count;
+    Cabin_Trajectory_Point flown_track[CABIN_FLOWN_TRACK_MAX_POINTS];
+    int flown_track_count;
+    unsigned int flown_track_next_sequence;
+    float flown_track_last_progress;
+    float flown_track_time_since_append;
 
     char weather[CABIN_TEXT_LEN];
     char weather_city[CABIN_TEXT_LEN];

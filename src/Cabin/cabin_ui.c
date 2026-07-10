@@ -23,18 +23,18 @@ static const SDL_Color COLOR_BLACK_OVERLAY = {16, 26, 35, 198};
 static const SDL_Color COLOR_PROGRESS_BG = {64, 80, 92, 255};
 
 static float g_map_zoom = 1.0f;
+static float g_map_pan_x = 0.0f;
+static float g_map_pan_y = 0.0f;
+static int g_map_dragging = 0;
+static int g_last_mouse_x = 0;
+static int g_last_mouse_y = 0;
+static int g_compact_mode = 0;
 
 typedef struct Cabin_Point
 {
     int x;
     int y;
 } Cabin_Point;
-
-typedef struct Cabin_Geo_Point
-{
-    double lat;
-    double lon;
-} Cabin_Geo_Point;
 
 static void set_color(SDL_Renderer *renderer, SDL_Color color)
 {
@@ -150,11 +150,6 @@ static void draw_thick_line(SDL_Renderer *renderer, int x1, int y1, int x2, int 
     }
 }
 
-static double lerp_double(double start, double end, float t)
-{
-    return start + (end - start) * (double)t;
-}
-
 static float clamp_float(float value, float min_value, float max_value)
 {
     if (value < min_value)
@@ -217,12 +212,56 @@ static int cabin_geo_to_pixel(const Cabin_Data *data, const SDL_Rect *map_rect, 
     return 1;
 }
 
-static Cabin_Geo_Point cabin_route_geo_point(const Cabin_Data *data, float t)
+static void draw_polyline_geo(SDL_Renderer *renderer,
+                              const Cabin_Data *data,
+                              const SDL_Rect *map_rect,
+                              const Cabin_Trajectory_Point *points,
+                              int point_count,
+                              SDL_Color color)
 {
-    Cabin_Geo_Point point;
-    point.lat = lerp_double(data->origin_lat, data->destination_lat, t);
-    point.lon = lerp_double(data->origin_lon, data->destination_lon, t);
-    return point;
+    Cabin_Point previous = {0, 0};
+    int has_previous = 0;
+
+    if (renderer == NULL || data == NULL || map_rect == NULL || points == NULL || point_count <= 0)
+    {
+        return;
+    }
+
+    for (int i = 0; i < point_count; ++i)
+    {
+        Cabin_Point current = {0, 0};
+        if (cabin_geo_to_pixel(data, map_rect, points[i].latitude, points[i].longitude, &current))
+        {
+            if (has_previous)
+            {
+                draw_thick_line(renderer, previous.x, previous.y, current.x, current.y, color);
+            }
+            previous = current;
+            has_previous = 1;
+        }
+    }
+}
+
+static double cabin_bearing_degrees(double lat1, double lon1, double lat2, double lon2)
+{
+    if (!cabin_geo_point_valid(lat1, lon1) || !cabin_geo_point_valid(lat2, lon2))
+    {
+        return 225.0;
+    }
+
+    const double phi1 = lat1 * CABIN_PI / 180.0;
+    const double phi2 = lat2 * CABIN_PI / 180.0;
+    const double delta_lambda = (lon2 - lon1) * CABIN_PI / 180.0;
+    const double y = sin(delta_lambda) * cos(phi2);
+    const double x = cos(phi1) * sin(phi2) -
+                     sin(phi1) * cos(phi2) * cos(delta_lambda);
+    double bearing = atan2(y, x) * 180.0 / CABIN_PI;
+    if (bearing < 0.0)
+    {
+        bearing += 360.0;
+    }
+
+    return bearing;
 }
 
 static void cabin_log_geo_debug(
@@ -354,32 +393,35 @@ static void draw_panel_row(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rec
     draw_text_clipped(renderer, font, COLOR_TEXT_DARK, &clip_rect, rect->x + 14, text_y, "%s", text);
 }
 
+static const char *safe_text_or(const char *text, const char *fallback)
+{
+    return text != NULL && text[0] != '\0' ? text : fallback;
+}
+
 static void draw_location_panel(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, int x, int y, int w)
 {
     const int header_h = 44;
     const int row_h = 46;
 
     draw_panel_header(renderer, assets->title_font, &(SDL_Rect){x, y, w, header_h}, "地点信息");
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "出发：%s", data->origin_city);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "到达：%s", data->destination_city);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "当前位置：%s", data->current_city);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "%s", safe_text_or(data->current_city, "飞行途中"));
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "%s", safe_text_or(data->current_district, "未知区域"));
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "%s", safe_text_or(data->current_town, "未知位置"));
     draw_rect(renderer, &(SDL_Rect){x, y, w, header_h + row_h * 3}, COLOR_TEXT_DARK);
 }
 
 static void draw_weather_panel(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, int x, int y, int w)
 {
     const int header_h = 44;
-    const int row_h = 38;
+    const int row_h = 40;
 
     draw_panel_header(renderer, assets->title_font, &(SDL_Rect){x, y, w, header_h}, "天气信息");
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "城市：%s", data->weather_city);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "天气：%s", data->weather);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "温度：%.0f°C", data->temperature);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 3, w, row_h}, "湿度：%.0f%%", data->humidity);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 4, w, row_h}, "风向：%s", data->wind_direction);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 5, w, row_h}, "风力：%s", data->wind_power);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 6, w, row_h}, "来源：%s", data->weather_source);
-    draw_rect(renderer, &(SDL_Rect){x, y, w, header_h + row_h * 7}, COLOR_TEXT_DARK);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "天气：%s", data->weather);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "温度：%.0f°C", data->temperature);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "湿度：%.0f%%", data->humidity);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 3, w, row_h}, "风速：%s", safe_text_or(data->wind_power, "--"));
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 4, w, row_h}, "风向：%s", safe_text_or(data->wind_direction, "--"));
+    draw_rect(renderer, &(SDL_Rect){x, y, w, header_h + row_h * 5}, COLOR_TEXT_DARK);
 }
 
 static void draw_fullscreen_symbol(SDL_Renderer *renderer, const SDL_Rect *rect)
@@ -401,16 +443,15 @@ static void draw_fullscreen_symbol(SDL_Renderer *renderer, const SDL_Rect *rect)
 static void draw_map_control_button(SDL_Renderer *renderer, TTF_Font *font, SDL_Texture *texture, int x, int y, const char *fallback)
 {
     const SDL_Rect rect = {x, y, 44, 44};
-    const SDL_Rect icon_rect = {x + 8, y + 8, 28, 28};
-
-    fill_rect(renderer, &rect, COLOR_PANEL_BODY);
-    draw_rect(renderer, &rect, COLOR_PANEL_LINE);
 
     if (texture != NULL)
     {
-        SDL_RenderCopy(renderer, texture, NULL, &icon_rect);
+        SDL_RenderCopy(renderer, texture, NULL, &rect);
         return;
     }
+
+    fill_rect(renderer, &rect, COLOR_PANEL_BODY);
+    draw_rect(renderer, &rect, COLOR_PANEL_LINE);
 
     if (fallback != NULL && strcmp(fallback, "FULL") == 0)
     {
@@ -441,6 +482,32 @@ static SDL_Rect cabin_bottom_bar_rect(int width, int height)
     return bar;
 }
 
+static void cabin_info_panel_rects(int width, int height, SDL_Rect *location_rect, SDL_Rect *weather_rect)
+{
+    (void)height;
+
+    const int panel_w = width >= 1200 ? 240 : 220;
+    int panel_x = width - panel_w - 32;
+    if (panel_x < 24)
+    {
+        panel_x = 24;
+    }
+
+    const int panel_y = 24;
+    const int location_h = 44 + 46 * 3;
+    const int weather_h = 44 + 40 * 5;
+    const int weather_y = panel_y + location_h + 28;
+
+    if (location_rect != NULL)
+    {
+        *location_rect = (SDL_Rect){panel_x, panel_y, panel_w, location_h};
+    }
+    if (weather_rect != NULL)
+    {
+        *weather_rect = (SDL_Rect){panel_x, weather_y, panel_w, weather_h};
+    }
+}
+
 static void cabin_map_control_rects(int width, int height, SDL_Rect *fullscreen_rect, SDL_Rect *add_rect, SDL_Rect *sub_rect)
 {
     const int button = 44;
@@ -448,7 +515,7 @@ static void cabin_map_control_rects(int width, int height, SDL_Rect *fullscreen_
     const int controls_h = button * 3 + gap * 2;
     const SDL_Rect bottom_bar = cabin_bottom_bar_rect(width, height);
     const int x = width - button - 24;
-    int y = bottom_bar.y - controls_h - 18;
+    int y = g_compact_mode ? height - controls_h - 24 : bottom_bar.y - controls_h - 18;
 
     if (y < 24)
     {
@@ -481,19 +548,22 @@ static void draw_map_controls(SDL_Renderer *renderer, const Cabin_Assets *assets
     draw_map_control_button(renderer, assets->title_font, assets->sub_texture, sub_rect.x, sub_rect.y, "-");
 }
 
-static void draw_map_source_badge(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, const SDL_Rect *map_rect)
+static void draw_status_badge(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, const SDL_Rect *map_rect)
 {
     if (map_rect == NULL)
     {
         return;
     }
 
-    const SDL_Rect badge = {map_rect->x + 16, map_rect->y + 16, 132, 30};
+    const SDL_Rect badge = {map_rect->x + 16, map_rect->y + 16, 244, 28};
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     fill_rect(renderer, &badge, COLOR_BLACK_OVERLAY);
     draw_rect(renderer, &badge, COLOR_ROUTE_SOFT);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-    draw_text_clipped(renderer, assets->small_font, COLOR_WHITE, &badge, badge.x + 10, badge.y + 5, "MAP: %s", data->map_source);
+    draw_text_clipped(renderer, assets->small_font, COLOR_WHITE, &badge, badge.x + 10, badge.y + 4,
+                      "MAP: %s  WEATHER: %s",
+                      data->map_source,
+                      data->weather_source);
 }
 
 static int point_in_rect(int x, int y, const SDL_Rect *rect)
@@ -505,12 +575,27 @@ static int point_in_rect(int x, int y, const SDL_Rect *rect)
            y < rect->y + rect->h;
 }
 
+static void cabin_clamp_map_pan(int width, int height)
+{
+    const float zoom = clamp_float(g_map_zoom, CABIN_MAP_ZOOM_MIN, CABIN_MAP_ZOOM_MAX);
+    const float max_x = (float)width * 0.45f * zoom;
+    const float max_y = (float)height * 0.45f * zoom;
+
+    g_map_pan_x = clamp_float(g_map_pan_x, -max_x, max_x);
+    g_map_pan_y = clamp_float(g_map_pan_y, -max_y, max_y);
+}
+
 static SDL_Rect cabin_zoomed_map_rect(int width, int height)
 {
     const float zoom = clamp_float(g_map_zoom, CABIN_MAP_ZOOM_MIN, CABIN_MAP_ZOOM_MAX);
     const int zoom_w = (int)((float)width * zoom + 0.5f);
     const int zoom_h = (int)((float)height * zoom + 0.5f);
-    SDL_Rect rect = {(width - zoom_w) / 2, (height - zoom_h) / 2, zoom_w, zoom_h};
+
+    cabin_clamp_map_pan(width, height);
+    SDL_Rect rect = {(width - zoom_w) / 2 + (int)g_map_pan_x,
+                     (height - zoom_h) / 2 + (int)g_map_pan_y,
+                     zoom_w,
+                     zoom_h};
 
     if (rect.w < 1)
     {
@@ -531,7 +616,16 @@ void cabin_ui_handle_event(SDL_Window *window, const SDL_Event *event)
         return;
     }
 
-    if (event->type != SDL_MOUSEBUTTONDOWN || event->button.button != SDL_BUTTON_LEFT)
+    if (event->type == SDL_KEYDOWN && event->key.keysym.sym == SDLK_c)
+    {
+        g_compact_mode = !g_compact_mode;
+        printf("Cabin UI: %s mode.\n", g_compact_mode ? "compact" : "full");
+        return;
+    }
+
+    if (event->type != SDL_MOUSEBUTTONDOWN &&
+        event->type != SDL_MOUSEBUTTONUP &&
+        event->type != SDL_MOUSEMOTION)
     {
         return;
     }
@@ -545,10 +639,40 @@ void cabin_ui_handle_event(SDL_Window *window, const SDL_Event *event)
         height = 900;
     }
 
+    if (event->type == SDL_MOUSEBUTTONUP && event->button.button == SDL_BUTTON_LEFT)
+    {
+        g_map_dragging = 0;
+        return;
+    }
+
+    if (event->type == SDL_MOUSEMOTION)
+    {
+        if (g_map_dragging)
+        {
+            const int mouse_x = event->motion.x;
+            const int mouse_y = event->motion.y;
+            g_map_pan_x += (float)(mouse_x - g_last_mouse_x);
+            g_map_pan_y += (float)(mouse_y - g_last_mouse_y);
+            g_last_mouse_x = mouse_x;
+            g_last_mouse_y = mouse_y;
+            cabin_clamp_map_pan(width, height);
+        }
+        return;
+    }
+
+    if (event->button.button != SDL_BUTTON_LEFT)
+    {
+        return;
+    }
+
     SDL_Rect fullscreen_rect;
     SDL_Rect add_rect;
     SDL_Rect sub_rect;
+    SDL_Rect location_rect;
+    SDL_Rect weather_rect;
+    const SDL_Rect bottom_bar = cabin_bottom_bar_rect(width, height);
     cabin_map_control_rects(width, height, &fullscreen_rect, &add_rect, &sub_rect);
+    cabin_info_panel_rects(width, height, &location_rect, &weather_rect);
 
     const int mouse_x = event->button.x;
     const int mouse_y = event->button.y;
@@ -562,100 +686,132 @@ void cabin_ui_handle_event(SDL_Window *window, const SDL_Event *event)
     else if (point_in_rect(mouse_x, mouse_y, &add_rect))
     {
         g_map_zoom = clamp_float(g_map_zoom + CABIN_MAP_ZOOM_STEP, CABIN_MAP_ZOOM_MIN, CABIN_MAP_ZOOM_MAX);
+        cabin_clamp_map_pan(width, height);
         printf("Cabin UI: map zoom %.2f.\n", g_map_zoom);
     }
     else if (point_in_rect(mouse_x, mouse_y, &sub_rect))
     {
         g_map_zoom = clamp_float(g_map_zoom - CABIN_MAP_ZOOM_STEP, CABIN_MAP_ZOOM_MIN, CABIN_MAP_ZOOM_MAX);
+        cabin_clamp_map_pan(width, height);
         printf("Cabin UI: map zoom %.2f.\n", g_map_zoom);
+    }
+    else if (!point_in_rect(mouse_x, mouse_y, &location_rect) &&
+             !point_in_rect(mouse_x, mouse_y, &weather_rect) &&
+             (g_compact_mode || !point_in_rect(mouse_x, mouse_y, &bottom_bar)))
+    {
+        g_map_dragging = 1;
+        g_last_mouse_x = mouse_x;
+        g_last_mouse_y = mouse_y;
     }
 }
 
 static void draw_route(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, const SDL_Rect *map_rect)
 {
-    Cabin_Point start;
-    Cabin_Point end;
-    Cabin_Point plane;
+    Cabin_Point start = {0, 0};
+    Cabin_Point end = {0, 0};
+    Cabin_Point plane = {0, 0};
     const int has_start = cabin_geo_to_pixel(data, map_rect, data->origin_lat, data->origin_lon, &start);
     const int has_end = cabin_geo_to_pixel(data, map_rect, data->destination_lat, data->destination_lon, &end);
     const int has_plane = cabin_geo_to_pixel(data, map_rect, data->current_lat, data->current_lon, &plane);
 
     cabin_log_geo_debug(data, map_rect, start, end, plane, has_start, has_end, has_plane);
 
-    if (!has_start || !has_end || !has_plane)
+    draw_polyline_geo(renderer,
+                      data,
+                      map_rect,
+                      data->planned_route,
+                      data->planned_route_count,
+                      COLOR_ROUTE_SOFT);
+
+    draw_polyline_geo(renderer,
+                      data,
+                      map_rect,
+                      data->flown_track,
+                      data->flown_track_count,
+                      COLOR_ROUTE);
+
+    if (!has_plane)
     {
         static int printed_skip_warning = 0;
         if (!printed_skip_warning)
         {
-            printf("Cabin Route: skip route draw because at least one route point is outside the configured map bounds.\n");
+            printf("Cabin Route: skip plane draw because current point is outside the configured map bounds.\n");
             printed_skip_warning = 1;
         }
         return;
     }
 
-    const float progress = clamp_float(data->progress, 0.0f, 1.0f);
-    Cabin_Point prev = start;
-    for (int i = 1; i <= 64; ++i)
+    Cabin_Point last_trace_pixel = {0, 0};
+    int has_last_trace_pixel = 0;
+    if (data->flown_track_count > 0)
     {
-        const float t = (float)i / 64.0f;
-        const Cabin_Geo_Point geo = cabin_route_geo_point(data, t);
-        Cabin_Point current;
-        if (cabin_geo_to_pixel(data, map_rect, geo.lat, geo.lon, &current))
+        const Cabin_Trajectory_Point *last_trace = &data->flown_track[data->flown_track_count - 1];
+        if (cabin_geo_to_pixel(data, map_rect, last_trace->latitude, last_trace->longitude, &last_trace_pixel))
         {
-            draw_thick_line(renderer, prev.x, prev.y, current.x, current.y, COLOR_ROUTE_SOFT);
-            prev = current;
+            has_last_trace_pixel = 1;
         }
     }
 
-    prev = start;
-    const int progress_steps = (int)(progress * 64.0f);
-    for (int i = 1; i <= progress_steps; ++i)
+    if (has_last_trace_pixel && (last_trace_pixel.x != plane.x || last_trace_pixel.y != plane.y))
     {
-        const float t = (float)i / 64.0f;
-        const Cabin_Geo_Point geo = cabin_route_geo_point(data, t);
-        Cabin_Point current;
-        if (cabin_geo_to_pixel(data, map_rect, geo.lat, geo.lon, &current))
-        {
-            draw_thick_line(renderer, prev.x, prev.y, current.x, current.y, COLOR_ROUTE);
-            prev = current;
-        }
-    }
-    if (progress > 0.0f)
-    {
-        draw_thick_line(renderer, prev.x, prev.y, plane.x, plane.y, COLOR_ROUTE);
+        draw_thick_line(renderer, last_trace_pixel.x, last_trace_pixel.y, plane.x, plane.y, COLOR_ROUTE);
     }
 
-    Cabin_Point angle_from = plane;
-    Cabin_Point angle_to = end;
-    const float tangent_t = progress + 0.02f <= 1.0f ? progress + 0.02f : progress - 0.02f;
-    if (tangent_t >= 0.0f && tangent_t <= 1.0f)
+    double heading_from_lat = data->origin_lat;
+    double heading_from_lon = data->origin_lon;
+    double heading_to_lat = data->current_lat;
+    double heading_to_lon = data->current_lon;
+    if (data->flown_track_count >= 2)
     {
-        const Cabin_Geo_Point tangent_geo = cabin_route_geo_point(data, tangent_t);
-        Cabin_Point tangent_candidate;
-        if (cabin_geo_to_pixel(data, map_rect, tangent_geo.lat, tangent_geo.lon, &tangent_candidate))
+        const Cabin_Trajectory_Point *last = &data->flown_track[data->flown_track_count - 1];
+        const Cabin_Trajectory_Point *previous = &data->flown_track[data->flown_track_count - 2];
+        if (fabs(last->latitude - data->current_lat) < 0.000001 &&
+            fabs(last->longitude - data->current_lon) < 0.000001)
         {
-            if (progress + 0.02f <= 1.0f)
-            {
-                angle_to = tangent_candidate;
-            }
-            else
-            {
-                angle_from = tangent_candidate;
-                angle_to = plane;
-            }
+            heading_from_lat = previous->latitude;
+            heading_from_lon = previous->longitude;
+            heading_to_lat = last->latitude;
+            heading_to_lon = last->longitude;
+        }
+        else
+        {
+            heading_from_lat = last->latitude;
+            heading_from_lon = last->longitude;
         }
     }
-    const double angle = atan2((double)(angle_to.y - angle_from.y), (double)(angle_to.x - angle_from.x)) * 180.0 / CABIN_PI + 90.0;
+    else if (data->planned_route_count >= 2)
+    {
+        int segment = (int)floorf(clamp_float(data->progress, 0.0f, 1.0f) * (float)(data->planned_route_count - 1));
+        if (segment >= data->planned_route_count - 1)
+        {
+            segment = data->planned_route_count - 2;
+        }
+        if (segment < 0)
+        {
+            segment = 0;
+        }
+        heading_from_lat = data->planned_route[segment].latitude;
+        heading_from_lon = data->planned_route[segment].longitude;
+        heading_to_lat = data->planned_route[segment + 1].latitude;
+        heading_to_lon = data->planned_route[segment + 1].longitude;
+    }
+    const double bearing = cabin_bearing_degrees(heading_from_lat, heading_from_lon, heading_to_lat, heading_to_lon);
 
-    draw_filled_circle(renderer, start.x, start.y, 8, COLOR_GREEN);
-    draw_filled_circle(renderer, end.x, end.y, 8, COLOR_GREEN);
-    draw_text(renderer, assets->small_font, COLOR_TEXT_DARK, start.x - 24, start.y + 12, "%s", data->origin_city);
-    draw_text(renderer, assets->small_font, COLOR_TEXT_DARK, end.x - 24, end.y + 12, "%s", data->destination_city);
+    if (has_start)
+    {
+        draw_filled_circle(renderer, start.x, start.y, 8, COLOR_GREEN);
+        draw_text(renderer, assets->small_font, COLOR_TEXT_DARK, start.x - 24, start.y + 12, "%s", data->origin_city);
+    }
+    if (has_end)
+    {
+        draw_filled_circle(renderer, end.x, end.y, 8, COLOR_GREEN);
+        draw_text(renderer, assets->small_font, COLOR_TEXT_DARK, end.x - 24, end.y + 12, "%s", data->destination_city);
+    }
 
     if (assets->plane_texture != NULL)
     {
         const SDL_Rect dest = {plane.x - 15, plane.y - 15, 30, 30};
-        SDL_RenderCopyEx(renderer, assets->plane_texture, NULL, &dest, angle, NULL, SDL_FLIP_NONE);
+        SDL_RenderCopyEx(renderer, assets->plane_texture, NULL, &dest, bearing, NULL, SDL_FLIP_NONE);
     }
     else
     {
@@ -736,19 +892,23 @@ void cabin_ui_render(SDL_Renderer *renderer, const Cabin_Assets *assets, const C
 
     const SDL_Rect map_view_rect = cabin_geo_map_rect(width, height);
     const SDL_Rect zoomed_map_rect = cabin_zoomed_map_rect(width, height);
-    const int panel_w = width >= 1200 ? 240 : 220;
-    const int panel_x = width - panel_w - 32;
-    const int panel_y = 24;
-    const int location_h = 44 + 46 * 3;
-    const int weather_y = panel_y + location_h + 28;
+    SDL_Rect location_rect;
+    SDL_Rect weather_rect;
+    cabin_info_panel_rects(width, height, &location_rect, &weather_rect);
 
     draw_map_background(renderer, assets->map_texture, &zoomed_map_rect);
     SDL_RenderSetClipRect(renderer, &map_view_rect);
     draw_route(renderer, assets, data, &zoomed_map_rect);
     SDL_RenderSetClipRect(renderer, NULL);
-    draw_location_panel(renderer, assets, data, panel_x, panel_y, panel_w);
-    draw_weather_panel(renderer, assets, data, panel_x, weather_y, panel_w);
-    draw_flight_info_bar(renderer, assets, data, width, height);
+    draw_location_panel(renderer, assets, data, location_rect.x, location_rect.y, location_rect.w);
+    draw_weather_panel(renderer, assets, data, weather_rect.x, weather_rect.y, weather_rect.w);
+    if (!g_compact_mode)
+    {
+        draw_flight_info_bar(renderer, assets, data, width, height);
+    }
     draw_map_controls(renderer, assets, width, height);
-    draw_map_source_badge(renderer, assets, data, &map_view_rect);
+    if (!g_compact_mode)
+    {
+        draw_status_badge(renderer, assets, data, &map_view_rect);
+    }
 }
