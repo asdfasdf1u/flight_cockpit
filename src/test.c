@@ -28,7 +28,7 @@
 #endif
 
 #ifdef TEST_MODULE_FMC
-#include "FMC/fmc_main.h"
+int fmc_main_run(void);
 #endif
 
 #if defined(TEST_MODULE_COCKPIT) || defined(TEST_MODULE_LAUNCHER)

@@ -1,10 +1,9 @@
-#ifndef FMC_UI_H
-#define FMC_UI_H
+#ifndef FMC_KEY_H
+#define FMC_KEY_H
 
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
 
-#include "fmc_data.h"
+#include "fmc_ui_adapter.h"
 
 typedef enum FMC_LineSelectKey
 {
@@ -78,28 +77,10 @@ struct FMC_Button
     FMC_ButtonAction action;
 };
 
-typedef struct FMC_UI_State
-{
-    FMC_ButtonId hovered_button;
-    int hovered_button_index;
-} FMC_UI_State;
-
-typedef struct FMC_UI_Assets
-{
-    SDL_Texture *panel_texture;
-} FMC_UI_Assets;
-
-int fmc_ui_assets_load(SDL_Renderer *renderer, FMC_UI_Assets *assets);
-void fmc_ui_assets_destroy(FMC_UI_Assets *assets);
-
-void fmc_ui_state_init(FMC_UI_State *state);
-void fmc_ui_update_hover(SDL_Renderer *renderer, FMC_UI_State *state, int x, int y);
-int fmc_ui_handle_mouse_button(SDL_Renderer *renderer, FMC_UI_State *state, FMC_Data *data, int x, int y);
-void fmc_ui_update_hover_base(FMC_UI_State *state, int base_x, int base_y);
-int fmc_ui_handle_mouse_button_base(FMC_UI_State *state, FMC_Data *data, int base_x, int base_y);
-
-void fmc_ui_render(SDL_Renderer *renderer, TTF_Font *font, const FMC_UI_Assets *assets, const FMC_UI_State *state, const FMC_Data *data);
-void fmc_ui_render_screen_only(SDL_Renderer *renderer, TTF_Font *font, const FMC_Data *data, const SDL_Rect *screen_rect);
-const FMC_Button *fmc_ui_hit_test_button(SDL_Renderer *renderer, int x, int y);
+int fmc_key_button_count(void);
+const FMC_Button *fmc_key_button_at(int index);
+int fmc_key_button_contains_base_point(const FMC_Button *button, int x, int y);
+int fmc_key_is_page_button(const FMC_Button *button);
+void fmc_key_activate_button(FMC_Data *data, const FMC_Button *button);
 
 #endif
