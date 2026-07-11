@@ -1,13 +1,17 @@
 #ifndef CABIN_DATA_H
 #define CABIN_DATA_H
 
+#include "../Data/sim_route.h"
+#include "../Data/sim_snapshot.h"
+
 #define CABIN_TEXT_LEN 64
 #define CABIN_ERROR_LEN 160
-#define CABIN_PLANNED_ROUTE_MAX_POINTS 12
+#define CABIN_PLANNED_ROUTE_MAX_POINTS SIM_ROUTE_MAX_POINTS
 #define CABIN_FLOWN_TRACK_MAX_POINTS 160
 
 typedef struct Cabin_Trajectory_Point
 {
+    char ident[CABIN_TEXT_LEN];
     double latitude;
     double longitude;
     unsigned int sequence;
@@ -36,10 +40,20 @@ typedef struct Cabin_Data
     double map_top_left_lon;
     double map_bottom_right_lat;
     double map_bottom_right_lon;
+    double map_center_lat;
+    double map_center_lon;
+    int map_zoom;
+    char map_cache_path[CABIN_ERROR_LEN];
     double latitude;
     double longitude;
     float altitude;
     float ground_speed;
+    float heading;
+    float track;
+    int has_heading;
+    int using_sim_data;
+    int planned_route_from_fmc;
+    char planned_route_source[CABIN_TEXT_LEN];
     float progress;
     float remaining_time_min;
     Cabin_Trajectory_Point planned_route[CABIN_PLANNED_ROUTE_MAX_POINTS];
@@ -71,5 +85,9 @@ typedef struct Cabin_Data
 
 void cabin_data_init(Cabin_Data *data);
 void cabin_data_update_mock(Cabin_Data *data, float delta_time);
+int cabin_data_apply_planned_route(Cabin_Data *data, const SimPlannedRoute *route);
+void cabin_data_apply_sim_snapshot(Cabin_Data *data, const SimSnapshot *snapshot, float delta_time);
+int cabin_data_route_points_within_map_bounds(const Cabin_Data *data);
+void cabin_data_print_route_map_summary(const Cabin_Data *data);
 
 #endif

@@ -795,7 +795,11 @@ static void draw_route(SDL_Renderer *renderer, const Cabin_Assets *assets, const
         heading_to_lat = data->planned_route[segment + 1].latitude;
         heading_to_lon = data->planned_route[segment + 1].longitude;
     }
-    const double bearing = cabin_bearing_degrees(heading_from_lat, heading_from_lon, heading_to_lat, heading_to_lon);
+    double bearing = cabin_bearing_degrees(heading_from_lat, heading_from_lon, heading_to_lat, heading_to_lon);
+    if (data->has_heading && isfinite(data->track))
+    {
+        bearing = data->track;
+    }
 
     if (has_start)
     {

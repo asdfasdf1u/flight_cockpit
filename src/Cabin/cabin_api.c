@@ -19,11 +19,10 @@
 #define CABIN_AMAP_STATIC_MAP_URL "https://restapi.amap.com/v3/staticmap"
 #define CABIN_AMAP_DEFAULT_CITY "110000"
 #define CABIN_AMAP_DEFAULT_CITY_NAME "北京"
-#define CABIN_AMAP_STATIC_CENTER "110.510000,35.200000"
-#define CABIN_AMAP_STATIC_ZOOM "5"
 #define CABIN_AMAP_STATIC_SIZE "1024*576"
 #define CABIN_MAP_CACHE_DIR "assets/cache"
-#define CABIN_MAP_CACHE_PATH "assets/cache/cabin_map_beijing_chengdu_z5_16x9.png"
+#define CABIN_MAP_DEFAULT_CACHE_PATH "assets/cache/cabin_map_beijing_chengdu.png"
+#define CABIN_STATIC_MAP_MIN_BYTES 20000
 #define CABIN_AMAP_KEY_PLACEHOLDER ""
 #define CABIN_HTTP_RESPONSE_MAX 65536
 #define CABIN_WEATHER_CACHE_MAX 6
@@ -229,7 +228,7 @@ static void set_map_error(Cabin_Data *data, const char *message)
 
     data->api_map_loaded = 0;
     data->api_map_failed = 1;
-    copy_text(data->map_source, sizeof(data->map_source), "LOCAL");
+    copy_text(data->map_source, sizeof(data->map_source), "FALLBACK");
     copy_text(data->api_map_error_message, sizeof(data->api_map_error_message), message);
 }
 
@@ -326,6 +325,33 @@ static int file_has_png_header(const char *path)
     fclose(file);
 
     return read_count == sizeof(header) && memcmp(header, png_header, sizeof(header)) == 0;
+}
+
+static long file_size_bytes(const char *path)
+{
+    struct _stat info;
+    if (path == NULL || _stat(path, &info) != 0)
+    {
+        return -1;
+    }
+    return (long)info.st_size;
+}
+
+static int static_map_file_usable(const char *path)
+{
+    const long size = file_size_bytes(path);
+    if (!file_has_png_header(path))
+    {
+        return 0;
+    }
+    if (size >= 0 && size < CABIN_STATIC_MAP_MIN_BYTES)
+    {
+        printf("Cabin Map: %s is only %ld bytes; treat as blank/out-of-coverage static map.\n",
+               path,
+               size);
+        return 0;
+    }
+    return 1;
 }
 
 static const char *find_json_string_value(const char *json, const char *key)
@@ -604,6 +630,11 @@ int cabin_api_update_weather(Cabin_Data *data)
 
 int cabin_api_prepare_static_map(Cabin_Data *data, char *map_path, int map_path_size)
 {
+    const char *cache_path = NULL;
+    int zoom = 0;
+    char location[64];
+    char zoom_text[16];
+
     if (data == NULL)
     {
         return 0;
@@ -614,28 +645,37 @@ int cabin_api_prepare_static_map(Cabin_Data *data, char *map_path, int map_path_
         map_path[0] = '\0';
     }
 
-    if (file_exists(CABIN_MAP_CACHE_PATH) && file_has_png_header(CABIN_MAP_CACHE_PATH))
+    if (data->map_cache_path[0] == '\0')
     {
-        printf("Cabin Map: cache found, using %s.\n", CABIN_MAP_CACHE_PATH);
+        copy_text(data->map_cache_path, sizeof(data->map_cache_path), CABIN_MAP_DEFAULT_CACHE_PATH);
+    }
+    cache_path = data->map_cache_path;
+    zoom = data->map_zoom > 0 ? data->map_zoom : 5;
+    snprintf(location, sizeof(location), "%.6f,%.6f", data->map_center_lon, data->map_center_lat);
+    snprintf(zoom_text, sizeof(zoom_text), "%d", zoom);
+
+    if (file_exists(cache_path) && static_map_file_usable(cache_path))
+    {
+        printf("Cabin Map: route cache found, using %s.\n", cache_path);
         copy_text(data->map_source, sizeof(data->map_source), "CACHE");
         data->api_map_loaded = 1;
         data->api_map_failed = 0;
         copy_text(data->api_map_error_message, sizeof(data->api_map_error_message), "");
         if (map_path != NULL && map_path_size > 0)
         {
-            copy_text(map_path, (size_t)map_path_size, CABIN_MAP_CACHE_PATH);
+            copy_text(map_path, (size_t)map_path_size, cache_path);
         }
         return 1;
     }
 
-    if (file_exists(CABIN_MAP_CACHE_PATH))
+    if (file_exists(cache_path))
     {
-        printf("Cabin Map: cache exists but is not a valid PNG, will try downloading again.\n");
-        remove(CABIN_MAP_CACHE_PATH);
+        printf("Cabin Map: cache exists but is not a usable static map, will try downloading again.\n");
+        remove(cache_path);
     }
     else
     {
-        printf("Cabin Map: no cache found at %s.\n", CABIN_MAP_CACHE_PATH);
+        printf("Cabin Map: no route cache found at %s.\n", cache_path);
     }
 
     const char *api_key_source = "";
@@ -665,39 +705,39 @@ int cabin_api_prepare_static_map(Cabin_Data *data, char *map_path, int map_path_
              "%s?key=%s&location=%s&zoom=%s&size=%s&scale=2",
              CABIN_AMAP_STATIC_MAP_URL,
              api_key,
-             CABIN_AMAP_STATIC_CENTER,
-             CABIN_AMAP_STATIC_ZOOM,
+             location,
+             zoom_text,
              CABIN_AMAP_STATIC_SIZE);
 
     printf("Cabin Map: requesting Amap static map center=%s zoom=%s size=%s cache=%s.\n",
-           CABIN_AMAP_STATIC_CENTER,
-           CABIN_AMAP_STATIC_ZOOM,
+           location,
+           zoom_text,
            CABIN_AMAP_STATIC_SIZE,
-           CABIN_MAP_CACHE_PATH);
+           cache_path);
 
-    if (!download_file_with_curl(url, CABIN_MAP_CACHE_PATH))
+    if (!download_file_with_curl(url, cache_path))
     {
         printf("Cabin Map: static map request failed or curl is unavailable, fallback to local map.\n");
         set_map_error(data, "静态地图下载失败");
         return 0;
     }
 
-    if (!file_has_png_header(CABIN_MAP_CACHE_PATH))
+    if (!static_map_file_usable(cache_path))
     {
-        printf("Cabin Map: downloaded file is not a valid PNG, fallback to local map.\n");
-        remove(CABIN_MAP_CACHE_PATH);
-        set_map_error(data, "静态地图返回内容不是 PNG");
+        printf("Cabin Map: downloaded file is not a usable route map, fallback to local/drawn map.\n");
+        remove(cache_path);
+        set_map_error(data, "静态地图返回内容不可用");
         return 0;
     }
 
-    printf("Cabin Map: static map saved to %s.\n", CABIN_MAP_CACHE_PATH);
+    printf("Cabin Map: static map saved to %s.\n", cache_path);
     copy_text(data->map_source, sizeof(data->map_source), "API");
     data->api_map_loaded = 1;
     data->api_map_failed = 0;
     copy_text(data->api_map_error_message, sizeof(data->api_map_error_message), "");
     if (map_path != NULL && map_path_size > 0)
     {
-        copy_text(map_path, (size_t)map_path_size, CABIN_MAP_CACHE_PATH);
+        copy_text(map_path, (size_t)map_path_size, cache_path);
     }
 
     return 1;
