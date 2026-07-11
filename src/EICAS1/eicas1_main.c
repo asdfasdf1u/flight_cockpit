@@ -7,6 +7,7 @@
 #include "eicas_data.h"
 #include "../Systems/aircraft_systems_data.h"
 #include "eicas1_ui.h"
+#include "../Data/sim_data_center.h"
 
 #define EICAS1_WINDOW_WIDTH 768
 #define EICAS1_WINDOW_HEIGHT 768
@@ -29,6 +30,67 @@ static TTF_Font *open_eicas1_font(void)
     }
 
     return TTF_OpenFont("C:/Windows/Fonts/simhei.ttf", 18);
+}
+
+static AircraftSystems_WarningLevel sim_warning_level_to_aircraft(SimWarningLevel level)
+{
+    switch (level)
+    {
+    case SIM_WARNING_WARNING:
+        return AIRCRAFT_SYSTEMS_WARNING_WARNING;
+    case SIM_WARNING_CAUTION:
+        return AIRCRAFT_SYSTEMS_WARNING_CAUTION;
+    case SIM_WARNING_INFO:
+    default:
+        return AIRCRAFT_SYSTEMS_WARNING_INFO;
+    }
+}
+
+static void apply_sim_snapshot_to_aircraft_systems(AircraftSystems_Data *data, const SimSnapshot *snapshot)
+{
+    if (data == NULL || snapshot == NULL || !snapshot->has_eicas_upper)
+    {
+        return;
+    }
+
+    data->engine_left.n1 = snapshot->n1_left;
+    data->engine_left.n2 = snapshot->n2_left;
+    data->engine_left.egt = snapshot->egt_left;
+    data->engine_left.fuel_flow = snapshot->fuel_flow_left;
+    data->engine_left.oil_pressure = snapshot->oil_pressure_left;
+    data->engine_left.oil_temp = snapshot->oil_temperature_left;
+    data->engine_left.oil_quantity = snapshot->oil_quantity_left;
+    data->engine_left.vibration = snapshot->vibration_left;
+    data->engine_left.running = snapshot->n1_left > 20.0f || snapshot->n2_left > 20.0f;
+
+    data->engine_right.n1 = snapshot->n1_right;
+    data->engine_right.n2 = snapshot->n2_right;
+    data->engine_right.egt = snapshot->egt_right;
+    data->engine_right.fuel_flow = snapshot->fuel_flow_right;
+    data->engine_right.oil_pressure = snapshot->oil_pressure_right;
+    data->engine_right.oil_temp = snapshot->oil_temperature_right;
+    data->engine_right.oil_quantity = snapshot->oil_quantity_right;
+    data->engine_right.vibration = snapshot->vibration_right;
+    data->engine_right.running = snapshot->n1_right > 20.0f || snapshot->n2_right > 20.0f;
+
+    data->total_air_temperature = snapshot->total_air_temperature;
+    data->fuel_quantity = snapshot->fuel_quantity;
+    data->hydraulic_pressure = snapshot->hydraulic_pressure;
+    data->cabin_pressure = snapshot->cabin_pressure;
+    data->battery_voltage = snapshot->battery_voltage;
+    data->gear_down = snapshot->gear_down;
+    data->flaps_level = snapshot->flaps_level;
+    data->parking_brake_on = snapshot->parking_brake_on;
+    data->simulation_time = snapshot->sim_time;
+
+    data->warning_count = 0;
+    for (int i = 0; i < snapshot->warning_count && i < AIRCRAFT_SYSTEMS_MAX_WARNINGS; ++i)
+    {
+        snprintf(data->warnings[i].text, sizeof(data->warnings[i].text), "%s", snapshot->warnings[i].text);
+        data->warnings[i].level = sim_warning_level_to_aircraft(snapshot->warnings[i].level);
+        data->warnings[i].active = snapshot->warnings[i].active;
+        ++data->warning_count;
+    }
 }
 
 int eicas1_main_run(void)
@@ -106,6 +168,18 @@ int eicas1_main_run(void)
         printf("EICAS1: using mock fallback data for Upper display.\n");
         fflush(stdout);
     }
+    SimDataCenter sim_data_center;
+    const int use_sim_data_center = sim_data_center_init(&sim_data_center) &&
+                                    sim_data_center_has_eicas_upper_data(&sim_data_center);
+    if (use_sim_data_center)
+    {
+        apply_sim_snapshot_to_aircraft_systems(&data, sim_data_center_snapshot(&sim_data_center));
+    }
+    else
+    {
+        printf("EICAS1: SimDataCenter unavailable for Upper display, using legacy eicas1.dat/mock path.\n");
+        fflush(stdout);
+    }
 
     int running = 1;
     SDL_Event event;
@@ -135,7 +209,12 @@ int eicas1_main_run(void)
             delta_time = 0.1f;
         }
 
-        if (eicas1_data_loaded)
+        if (use_sim_data_center)
+        {
+            sim_data_center_update(&sim_data_center, delta_time);
+            apply_sim_snapshot_to_aircraft_systems(&data, sim_data_center_snapshot(&sim_data_center));
+        }
+        else if (eicas1_data_loaded)
         {
             eicas_data_update(&eicas_data, delta_time);
             eicas_data_apply_upper_to_aircraft_systems(&eicas_data, &data);
@@ -157,6 +236,7 @@ int eicas1_main_run(void)
         }
     }
 
+    sim_data_center_destroy(&sim_data_center);
     TTF_CloseFont(font);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

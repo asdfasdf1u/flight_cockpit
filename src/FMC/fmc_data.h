@@ -3,6 +3,7 @@
 
 #include "fmc_airport.h"
 #include "fmc_waypoint.h"
+#include "../Data/sim_route.h"
 
 #define FMC_MAX_ROUTE_POINTS 64
 #define FMC_TEXT_LEN 64
@@ -159,6 +160,7 @@ int fmc_data_activate_current_phase(FMC_Data *data);
 int fmc_data_set_dep_arr_parameter(FMC_Data *data, int arrival_side, int field_index);
 int fmc_data_set_legs_parameter(FMC_Data *data, int field_index);
 int fmc_data_set_hold_parameter(FMC_Data *data, int field_index);
+int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route);
 const char *fmc_data_phase_name(FMC_FlightPhase phase);
 const char *fmc_data_page_name(FMC_Page page);
 

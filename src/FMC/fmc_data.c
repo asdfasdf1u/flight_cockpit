@@ -2054,6 +2054,65 @@ int fmc_data_set_dep_arr_parameter(FMC_Data *data, int arrival_side, int field_i
     return 0;
 }
 
+static int fmc_route_point_has_position(const FMC_RoutePoint *point)
+{
+    if (point == NULL)
+    {
+        return 0;
+    }
+
+    return point->latitude >= -90.0 && point->latitude <= 90.0 &&
+           point->longitude >= -180.0 && point->longitude <= 180.0 &&
+           !(point->latitude == 0.0 && point->longitude == 0.0);
+}
+
+int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route)
+{
+    if (data == NULL || route == NULL)
+    {
+        return 0;
+    }
+
+    memset(route, 0, sizeof(*route));
+    set_text(route->origin, sizeof(route->origin), data->origin);
+    set_text(route->destination, sizeof(route->destination), data->destination);
+    set_text(route->source_path, sizeof(route->source_path), data->fms_plan_path);
+    route->loaded_from_file = data->route_loaded_from_file;
+
+    int coordinate_count = 0;
+    for (int i = 0; i < data->route_count && route->point_count < SIM_ROUTE_MAX_POINTS; ++i)
+    {
+        const FMC_RoutePoint *source = &data->route_point_data[i];
+        const char *ident = source->ident[0] != '\0' ? source->ident : data->route_points[i];
+        if (ident == NULL || ident[0] == '\0')
+        {
+            continue;
+        }
+
+        SimRoutePoint *target = &route->points[route->point_count++];
+        set_text(target->ident, sizeof(target->ident), ident);
+        set_text(target->type, sizeof(target->type), source->type[0] != '\0' ? source->type : "POINT");
+        target->latitude = source->latitude;
+        target->longitude = source->longitude;
+        target->altitude = source->altitude;
+        target->has_position = fmc_route_point_has_position(source);
+        if (target->has_position)
+        {
+            coordinate_count++;
+        }
+    }
+
+    route->has_coordinates = route->point_count > 0 && coordinate_count == route->point_count;
+    printf("FMC planned route export: %s -> %s, points=%d, coordinates=%s, source=%s.\n",
+           route->origin[0] != '\0' ? route->origin : "----",
+           route->destination[0] != '\0' ? route->destination : "----",
+           route->point_count,
+           route->has_coordinates ? "yes" : "partial/missing",
+           route->source_path[0] != '\0' ? route->source_path : "fallback");
+    fflush(stdout);
+    return route->point_count > 0;
+}
+
 const char *fmc_data_phase_name(FMC_FlightPhase phase)
 {
     switch (phase)

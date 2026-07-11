@@ -4,7 +4,7 @@
         {
             "type": "shell",
             "label": "build test",
-            "command": "gcc",
+            "command": "D:\\msys2-x86\\mingw64\\bin\\gcc.exe",
             "args": [
                 "-g",
                 "${workspaceFolder}/src/test.c",
@@ -35,10 +35,12 @@
                 "${workspaceFolder}/src/PFD/pfd_ui.c",
                 "${workspaceFolder}/src/PFD/pfd_data.c",
                 "${workspaceFolder}/src/Util/SDL_Util.c",
+                "${workspaceFolder}/src/Data/sim_data_center.c",
+                "${workspaceFolder}/src/Data/sim_data_loader.c",
                 "-o",
                 "${workspaceFolder}/build/test.exe",
-                "-IF:\\msys2\\mingw64\\include",
-                "-LF:\\msys2\\mingw64\\lib",
+                "-ID:\\msys2-x86\\mingw64\\include",
+                "-LD:\\msys2-x86\\mingw64\\lib",
                 "-lmingw32",
                 "-lSDL2main",
                 "-lSDL2",
