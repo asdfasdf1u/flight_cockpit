@@ -8,6 +8,7 @@
 
 typedef struct Cabin_Trajectory_Point
 {
+    char ident[CABIN_TEXT_LEN];
     double latitude;
     double longitude;
     unsigned int sequence;
@@ -36,10 +37,20 @@ typedef struct Cabin_Data
     double map_top_left_lon;
     double map_bottom_right_lat;
     double map_bottom_right_lon;
+    double map_center_lat;
+    double map_center_lon;
+    int map_zoom;
+    char map_cache_path[CABIN_ERROR_LEN];
     double latitude;
     double longitude;
     float altitude;
     float ground_speed;
+    float heading;
+    float track;
+    int has_heading;
+    int using_sim_data;
+    int planned_route_from_fmc;
+    char planned_route_source[CABIN_TEXT_LEN];
     float progress;
     float remaining_time_min;
     Cabin_Trajectory_Point planned_route[CABIN_PLANNED_ROUTE_MAX_POINTS];

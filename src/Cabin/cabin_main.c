@@ -1,4 +1,4 @@
-#include "cabin_main.h"
+﻿#include "cabin_main.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
@@ -37,6 +37,37 @@ static void resolve_weather_city(const Cabin_Data *data, char *city, size_t city
         return;
     }
 
+    if (strcmp(data->current_city, "北京") == 0 ||
+        strcmp(data->current_city, "北京市") == 0 ||
+        strcmp(data->current_district, "北京") == 0 ||
+        strcmp(data->current_district, "北京市") == 0)
+    {
+        snprintf(city, city_size, "%s", "北京");
+        snprintf(adcode, adcode_size, "%s", "110000");
+        return;
+    }
+    if (strcmp(data->current_city, "陕西省") == 0 ||
+        strcmp(data->current_district, "西安") == 0 ||
+        strcmp(data->current_district, "西安市") == 0)
+    {
+        snprintf(city, city_size, "%s", "西安");
+        snprintf(adcode, adcode_size, "%s", "610100");
+        return;
+    }
+    if (strcmp(data->current_city, "成都") == 0 ||
+        strcmp(data->current_city, "成都市") == 0 ||
+        strcmp(data->current_city, "四川省") == 0 ||
+        strcmp(data->current_district, "成都") == 0 ||
+        strcmp(data->current_district, "成都市") == 0)
+    {
+        snprintf(city, city_size, "%s", "成都");
+        snprintf(adcode, adcode_size, "%s", "510100");
+        return;
+    }
+
+    snprintf(city, city_size, "%s", "飞行途中");
+    snprintf(adcode, adcode_size, "%s", "");
+    return;
     if (strcmp(data->current_city, "北京") == 0 || strcmp(data->current_city, "北京市") == 0)
     {
         snprintf(city, city_size, "%s", "北京");
@@ -149,7 +180,7 @@ static SDL_Texture *load_cabin_map_texture(SDL_Renderer *renderer, Cabin_Data *d
         printf("Cabin Map: cached/API map failed to load as SDL texture, fallback to local map.\n");
     }
 
-    printf("Cabin Map: using local fallback map; current local image may still be the old Beijing local map.\n");
+    printf("Cabin Map: using local fallback map for Beijing-Chengdu mock route.\n");
     texture = load_texture(renderer, CABIN_MAP_PATH, "local map background");
     if (texture != NULL)
     {
@@ -261,6 +292,9 @@ int cabin_main_run(void)
 
     Cabin_Data data;
     cabin_data_init(&data);
+    printf("Cabin Route: using Beijing-Chengdu mock route; FMC route integration disabled for now.\n");
+    fflush(stdout);
+
     char last_weather_city[CABIN_TEXT_LEN] = "";
     char last_weather_adcode[CABIN_TEXT_LEN] = "";
     update_weather_if_city_changed(&data,
@@ -339,3 +373,4 @@ int cabin_main_run(void)
 
     return 0;
 }
+

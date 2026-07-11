@@ -1,10 +1,16 @@
 #ifndef FMC_DATA_H
 #define FMC_DATA_H
 
+<<<<<<< HEAD
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+=======
+#include "fmc_airport.h"
+#include "fmc_waypoint.h"
+#include "../Data/sim_route.h"
+>>>>>>> 9a35b1bdc62c3dd4fb1edd84eaa776db37977731
 
 #define MAX_ICAO_CODE_LEN 8     // 机场ICAO代码最大长度
 #define MAX_WAYPOINT_CODE_LEN 8 // 航路点代码最大长度
@@ -140,6 +146,7 @@ extern int proc_trans_count;
 extern SelectDepArr select_dep_arr[3];
 
 
+<<<<<<< HEAD
 // 起飞机场
 extern char origin[24];
 // 目的地机场
@@ -174,6 +181,37 @@ int query_proc_by_runway(const char *airport, const char *runway);
 int query_trans_by_runway(const char *airport, const char *runway);
 int query_runway_by_proc(const char *airport, const char *proc);
 int query_trans_by_proc(const char *airport, const char *proc);
+=======
+void fmc_data_init(FMC_Data *data);
+void fmc_data_update_mock(FMC_Data *data, float delta_time);
+void fmc_data_set_page(FMC_Data *data, FMC_Page page);
+void fmc_data_append_char(FMC_Data *data, char c);
+void fmc_data_backspace(FMC_Data *data);
+void fmc_data_clear_scratchpad(FMC_Data *data);
+void fmc_data_destroy(FMC_Data *data);
+int fmc_data_load_fms_plan(FMC_Data *data, const char *path);
+int fmc_data_commit_scratchpad_to_origin(FMC_Data *data);
+void fmc_data_query_airports(FMC_Data *data);
+int fmc_data_select_airport_candidate(FMC_Data *data, int index);
+int fmc_data_confirm_selected_airport(FMC_Data *data);
+void fmc_data_set_route_input_mode(FMC_Data *data, FMC_RTE_InputMode mode);
+void fmc_data_query_waypoints(FMC_Data *data);
+int fmc_data_select_waypoint_candidate(FMC_Data *data, int index);
+int fmc_data_add_selected_waypoint(FMC_Data *data);
+int fmc_data_route_next_page(FMC_Data *data);
+int fmc_data_route_prev_page(FMC_Data *data);
+int fmc_data_route_page_count(const FMC_Data *data);
+int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field);
+int fmc_data_exec_route_selection(FMC_Data *data);
+int fmc_data_set_phase_parameter(FMC_Data *data, int line_select_index);
+int fmc_data_activate_current_phase(FMC_Data *data);
+int fmc_data_set_dep_arr_parameter(FMC_Data *data, int arrival_side, int field_index);
+int fmc_data_set_legs_parameter(FMC_Data *data, int field_index);
+int fmc_data_set_hold_parameter(FMC_Data *data, int field_index);
+int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route);
+const char *fmc_data_phase_name(FMC_FlightPhase phase);
+const char *fmc_data_page_name(FMC_Page page);
+>>>>>>> 9a35b1bdc62c3dd4fb1edd84eaa776db37977731
 
 
 #endif

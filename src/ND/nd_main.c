@@ -6,6 +6,7 @@
 
 #include "nd_data.h"
 #include "nd_ui.h"
+#include "../Data/sim_data_center.h"
 
 #define ND_WINDOW_WIDTH 752
 #define ND_WINDOW_HEIGHT 752
@@ -26,6 +27,25 @@ static TTF_Font *open_nd_font(void)
     }
 
     return TTF_OpenFont("C:/Windows/Fonts/simhei.ttf", 18);
+}
+
+static void apply_sim_snapshot_to_nd(ND_Data *data, const SimSnapshot *snapshot)
+{
+    if (data == NULL || snapshot == NULL || !snapshot->has_nd)
+    {
+        return;
+    }
+
+    data->latitude = snapshot->latitude;
+    data->longitude = snapshot->longitude;
+    data->heading = snapshot->heading;
+    data->track = snapshot->track;
+    data->ground_speed = snapshot->ground_speed;
+    data->true_air_speed = snapshot->true_air_speed;
+    data->simulation_time = snapshot->sim_time;
+    data->data_frame_index = snapshot->nd_frame_index;
+    data->data_frame_elapsed = snapshot->sim_time;
+    nd_data_recalculate_nav_points(data);
 }
 
 int nd_main_run(void)
@@ -89,6 +109,18 @@ int nd_main_run(void)
 
     ND_Data data;
     nd_data_init(&data);
+    SimDataCenter sim_data_center;
+    const int use_sim_data_center = sim_data_center_init(&sim_data_center) &&
+                                    sim_data_center_has_nd_data(&sim_data_center);
+    if (use_sim_data_center)
+    {
+        apply_sim_snapshot_to_nd(&data, sim_data_center_snapshot(&sim_data_center));
+    }
+    else
+    {
+        printf("ND: SimDataCenter unavailable for ND, using legacy nd.dat/mock path.\n");
+        fflush(stdout);
+    }
 
     int running = 1;
     SDL_Event event;
@@ -118,7 +150,15 @@ int nd_main_run(void)
             delta_time = 0.1f;
         }
 
-        nd_data_update_mock(&data, delta_time);
+        if (use_sim_data_center)
+        {
+            sim_data_center_update(&sim_data_center, delta_time);
+            apply_sim_snapshot_to_nd(&data, sim_data_center_snapshot(&sim_data_center));
+        }
+        else
+        {
+            nd_data_update_mock(&data, delta_time);
+        }
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
@@ -132,6 +172,7 @@ int nd_main_run(void)
         }
     }
 
+    sim_data_center_destroy(&sim_data_center);
     TTF_CloseFont(font);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

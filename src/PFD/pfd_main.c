@@ -6,6 +6,7 @@
 
 #include "pfd_data.h"
 #include "pfd_ui.h"
+#include "../Data/sim_data_center.h"
 
 #define PFD_WINDOW_WIDTH 900
 #define PFD_WINDOW_HEIGHT 800
@@ -27,6 +28,32 @@ static TTF_Font *open_pfd_font(void)
 
     font = TTF_OpenFont("C:/Windows/Fonts/simhei.ttf", 20);
     return font;
+}
+
+static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapshot)
+{
+    if (data == NULL || snapshot == NULL || !snapshot->has_pfd)
+    {
+        return;
+    }
+
+    data->pitch = snapshot->pitch;
+    data->roll = snapshot->roll;
+    data->yaw = snapshot->yaw;
+    data->altitude = snapshot->altitude;
+    data->agl_altitude = snapshot->agl_altitude;
+    data->throttle = snapshot->throttle;
+    data->airspeed_current = snapshot->airspeed;
+    data->airspeed_target = snapshot->airspeed_target;
+    data->vertical_speed = snapshot->vertical_speed;
+    data->heading = snapshot->heading;
+    data->heading_target = snapshot->heading_target;
+    data->altitude_target = snapshot->altitude_target;
+    data->autopilot_on = 1;
+    data->simulation_time = snapshot->sim_time;
+    data->using_file_data = 1;
+    data->file_sample_index = snapshot->pfd_frame_index;
+    snprintf(data->flight_mode, sizeof(data->flight_mode), "%s", "SIM DATA");
 }
 
 int pfd_main_run(void)
@@ -90,6 +117,18 @@ int pfd_main_run(void)
 
     PFDData data;
     pfd_data_init(&data);
+    SimDataCenter sim_data_center;
+    const int use_sim_data_center = sim_data_center_init(&sim_data_center) &&
+                                    sim_data_center_has_pfd_data(&sim_data_center);
+    if (use_sim_data_center)
+    {
+        apply_sim_snapshot_to_pfd(&data, sim_data_center_snapshot(&sim_data_center));
+    }
+    else
+    {
+        printf("PFD: SimDataCenter unavailable for PFD, using legacy pfd.dat/mock path.\n");
+        fflush(stdout);
+    }
 
     int running = 1;
     SDL_Event event;
@@ -119,7 +158,15 @@ int pfd_main_run(void)
             delta_time = 0.1f;
         }
 
-        pfd_data_update_mock(&data, delta_time);
+        if (use_sim_data_center)
+        {
+            sim_data_center_update(&sim_data_center, delta_time);
+            apply_sim_snapshot_to_pfd(&data, sim_data_center_snapshot(&sim_data_center));
+        }
+        else
+        {
+            pfd_data_update_mock(&data, delta_time);
+        }
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
@@ -133,6 +180,7 @@ int pfd_main_run(void)
         }
     }
 
+    sim_data_center_destroy(&sim_data_center);
     pfd_ui_clear_text_cache(renderer);
     TTF_CloseFont(font);
     SDL_DestroyRenderer(renderer);
