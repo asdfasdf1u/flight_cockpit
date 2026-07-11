@@ -1,4 +1,4 @@
-#include "cabin_ui.h"
+﻿#include "cabin_ui.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -840,15 +840,15 @@ static void draw_flight_info_bar(SDL_Renderer *renderer, const Cabin_Assets *ass
     fill_rect(renderer, &bar, COLOR_BLACK_OVERLAY);
     draw_rect(renderer, &bar, COLOR_ROUTE_SOFT);
 
-    draw_text_clipped(renderer, assets->title_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 10, "%s  %s -> %s",
-              data->flight_no,
+    draw_text_clipped(renderer, assets->title_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 10, "%s -> %s",
               data->origin_city,
               data->destination_city);
     draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   速度 %.0fkm/h   剩余 %.0f分钟",
               data->altitude,
               data->ground_speed,
               data->remaining_time_min);
-    draw_text_clipped(renderer, assets->small_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 73, "机场 %s -> %s",
+    draw_text_clipped(renderer, assets->small_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 73, "航班 %s  机场 %s -> %s",
+              data->flight_no,
               data->origin_airport,
               data->destination_airport);
 
@@ -916,3 +916,4 @@ void cabin_ui_render(SDL_Renderer *renderer, const Cabin_Assets *assets, const C
         draw_status_badge(renderer, assets, data, &map_view_rect);
     }
 }
+

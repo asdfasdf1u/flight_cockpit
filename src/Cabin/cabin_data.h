@@ -1,12 +1,9 @@
 #ifndef CABIN_DATA_H
 #define CABIN_DATA_H
 
-#include "../Data/sim_route.h"
-#include "../Data/sim_snapshot.h"
-
 #define CABIN_TEXT_LEN 64
 #define CABIN_ERROR_LEN 160
-#define CABIN_PLANNED_ROUTE_MAX_POINTS SIM_ROUTE_MAX_POINTS
+#define CABIN_PLANNED_ROUTE_MAX_POINTS 12
 #define CABIN_FLOWN_TRACK_MAX_POINTS 160
 
 typedef struct Cabin_Trajectory_Point
@@ -85,9 +82,5 @@ typedef struct Cabin_Data
 
 void cabin_data_init(Cabin_Data *data);
 void cabin_data_update_mock(Cabin_Data *data, float delta_time);
-int cabin_data_apply_planned_route(Cabin_Data *data, const SimPlannedRoute *route);
-void cabin_data_apply_sim_snapshot(Cabin_Data *data, const SimSnapshot *snapshot, float delta_time);
-int cabin_data_route_points_within_map_bounds(const Cabin_Data *data);
-void cabin_data_print_route_map_summary(const Cabin_Data *data);
 
 #endif

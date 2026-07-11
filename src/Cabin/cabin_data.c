@@ -496,6 +496,26 @@ static void cabin_data_update_location_labels(Cabin_Data *data)
         return;
     }
 
+    if (data->progress < 0.30f)
+    {
+        copy_text(data->current_city, sizeof(data->current_city), "北京市");
+        copy_text(data->current_district, sizeof(data->current_district), "北京市");
+        copy_text(data->current_town, sizeof(data->current_town), "顺义区");
+        return;
+    }
+    if (data->progress < 0.72f)
+    {
+        copy_text(data->current_city, sizeof(data->current_city), "陕西省");
+        copy_text(data->current_district, sizeof(data->current_district), "西安市");
+        copy_text(data->current_town, sizeof(data->current_town), "航路区");
+        return;
+    }
+
+    copy_text(data->current_city, sizeof(data->current_city), "四川省");
+    copy_text(data->current_district, sizeof(data->current_district), "成都市");
+    copy_text(data->current_town, sizeof(data->current_town), "简阳市");
+    return;
+
     if (data->planned_route_from_fmc)
     {
         if (data->progress < 0.08f)
@@ -649,7 +669,7 @@ void cabin_data_init(Cabin_Data *data)
     memset(data, 0, sizeof(*data));
 
     copy_text(data->flight_no, sizeof(data->flight_no), "CA1888");
-    copy_text(data->origin_city, sizeof(data->origin_city), "北京首都");
+    copy_text(data->origin_city, sizeof(data->origin_city), "北京");
     copy_text(data->origin_airport, sizeof(data->origin_airport), "北京首都");
     copy_text(data->destination_city, sizeof(data->destination_city), "成都");
     copy_text(data->destination_airport, sizeof(data->destination_airport), "成都天府");
@@ -748,222 +768,3 @@ void cabin_data_update_mock(Cabin_Data *data, float delta_time)
         copy_text(data->current_town, sizeof(data->current_town), "成都天府机场");
     }
 #endif
-
-int cabin_data_apply_planned_route(Cabin_Data *data, const SimPlannedRoute *route)
-{
-    if (data == NULL || route == NULL || route->point_count < 2)
-    {
-        return 0;
-    }
-
-    int copied_count = 0;
-    for (int i = 0; i < route->point_count && copied_count < CABIN_PLANNED_ROUTE_MAX_POINTS; ++i)
-    {
-        const SimRoutePoint *source = &route->points[i];
-        if (!source->has_position || !cabin_data_valid_geo(source->latitude, source->longitude))
-        {
-            continue;
-        }
-
-        Cabin_Trajectory_Point *target = &data->planned_route[copied_count];
-        copy_text(target->ident, sizeof(target->ident), source->ident);
-        target->latitude = source->latitude;
-        target->longitude = source->longitude;
-        target->sequence = (unsigned int)copied_count;
-        target->altitude = (float)source->altitude;
-        target->ground_speed = 0.0f;
-        copied_count++;
-    }
-
-    if (copied_count < 2)
-    {
-        printf("Cabin Route: FMC planned_route has no usable coordinates, keeping mock Beijing-Chengdu route.\n");
-        fflush(stdout);
-        return 0;
-    }
-
-    data->planned_route_count = copied_count;
-    data->origin_lat = data->planned_route[0].latitude;
-    data->origin_lon = data->planned_route[0].longitude;
-    data->destination_lat = data->planned_route[copied_count - 1].latitude;
-    data->destination_lon = data->planned_route[copied_count - 1].longitude;
-
-    copy_text(data->origin_city, sizeof(data->origin_city), route->origin[0] != '\0' ? route->origin : data->planned_route[0].ident);
-    copy_text(data->origin_airport, sizeof(data->origin_airport), route->origin[0] != '\0' ? route->origin : data->planned_route[0].ident);
-    copy_text(data->destination_city, sizeof(data->destination_city), route->destination[0] != '\0' ? route->destination : data->planned_route[copied_count - 1].ident);
-    copy_text(data->destination_airport, sizeof(data->destination_airport), route->destination[0] != '\0' ? route->destination : data->planned_route[copied_count - 1].ident);
-    copy_text(data->planned_route_source, sizeof(data->planned_route_source), "FMC");
-    data->planned_route_from_fmc = 1;
-
-    data->progress = 0.0f;
-    cabin_data_update_progress_fields(data);
-    cabin_data_update_location_labels(data);
-    cabin_data_fit_map_bounds_to_route(data);
-    cabin_data_reset_flown_track(data);
-    cabin_data_update_flown_track(data, 0.0f, 1);
-
-    printf("Cabin Route: using FMC planned_route %s -> %s (%d coordinate points).\n",
-           data->origin_airport,
-           data->destination_airport,
-           data->planned_route_count);
-    fflush(stdout);
-    return 1;
-}
-
-void cabin_data_apply_sim_snapshot(Cabin_Data *data, const SimSnapshot *snapshot, float delta_time)
-{
-    static int printed_out_of_bounds_position = 0;
-
-    if (data == NULL || snapshot == NULL)
-    {
-        return;
-    }
-
-    if (delta_time < 0.0f)
-    {
-        delta_time = 0.0f;
-    }
-    if (delta_time > 0.1f)
-    {
-        delta_time = 0.1f;
-    }
-
-    const float previous_progress = data->progress;
-    int use_snapshot_position = 0;
-    if (snapshot->has_nd && cabin_data_valid_geo(snapshot->latitude, snapshot->longitude))
-    {
-        if (cabin_data_point_in_map_bounds(data, snapshot->latitude, snapshot->longitude))
-        {
-            use_snapshot_position = 1;
-            data->current_lat = snapshot->latitude;
-            data->current_lon = snapshot->longitude;
-            data->latitude = snapshot->latitude;
-            data->longitude = snapshot->longitude;
-        }
-        else
-        {
-            if (!printed_out_of_bounds_position)
-            {
-                printf("Cabin SimData: position lat=%.6f lon=%.6f is outside current route/map bounds; using route progress simulation for Cabin map.\n",
-                       snapshot->latitude,
-                       snapshot->longitude);
-                fflush(stdout);
-                printed_out_of_bounds_position = 1;
-            }
-            data->progress += delta_time * CABIN_ROUTE_PROGRESS_RATE;
-            if (data->progress > 1.0f)
-            {
-                data->progress = 0.0f;
-            }
-        }
-    }
-
-    if (snapshot->has_pfd)
-    {
-        data->altitude = snapshot->altitude;
-    }
-    if (snapshot->has_nd)
-    {
-        data->ground_speed = snapshot->ground_speed;
-        data->track = snapshot->track;
-        data->heading = snapshot->heading;
-        data->has_heading = 1;
-    }
-    else if (snapshot->has_pfd)
-    {
-        data->ground_speed = snapshot->airspeed;
-        data->heading = snapshot->heading;
-        data->track = snapshot->heading;
-        data->has_heading = 1;
-    }
-
-    data->using_sim_data = 1;
-    if (use_snapshot_position)
-    {
-        data->progress = cabin_data_progress_for_position(data, data->current_lat, data->current_lon);
-        data->remaining_time_min = (1.0f - data->progress) * CABIN_ROUTE_TOTAL_TIME_MIN;
-    }
-    else
-    {
-        data->progress = clamp_float(data->progress, 0.0f, 1.0f);
-        cabin_data_update_current_position(data);
-        data->remaining_time_min = (1.0f - data->progress) * CABIN_ROUTE_TOTAL_TIME_MIN;
-    }
-    cabin_data_update_location_labels(data);
-
-    if (previous_progress > 0.95f && data->progress < 0.05f)
-    {
-        cabin_data_reset_flown_track(data);
-        cabin_data_update_flown_track(data, 0.0f, 1);
-    }
-    else
-    {
-        cabin_data_update_flown_track(data, delta_time, 0);
-    }
-}
-
-int cabin_data_route_points_within_map_bounds(const Cabin_Data *data)
-{
-    if (data == NULL || data->planned_route_count <= 0)
-    {
-        return 0;
-    }
-
-    for (int i = 0; i < data->planned_route_count; ++i)
-    {
-        if (!cabin_data_point_in_map_bounds(data,
-                                            data->planned_route[i].latitude,
-                                            data->planned_route[i].longitude))
-        {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-void cabin_data_print_route_map_summary(const Cabin_Data *data)
-{
-    Cabin_Route_Bounds bounds;
-
-    if (data == NULL)
-    {
-        return;
-    }
-
-    printf("Cabin Route/Map: route source=%s.\n",
-           data->planned_route_from_fmc ? "FMC" : "MOCK");
-    printf("Cabin Route/Map: origin=%s destination=%s point_count=%d.\n",
-           data->origin_airport[0] != '\0' ? data->origin_airport : "----",
-           data->destination_airport[0] != '\0' ? data->destination_airport : "----",
-           data->planned_route_count);
-
-    if (cabin_data_compute_route_bounds(data, &bounds))
-    {
-        printf("Cabin Route/Map: route bounds min_lat=%.6f max_lat=%.6f min_lon=%.6f max_lon=%.6f.\n",
-               bounds.min_lat,
-               bounds.max_lat,
-               bounds.min_lon,
-               bounds.max_lon);
-    }
-    else
-    {
-        printf("Cabin Route/Map: route bounds unavailable because no valid route coordinates exist.\n");
-    }
-
-    printf("Cabin Route/Map: calculated map center lat=%.6f lon=%.6f selected zoom=%d.\n",
-           data->map_center_lat,
-           data->map_center_lon,
-           data->map_zoom);
-    printf("Cabin Route/Map: map cache path=%s.\n",
-           data->map_cache_path[0] != '\0' ? data->map_cache_path : "none");
-    printf("Cabin Route/Map: map source=%s.\n",
-           data->map_source[0] != '\0' ? data->map_source : "UNKNOWN");
-    printf("Cabin Route/Map: map bounds top_left=(%.6f, %.6f) bottom_right=(%.6f, %.6f).\n",
-           data->map_top_left_lat,
-           data->map_top_left_lon,
-           data->map_bottom_right_lat,
-           data->map_bottom_right_lon);
-    printf("Cabin Route/Map: all route points in map bounds=%s.\n",
-           cabin_data_route_points_within_map_bounds(data) ? "yes" : "no");
-    fflush(stdout);
-}

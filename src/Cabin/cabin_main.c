@@ -1,4 +1,4 @@
-#include "cabin_main.h"
+﻿#include "cabin_main.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
@@ -9,8 +9,6 @@
 #include "cabin_api.h"
 #include "cabin_data.h"
 #include "cabin_ui.h"
-#include "../Data/sim_data_center.h"
-#include "../FMC/fmc_data.h"
 
 #define CABIN_WINDOW_WIDTH 1600
 #define CABIN_WINDOW_HEIGHT 900
@@ -39,6 +37,37 @@ static void resolve_weather_city(const Cabin_Data *data, char *city, size_t city
         return;
     }
 
+    if (strcmp(data->current_city, "北京") == 0 ||
+        strcmp(data->current_city, "北京市") == 0 ||
+        strcmp(data->current_district, "北京") == 0 ||
+        strcmp(data->current_district, "北京市") == 0)
+    {
+        snprintf(city, city_size, "%s", "北京");
+        snprintf(adcode, adcode_size, "%s", "110000");
+        return;
+    }
+    if (strcmp(data->current_city, "陕西省") == 0 ||
+        strcmp(data->current_district, "西安") == 0 ||
+        strcmp(data->current_district, "西安市") == 0)
+    {
+        snprintf(city, city_size, "%s", "西安");
+        snprintf(adcode, adcode_size, "%s", "610100");
+        return;
+    }
+    if (strcmp(data->current_city, "成都") == 0 ||
+        strcmp(data->current_city, "成都市") == 0 ||
+        strcmp(data->current_city, "四川省") == 0 ||
+        strcmp(data->current_district, "成都") == 0 ||
+        strcmp(data->current_district, "成都市") == 0)
+    {
+        snprintf(city, city_size, "%s", "成都");
+        snprintf(adcode, adcode_size, "%s", "510100");
+        return;
+    }
+
+    snprintf(city, city_size, "%s", "飞行途中");
+    snprintf(adcode, adcode_size, "%s", "");
+    return;
     if (strcmp(data->current_city, "北京") == 0 || strcmp(data->current_city, "北京市") == 0)
     {
         snprintf(city, city_size, "%s", "北京");
@@ -141,24 +170,17 @@ static SDL_Texture *load_cabin_map_texture(SDL_Renderer *renderer, Cabin_Data *d
     api_map_path[0] = '\0';
     if (cabin_api_prepare_static_map(data, api_map_path, sizeof(api_map_path)) && api_map_path[0] != '\0')
     {
-        texture = load_texture(renderer, api_map_path, "cached/API route map background");
+        texture = load_texture(renderer, api_map_path, "cached/API Beijing-Chengdu map background");
         if (texture != NULL)
         {
             printf("Cabin Map: final map source=%s path=%s.\n", data->map_source, api_map_path);
             return texture;
         }
 
-        printf("Cabin Map: cached/API map failed to load as SDL texture.\n");
+        printf("Cabin Map: cached/API map failed to load as SDL texture, fallback to local map.\n");
     }
 
-    if (data != NULL && data->planned_route_from_fmc)
-    {
-        snprintf(data->map_source, sizeof(data->map_source), "%s", "FALLBACK");
-        printf("Cabin Map: FMC route has no usable API/cache map; keep route bounds and use drawn fallback background instead of mismatched local Beijing-Chengdu map.\n");
-        return NULL;
-    }
-
-    printf("Cabin Map: using local fallback map for mock Beijing-Chengdu route.\n");
+    printf("Cabin Map: using local fallback map for Beijing-Chengdu mock route.\n");
     texture = load_texture(renderer, CABIN_MAP_PATH, "local map background");
     if (texture != NULL)
     {
@@ -170,54 +192,6 @@ static SDL_Texture *load_cabin_map_texture(SDL_Renderer *renderer, Cabin_Data *d
     snprintf(data->map_source, sizeof(data->map_source), "%s", "FALLBACK");
     printf("Cabin Map: final map source=FALLBACK, using drawn map background.\n");
     return NULL;
-}
-
-static void print_fmc_route_summary(const SimPlannedRoute *route)
-{
-    if (route == NULL)
-    {
-        return;
-    }
-
-    printf("Cabin FMC Route: %s -> %s, points=%d, coordinates=%s.\n",
-           route->origin[0] != '\0' ? route->origin : "----",
-           route->destination[0] != '\0' ? route->destination : "----",
-           route->point_count,
-           route->has_coordinates ? "yes" : "partial/missing");
-    printf("Cabin FMC Route: sequence=");
-    for (int i = 0; i < route->point_count; ++i)
-    {
-        printf("%s%s", i == 0 ? "" : " -> ", route->points[i].ident);
-    }
-    printf("\n");
-    fflush(stdout);
-}
-
-static int load_fmc_planned_route_for_cabin(Cabin_Data *data)
-{
-    if (data == NULL)
-    {
-        return 0;
-    }
-
-    FMC_Data fmc_data;
-    SimPlannedRoute route;
-    fmc_data_init(&fmc_data);
-    const int exported = fmc_data_export_planned_route(&fmc_data, &route);
-    if (exported)
-    {
-        print_fmc_route_summary(&route);
-    }
-
-    const int applied = exported && cabin_data_apply_planned_route(data, &route);
-    if (!applied)
-    {
-        printf("Cabin Route: using existing mock planned_route fallback.\n");
-        fflush(stdout);
-    }
-
-    fmc_data_destroy(&fmc_data);
-    return applied;
 }
 
 static void destroy_assets(Cabin_Assets *assets)
@@ -318,28 +292,8 @@ int cabin_main_run(void)
 
     Cabin_Data data;
     cabin_data_init(&data);
-    SimDataCenter sim_data_center;
-    const int use_sim_data_center = sim_data_center_init(&sim_data_center);
-    const int route_from_fmc = load_fmc_planned_route_for_cabin(&data);
-    if (use_sim_data_center)
-    {
-        if (route_from_fmc &&
-            data.planned_route_count > 0 &&
-            !sim_data_center_has_nd_position_data(&sim_data_center))
-        {
-            sim_data_center_set_position(&sim_data_center, data.origin_lat, data.origin_lon);
-            printf("Cabin SimData: nd.dat has no latitude/longitude, seed Cabin DataCenter position from FMC route origin.\n");
-            fflush(stdout);
-        }
-        cabin_data_apply_sim_snapshot(&data, sim_data_center_snapshot(&sim_data_center), 0.0f);
-        printf("Cabin SimData: using SimDataCenter for current position, altitude, speed and heading.\n");
-        fflush(stdout);
-    }
-    else
-    {
-        printf("Cabin SimData: SimDataCenter unavailable, using Cabin mock position fallback.\n");
-        fflush(stdout);
-    }
+    printf("Cabin Route: using Beijing-Chengdu mock route; FMC route integration disabled for now.\n");
+    fflush(stdout);
 
     char last_weather_city[CABIN_TEXT_LEN] = "";
     char last_weather_adcode[CABIN_TEXT_LEN] = "";
@@ -351,7 +305,6 @@ int cabin_main_run(void)
 
     Cabin_Assets assets;
     assets.map_texture = load_cabin_map_texture(renderer, &data);
-    cabin_data_print_route_map_summary(&data);
     assets.plane_texture = load_texture(renderer, CABIN_PLANE_PATH, "plane icon");
     assets.fullscreen_texture = load_texture(renderer, CABIN_FULLSCREEN_PATH, "fullscreen control");
     assets.add_texture = load_texture(renderer, CABIN_ADD_PATH, "zoom plus");
@@ -392,15 +345,7 @@ int cabin_main_run(void)
         const Uint32 now = SDL_GetTicks();
         float delta_time = (float)(now - last_ticks) / 1000.0f;
         last_ticks = now;
-        if (use_sim_data_center)
-        {
-            sim_data_center_update(&sim_data_center, delta_time);
-            cabin_data_apply_sim_snapshot(&data, sim_data_center_snapshot(&sim_data_center), delta_time);
-        }
-        else
-        {
-            cabin_data_update_mock(&data, delta_time);
-        }
+        cabin_data_update_mock(&data, delta_time);
         update_weather_if_city_changed(&data,
                                        last_weather_city,
                                        sizeof(last_weather_city),
@@ -420,7 +365,6 @@ int cabin_main_run(void)
     }
 
     destroy_assets(&assets);
-    sim_data_center_destroy(&sim_data_center);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     IMG_Quit();
@@ -429,3 +373,4 @@ int cabin_main_run(void)
 
     return 0;
 }
+
