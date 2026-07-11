@@ -25,6 +25,7 @@
 #define COCKPIT_WINDOW_WIDTH 1600
 #define COCKPIT_WINDOW_HEIGHT 900
 #define COCKPIT_TARGET_FRAME_MS 16
+#define COCKPIT_PFD_TARGET_FRAME_MS 33
 
 #define COCKPIT_PFD_TEXTURE_WIDTH 900
 #define COCKPIT_PFD_TEXTURE_HEIGHT 800
@@ -256,6 +257,7 @@ static void update_module_textures(
     SDL_Renderer *renderer,
     TTF_Font *font,
     Cockpit_RenderTargets *targets,
+    int refresh_pfd,
     const PFD_Data *pfd_data,
     const ND_Data *nd_data,
     const AircraftSystems_Data *systems_data,
@@ -263,7 +265,10 @@ static void update_module_textures(
     const FMC_UI_State *fmc_state,
     const FMC_Data *fmc_data)
 {
-    render_to_texture(renderer, targets->pfd_texture, render_pfd_adapter, font, pfd_data);
+    if (refresh_pfd)
+    {
+        render_to_texture(renderer, targets->pfd_texture, render_pfd_adapter, font, pfd_data);
+    }
     render_to_texture(renderer, targets->nd_texture, render_nd_adapter, font, nd_data);
     render_to_texture(renderer, targets->eicas1_texture, render_eicas1_adapter, font, systems_data);
     render_to_texture(renderer, targets->eicas2_texture, render_eicas2_adapter, font, systems_data);
@@ -299,6 +304,25 @@ static void update_scene_texture(
 
     SDL_SetRenderTarget(renderer, NULL);
     SDL_RenderSetViewport(renderer, NULL);
+}
+
+static void print_data_source_summary(
+    const PFD_Data *pfd_data,
+    const ND_Data *nd_data,
+    int eicas_data_loaded,
+    const FMC_Data *fmc_data)
+{
+    printf("Cockpit Data Sources: unified DataCenter=not present; modules use independent loaders.\n");
+    printf("Cockpit Data Sources: PFD=%s; ND=%s%s%s%s; EICAS=%s; FMC=%s.\n",
+           pfd_data != NULL && pfd_data->using_file_data ? "assets/pfd.dat" : "mock fallback",
+           nd_data != NULL && nd_data->data_file_loaded ? "assets/nd.dat" : "mock flight fallback",
+           nd_data != NULL && nd_data->earth_fix_loaded ? " + earth_fix.dat" : "",
+           nd_data != NULL && nd_data->earth_nav_loaded ? " + earth_nav.dat" : "",
+           nd_data != NULL && nd_data->apt_loaded ? " + apt.dat" : "",
+           eicas_data_loaded ? "assets/eicas1.dat/assets/eicas2.dat" : "mock fallback",
+           fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : "default mock route");
+    printf("Cockpit Data Sync: PFD/ND/EICAS/FMC/Cabin still have separate clocks or playback state.\n");
+    fflush(stdout);
 }
 
 static void reset_camera(Cockpit_Camera *camera, int window_width, int window_height, int world_width, int world_height)
@@ -641,6 +665,7 @@ int cockpit_main_run(void)
         fflush(stdout);
     }
     fmc_data_init(&fmc_data);
+    print_data_source_summary(&pfd_data, &nd_data, eicas_data_loaded, &fmc_data);
 
     FMC_UI_Assets fmc_ui_assets;
     fmc_ui_assets_load(renderer, &fmc_ui_assets);
@@ -666,6 +691,7 @@ int cockpit_main_run(void)
     int running = 1;
     SDL_Event event;
     Uint32 last_ticks = SDL_GetTicks();
+    Uint32 last_pfd_render_ticks = 0;
 
     while (running)
     {
@@ -862,7 +888,14 @@ int cockpit_main_run(void)
         }
         fmc_data_update_mock(&fmc_data, delta_time);
 
-        update_module_textures(renderer, font, &targets, &pfd_data, &nd_data, &systems_data, &fmc_ui_assets, &fmc_ui_state, &fmc_data);
+        const int refresh_pfd = last_pfd_render_ticks == 0 ||
+                                current_ticks - last_pfd_render_ticks >= COCKPIT_PFD_TARGET_FRAME_MS;
+        if (refresh_pfd)
+        {
+            last_pfd_render_ticks = current_ticks;
+        }
+
+        update_module_textures(renderer, font, &targets, refresh_pfd, &pfd_data, &nd_data, &systems_data, &fmc_ui_assets, &fmc_ui_state, &fmc_data);
         update_scene_texture(renderer, font, &targets, &layout, background_texture);
         render_window(renderer, font, &targets, &layout, &camera, view_mode, selected_fmc, fmc_background_texture, show_fmc_debug, window_width, window_height);
 
@@ -876,6 +909,7 @@ int cockpit_main_run(void)
     SDL_StopTextInput();
     fmc_data_destroy(&fmc_data);
     fmc_ui_assets_destroy(&fmc_ui_assets);
+    pfd_ui_clear_text_cache(renderer);
     destroy_render_targets(&targets);
     if (background_texture != NULL)
     {

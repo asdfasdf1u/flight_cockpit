@@ -9,7 +9,7 @@
 
 #define PFD_WINDOW_WIDTH 900
 #define PFD_WINDOW_HEIGHT 800
-#define PFD_TARGET_FRAME_MS 16
+#define PFD_TARGET_FRAME_MS 33
 
 static TTF_Font *open_pfd_font(void)
 {
@@ -133,6 +133,7 @@ int pfd_main_run(void)
         }
     }
 
+    pfd_ui_clear_text_cache(renderer);
     TTF_CloseFont(font);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

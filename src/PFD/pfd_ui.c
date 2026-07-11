@@ -7,7 +7,7 @@
 #include <string.h>
 
 #define PFD_DEG_TO_RAD 0.01745329251994329577f
-#define TEXT_CACHE_SIZE 192
+#define TEXT_CACHE_SIZE 512
 
 static const SDL_Color COLOR_BLACK = {0, 0, 0, 255};
 static const SDL_Color COLOR_WHITE = {236, 244, 248, 255};
@@ -415,6 +415,25 @@ static SDL_Texture *get_text_texture(SDL_Renderer *renderer, TTF_Font *font, SDL
     *h = surface->h;
     SDL_FreeSurface(surface);
     return texture;
+}
+
+void pfd_ui_clear_text_cache(SDL_Renderer *renderer)
+{
+    for (int i = 0; i < TEXT_CACHE_SIZE; ++i)
+    {
+        if (text_cache[i].texture != NULL &&
+            (renderer == NULL || text_cache[i].renderer == renderer))
+        {
+            SDL_DestroyTexture(text_cache[i].texture);
+            text_cache[i].texture = NULL;
+            text_cache[i].renderer = NULL;
+            text_cache[i].font = NULL;
+            text_cache[i].text[0] = '\0';
+            text_cache[i].w = 0;
+            text_cache[i].h = 0;
+            text_cache[i].age = 0;
+        }
+    }
 }
 
 static void draw_text_at(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, int x, int y, const char *format, ...)
