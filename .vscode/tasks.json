@@ -4,7 +4,7 @@
         {
             "type": "shell",
             "label": "build test",
-            "command": "D:\\msys2\\mingw64\\bin\\gcc.exe",
+            "command": "gcc.exe",
             "args": [
                 "-g",
                 "${workspaceFolder}/src/test.c",
@@ -40,8 +40,6 @@
                 "${workspaceFolder}/src/Data/sim_data_loader.c",
                 "-o",
                 "${workspaceFolder}/build/test.exe",
-                "-ID:\\msys2\\mingw64\\include",
-                "-LD:\\msys2\\mingw64\\lib",
                 "-lmingw32",
                 "-lSDL2main",
                 "-lSDL2",
@@ -81,7 +79,7 @@
         {
             "type": "cppbuild",
             "label": "C/C++: gcc.exe build active file",
-            "command": "D:\\msys2\\mingw64\\bin\\gcc.exe",
+            "command": "gcc.exe",
             "args": [
                 "-fdiagnostics-color=always",
                 "-g",
