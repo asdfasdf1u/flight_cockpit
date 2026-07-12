@@ -17,6 +17,12 @@
 #define ND_EARTH_FIX_LOAD_RADIUS_NM 180.0f
 #define ND_EARTH_NAV_LOAD_RADIUS_NM 180.0f
 #define ND_APT_LOAD_RADIUS_NM 180.0f
+#define MAX_FILTER_RESULT_SIZE 30
+#define FILTER_DISTANCE_KM 148.0
+#define EARTH_RADIUS_KM 6371.0
+#define WAYPOINT_TYPE_FIX 1
+#define WAYPOINT_TYPE_AIRPORT 20
+#define WAYPOINT_TYPE_TOWER 21
 
 #define ND_FRAME_TIME (1u << 0)
 #define ND_FRAME_LATITUDE (1u << 1)
@@ -28,6 +34,11 @@
 #define ND_FRAME_RANGE (1u << 7)
 #define ND_FRAME_ACTIVE_DISTANCE (1u << 8)
 #define ND_FRAME_ACTIVE_ETA (1u << 9)
+
+int waypoint_total_count = 0;
+WaypointHashTable *wp_hash_table = NULL;
+int wp_result_total = 0;
+WAYPOINT_RESULT *wp_result = NULL;
 
 static float normalize_degrees(float degrees)
 {
@@ -304,6 +315,522 @@ static int add_nav_point(
     }
     ++data->nav_point_count;
     return 1;
+}
+
+static void calc_grid_key(double lat, double lon, char *grid_key, int key_len)
+{
+    const int lat_grid = (int)(lat / GRID_SIZE);
+    const int lon_grid = (int)(lon / GRID_SIZE);
+    snprintf(grid_key, (size_t)key_len, "%d_%d", lat_grid, lon_grid);
+}
+
+static WaypointHashTable *wp_ht_init(int bucket_size)
+{
+    WaypointHashTable *ht = (WaypointHashTable *)malloc(sizeof(WaypointHashTable));
+    if (ht == NULL)
+    {
+        return NULL;
+    }
+
+    ht->bucket_size = bucket_size;
+    ht->buckets = (HashNode **)calloc((size_t)bucket_size, sizeof(HashNode *));
+    if (ht->buckets == NULL)
+    {
+        free(ht);
+        return NULL;
+    }
+
+    return ht;
+}
+
+static int wp_ht_hash(const char *grid_key, int bucket_size)
+{
+    unsigned long hash = 5381;
+    int c;
+
+    while ((c = *grid_key++) != '\0')
+    {
+        hash = ((hash << 5) + hash) + (unsigned long)c;
+    }
+
+    return (int)(hash % (unsigned long)bucket_size);
+}
+
+static int wp_ht_insert(WaypointHashTable *ht, const WAYPOINT *wp)
+{
+    if (ht == NULL || wp == NULL || ht->bucket_size <= 0)
+    {
+        return -1;
+    }
+
+    char grid_key[20] = {0};
+    calc_grid_key(wp->lat, wp->lon, grid_key, (int)sizeof(grid_key));
+    const int bucket_idx = wp_ht_hash(grid_key, ht->bucket_size);
+
+    HashNode *node = ht->buckets[bucket_idx];
+    while (node != NULL && strcmp(node->grid_key, grid_key) != 0)
+    {
+        node = node->next;
+    }
+
+    if (node == NULL)
+    {
+        node = (HashNode *)malloc(sizeof(HashNode));
+        if (node == NULL)
+        {
+            return -1;
+        }
+
+        snprintf(node->grid_key, sizeof(node->grid_key), "%s", grid_key);
+        node->wp_capacity = 100;
+        node->wp_count = 0;
+        node->wp_list = (WAYPOINT *)malloc(sizeof(WAYPOINT) * (size_t)node->wp_capacity);
+        if (node->wp_list == NULL)
+        {
+            free(node);
+            return -1;
+        }
+
+        node->next = ht->buckets[bucket_idx];
+        ht->buckets[bucket_idx] = node;
+    }
+
+    if (node->wp_count >= node->wp_capacity)
+    {
+        const int new_capacity = node->wp_capacity * 2;
+        WAYPOINT *new_list = (WAYPOINT *)realloc(node->wp_list, sizeof(WAYPOINT) * (size_t)new_capacity);
+        if (new_list == NULL)
+        {
+            return -1;
+        }
+        node->wp_list = new_list;
+        node->wp_capacity = new_capacity;
+    }
+
+    node->wp_list[node->wp_count++] = *wp;
+    ++waypoint_total_count;
+    return 0;
+}
+
+static double calculate_distance_km(double lat1, double lon1, double lat2, double lon2)
+{
+    const double dlat = (lat2 - lat1) * (double)ND_DEG_TO_RAD;
+    const double dlon = (lon2 - lon1) * (double)ND_DEG_TO_RAD;
+    const double lat1_rad = lat1 * (double)ND_DEG_TO_RAD;
+    const double lat2_rad = lat2 * (double)ND_DEG_TO_RAD;
+    const double sin_dlat = sin(dlat * 0.5);
+    const double sin_dlon = sin(dlon * 0.5);
+    const double a = sin_dlat * sin_dlat + cos(lat1_rad) * cos(lat2_rad) * sin_dlon * sin_dlon;
+    const double c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+
+    return EARTH_RADIUS_KM * c;
+}
+
+void cleanResult(void)
+{
+    if (wp_result != NULL)
+    {
+        free(wp_result->data);
+        wp_result->data = NULL;
+        wp_result->count = 0;
+        wp_result->index = 0;
+    }
+
+    wp_result_total = 0;
+}
+
+static int parse_fix_line_to_waypoint(const char *line, WAYPOINT *wp)
+{
+    if (line == NULL || wp == NULL)
+    {
+        return 0;
+    }
+
+    double first_value = 0.0;
+    if (sscanf(line, "%lf", &first_value) == 1 && first_value == 99.0)
+    {
+        return -1;
+    }
+
+    memset(wp, 0, sizeof(*wp));
+    wp->num = WAYPOINT_TYPE_FIX;
+    if (sscanf(line, "%lf %lf %19s", &wp->lat, &wp->lon, wp->name) < 3)
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+static int parse_nav_line_to_waypoint(const char *line, WAYPOINT *wp)
+{
+    if (line == NULL || wp == NULL)
+    {
+        return 0;
+    }
+
+    char token_line[768];
+    snprintf(token_line, sizeof(token_line), "%s", line);
+
+    char *tokens[24];
+    const int token_count = split_tokens(token_line, tokens, 24);
+    if (token_count < 8)
+    {
+        return 0;
+    }
+
+    char *type_end = NULL;
+    const long raw_type = strtol(tokens[0], &type_end, 10);
+    if (type_end == tokens[0] || *type_end != '\0')
+    {
+        return 0;
+    }
+    if (raw_type == 99)
+    {
+        return -1;
+    }
+    if (raw_type != 2 && raw_type != 3 && raw_type != 4 && raw_type != 5)
+    {
+        return 0;
+    }
+
+    char *lat_end = NULL;
+    char *lon_end = NULL;
+    const double lat = strtod(tokens[1], &lat_end);
+    const double lon = strtod(tokens[2], &lon_end);
+    if (lat_end == tokens[1] || lon_end == tokens[2])
+    {
+        return 0;
+    }
+    if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0)
+    {
+        return 0;
+    }
+
+    memset(wp, 0, sizeof(*wp));
+    wp->num = (int)raw_type;
+    wp->lat = lat;
+    wp->lon = lon;
+    snprintf(wp->name, sizeof(wp->name), "%s", tokens[7]);
+    return wp->name[0] != '\0';
+}
+
+static int parse_simple_apt_line_to_waypoint(const char *line, WAYPOINT *wp)
+{
+    if (line == NULL || wp == NULL)
+    {
+        return 0;
+    }
+
+    static char current_airport_ident[20] = "";
+    char token_line[512];
+    snprintf(token_line, sizeof(token_line), "%s", line);
+
+    char *tokens[16];
+    const int token_count = split_tokens(token_line, tokens, 16);
+    if (token_count >= 1)
+    {
+        char *type_end = NULL;
+        const long record_type = strtol(tokens[0], &type_end, 10);
+        if (type_end != tokens[0] && *type_end == '\0')
+        {
+            if (record_type == 1 && token_count >= 5)
+            {
+                snprintf(current_airport_ident, sizeof(current_airport_ident), "%s", tokens[4]);
+                return 0;
+            }
+            else if (record_type == 14 && token_count > 3)
+            {
+                char *lat_end = NULL;
+                char *lon_end = NULL;
+                const double lat = strtod(tokens[1], &lat_end);
+                const double lon = strtod(tokens[2], &lon_end);
+                if (lat_end != tokens[1] && lon_end != tokens[2] &&
+                    lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0)
+                {
+                    memset(wp, 0, sizeof(*wp));
+                    wp->num = WAYPOINT_TYPE_TOWER;
+                    wp->lat = lat;
+                    wp->lon = lon;
+                    snprintf(wp->name,
+                             sizeof(wp->name),
+                             "%sTWR",
+                             current_airport_ident[0] != '\0' ? current_airport_ident : "APT");
+                    return 1;
+                }
+
+                return 0;
+            }
+        }
+    }
+
+    char ident[20];
+    double lat = 0.0;
+    double lon = 0.0;
+    if (sscanf(line, "%19s %lf %lf", ident, &lat, &lon) < 3)
+    {
+        return 0;
+    }
+    if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0)
+    {
+        return 0;
+    }
+
+    memset(wp, 0, sizeof(*wp));
+    wp->num = WAYPOINT_TYPE_AIRPORT;
+    wp->lat = lat;
+    wp->lon = lon;
+    snprintf(wp->name, sizeof(wp->name), "%s", ident);
+    return 1;
+}
+
+static int load_waypoint_file(const char *path, int (*parse_line)(const char *, WAYPOINT *), const char *label)
+{
+    FILE *file = fopen(path, "r");
+    if (file == NULL)
+    {
+        printf("ND %s: failed to open %s.\n", label, path);
+        return 0;
+    }
+
+    char line[1024];
+    int loaded_count = 0;
+    while (fgets(line, sizeof(line), file) != NULL)
+    {
+        char *comment = strchr(line, '#');
+        if (comment != NULL)
+        {
+            *comment = '\0';
+        }
+        comment = strstr(line, "//");
+        if (comment != NULL)
+        {
+            *comment = '\0';
+        }
+
+        char *content = trim_whitespace(line);
+        if (content == NULL || content[0] == '\0')
+        {
+            continue;
+        }
+
+        WAYPOINT wp;
+        const int parse_result = parse_line(content, &wp);
+        if (parse_result < 0)
+        {
+            break;
+        }
+        if (parse_result == 0)
+        {
+            continue;
+        }
+
+        if (waypoint_total_count >= MAX_TOTAL_WAYPOINTS)
+        {
+            break;
+        }
+        if (wp_ht_insert(wp_hash_table, &wp) == 0)
+        {
+            ++loaded_count;
+        }
+    }
+
+    fclose(file);
+    printf("ND %s: loaded %d rows from %s.\n", label, loaded_count, path);
+    return loaded_count;
+}
+
+int load_all_nav_data(void)
+{
+    if (wp_hash_table != NULL && waypoint_total_count > 0)
+    {
+        return 0;
+    }
+
+    if (wp_hash_table == NULL)
+    {
+        wp_hash_table = wp_ht_init(HASH_BUCKET_SIZE);
+        if (wp_hash_table == NULL)
+        {
+            printf("ND NAV DATA: failed to initialize waypoint hash table.\n");
+            return -1;
+        }
+    }
+
+    int total_loaded = 0;
+    char path[256];
+
+    snprintf(path, sizeof(path), "%s%s", DATA_ROOT_PATH, "earth_fix.dat");
+    total_loaded += load_waypoint_file(path, parse_fix_line_to_waypoint, "FIX");
+
+    snprintf(path, sizeof(path), "%s%s", DATA_ROOT_PATH, "earth_nav.dat");
+    total_loaded += load_waypoint_file(path, parse_nav_line_to_waypoint, "NAV");
+
+    snprintf(path, sizeof(path), "%s%s", DATA_ROOT_PATH, "apt.dat");
+    total_loaded += load_waypoint_file(path, parse_simple_apt_line_to_waypoint, "APT");
+
+    return total_loaded > 0 ? 0 : -1;
+}
+
+void free_nav_data(void)
+{
+    cleanResult();
+    free(wp_result);
+    wp_result = NULL;
+
+    if (wp_hash_table != NULL)
+    {
+        for (int i = 0; i < wp_hash_table->bucket_size; ++i)
+        {
+            HashNode *node = wp_hash_table->buckets[i];
+            while (node != NULL)
+            {
+                HashNode *next = node->next;
+                free(node->wp_list);
+                free(node);
+                node = next;
+            }
+        }
+
+        free(wp_hash_table->buckets);
+        free(wp_hash_table);
+        wp_hash_table = NULL;
+    }
+
+    waypoint_total_count = 0;
+    wp_result_total = 0;
+}
+
+int filter_waypoint_within_148km_ht(double target_lat, double target_lon, float heading)
+{
+    cleanResult();
+
+    if (wp_hash_table == NULL)
+    {
+        if (load_all_nav_data() < 0)
+        {
+            return -1;
+        }
+    }
+
+    if (wp_result == NULL)
+    {
+        wp_result = (WAYPOINT_RESULT *)malloc(sizeof(WAYPOINT_RESULT));
+        if (wp_result == NULL)
+        {
+            return -1;
+        }
+        wp_result->data = NULL;
+        wp_result->index = 0;
+        wp_result->count = 0;
+    }
+
+    wp_result->data = (WAYPOINT *)calloc(MAX_FILTER_RESULT_SIZE, sizeof(WAYPOINT));
+    if (wp_result->data == NULL)
+    {
+        return -1;
+    }
+
+    const double lat_offset = FILTER_DISTANCE_KM / 111.0;
+    double lon_km_per_degree = 111.0 * cos(fabs(target_lat) * (double)ND_DEG_TO_RAD);
+    if (fabs(lon_km_per_degree) < 1.0)
+    {
+        lon_km_per_degree = 1.0;
+    }
+    const double lon_offset = FILTER_DISTANCE_KM / lon_km_per_degree;
+    int grid_offset = (int)ceil((lat_offset > lon_offset ? lat_offset : lon_offset) / GRID_SIZE) + 1;
+    if (grid_offset < 1)
+    {
+        grid_offset = 1;
+    }
+    if (grid_offset > 10)
+    {
+        grid_offset = 10;
+    }
+
+    typedef struct GridOffset
+    {
+        int lat_off;
+        int lon_off;
+        double priority;
+    } GridOffset;
+
+    const int grid_count = (2 * grid_offset + 1) * (2 * grid_offset + 1);
+    GridOffset *grid_list = (GridOffset *)malloc(sizeof(GridOffset) * (size_t)grid_count);
+    if (grid_list == NULL)
+    {
+        cleanResult();
+        return -1;
+    }
+
+    const double heading_rad = (double)heading * (double)ND_DEG_TO_RAD;
+    const double dir_lat = cos(heading_rad);
+    const double dir_lon = sin(heading_rad);
+    int idx = 0;
+    for (int lat_off = -grid_offset; lat_off <= grid_offset; ++lat_off)
+    {
+        for (int lon_off = -grid_offset; lon_off <= grid_offset; ++lon_off)
+        {
+            grid_list[idx].lat_off = lat_off;
+            grid_list[idx].lon_off = lon_off;
+            grid_list[idx].priority = -((double)lat_off * dir_lat + (double)lon_off * dir_lon);
+            ++idx;
+        }
+    }
+
+    for (int i = 0; i < grid_count - 1; ++i)
+    {
+        for (int j = i + 1; j < grid_count; ++j)
+        {
+            if (grid_list[i].priority > grid_list[j].priority)
+            {
+                GridOffset temp = grid_list[i];
+                grid_list[i] = grid_list[j];
+                grid_list[j] = temp;
+            }
+        }
+    }
+
+    const int target_lat_grid = (int)(target_lat / GRID_SIZE);
+    const int target_lon_grid = (int)(target_lon / GRID_SIZE);
+    int valid_count = 0;
+
+    for (int g = 0; g < grid_count && valid_count < MAX_FILTER_RESULT_SIZE; ++g)
+    {
+        char grid_key[20];
+        snprintf(grid_key,
+                 sizeof(grid_key),
+                 "%d_%d",
+                 target_lat_grid + grid_list[g].lat_off,
+                 target_lon_grid + grid_list[g].lon_off);
+
+        const int bucket_idx = wp_ht_hash(grid_key, wp_hash_table->bucket_size);
+        HashNode *node = wp_hash_table->buckets[bucket_idx];
+        while (node != NULL)
+        {
+            if (strcmp(node->grid_key, grid_key) == 0)
+            {
+                for (int i = 0; i < node->wp_count && valid_count < MAX_FILTER_RESULT_SIZE; ++i)
+                {
+                    WAYPOINT candidate = node->wp_list[i];
+                    candidate.distance = calculate_distance_km(target_lat, target_lon, candidate.lat, candidate.lon);
+                    if (candidate.distance <= FILTER_DISTANCE_KM)
+                    {
+                        wp_result->data[valid_count++] = candidate;
+                    }
+                }
+                break;
+            }
+            node = node->next;
+        }
+    }
+
+    free(grid_list);
+
+    wp_result->count = valid_count;
+    wp_result->index = valid_count;
+    wp_result_total = valid_count;
+    return valid_count;
 }
 
 static int load_earth_fix_file(ND_Data *data, const char *path)
@@ -1213,4 +1740,35 @@ void nd_data_update_mock(ND_Data *data, float delta_time)
     {
         update_internal_mock_data(data, delta_time);
     }
+}
+
+int getNDData(XPCSocket sock, NDData *data)
+{
+    static ND_Data fallback_data;
+    static int initialized = 0;
+
+    (void)sock;
+
+    if (data == NULL)
+    {
+        return -1;
+    }
+
+    if (!initialized)
+    {
+        nd_data_init(&fallback_data);
+        initialized = 1;
+    }
+    else
+    {
+        nd_data_update_mock(&fallback_data, ND_DATA_DEFAULT_STEP_SEC);
+    }
+
+    data->latitude = fallback_data.latitude;
+    data->longitude = fallback_data.longitude;
+    data->heading = fallback_data.heading;
+    data->ground_speed = fallback_data.ground_speed;
+    data->true_air_speed = fallback_data.true_air_speed;
+
+    return 0;
 }

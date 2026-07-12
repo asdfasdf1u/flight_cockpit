@@ -14,6 +14,8 @@
 #include "../ND/nd_data.h"
 #include "../ND/nd_ui.h"
 
+#include "../Data/sim_data_center.h"
+
 #include "../Systems/aircraft_systems_data.h"
 #include "../EICAS1/eicas_data.h"
 #include "../EICAS1/eicas1_ui.h"
@@ -27,6 +29,7 @@
 #define COCKPIT_WINDOW_HEIGHT 900
 #define COCKPIT_TARGET_FRAME_MS 16
 #define COCKPIT_PFD_TARGET_FRAME_MS 33
+#define COCKPIT_SYNC_CHECK_LOG_MS 5000
 
 #define COCKPIT_PFD_TEXTURE_WIDTH 900
 #define COCKPIT_PFD_TEXTURE_HEIGHT 800
@@ -308,22 +311,225 @@ static void update_scene_texture(
     SDL_RenderSetViewport(renderer, NULL);
 }
 
+static AircraftSystems_WarningLevel sim_warning_level_to_aircraft(SimWarningLevel level)
+{
+    switch (level)
+    {
+    case SIM_WARNING_WARNING:
+        return AIRCRAFT_SYSTEMS_WARNING_WARNING;
+    case SIM_WARNING_CAUTION:
+        return AIRCRAFT_SYSTEMS_WARNING_CAUTION;
+    case SIM_WARNING_INFO:
+    default:
+        return AIRCRAFT_SYSTEMS_WARNING_INFO;
+    }
+}
+
+static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapshot)
+{
+    if (data == NULL || snapshot == NULL)
+    {
+        return;
+    }
+
+    data->pitch = snapshot->pitch;
+    data->roll = snapshot->roll;
+    data->yaw = snapshot->yaw;
+    data->altitude = snapshot->altitude;
+    data->agl_altitude = snapshot->agl_altitude;
+    data->throttle = snapshot->throttle;
+    data->airspeed_current = snapshot->airspeed;
+    data->airspeed_target = snapshot->airspeed_target;
+    data->vertical_speed = snapshot->vertical_speed;
+    data->heading = snapshot->heading;
+    data->heading_target = snapshot->heading_target;
+    data->altitude_target = snapshot->altitude_target;
+    data->autopilot_on = 1;
+    data->simulation_time = snapshot->sim_time;
+    data->using_file_data = 1;
+    data->file_sample_index = snapshot->pfd_frame_index;
+    data->file_sample_accumulator = 0.0f;
+    snprintf(data->flight_mode, sizeof(data->flight_mode), "%s", "SIM SNAP");
+}
+
+static void apply_sim_snapshot_to_nd(ND_Data *data, const SimSnapshot *snapshot)
+{
+    if (data == NULL || snapshot == NULL)
+    {
+        return;
+    }
+
+    data->latitude = snapshot->latitude;
+    data->longitude = snapshot->longitude;
+    data->heading = snapshot->heading;
+    data->track = snapshot->track;
+    data->ground_speed = snapshot->ground_speed;
+    data->true_air_speed = snapshot->true_air_speed;
+    data->simulation_time = snapshot->sim_time;
+    data->data_frame_index = snapshot->nd_frame_index;
+    data->data_frame_elapsed = snapshot->sim_time;
+    nd_data_recalculate_nav_points(data);
+}
+
+static void apply_sim_snapshot_to_aircraft_systems(AircraftSystems_Data *data, const SimSnapshot *snapshot)
+{
+    if (data == NULL || snapshot == NULL)
+    {
+        return;
+    }
+
+    data->engine_left.n1 = snapshot->n1_left;
+    data->engine_left.n2 = snapshot->n2_left;
+    data->engine_left.egt = snapshot->egt_left;
+    data->engine_left.fuel_flow = snapshot->fuel_flow_left;
+    data->engine_left.oil_pressure = snapshot->oil_pressure_left;
+    data->engine_left.oil_temp = snapshot->oil_temperature_left;
+    data->engine_left.oil_quantity = snapshot->oil_quantity_left;
+    data->engine_left.vibration = snapshot->vibration_left;
+    data->engine_left.running = snapshot->n1_left > 20.0f || snapshot->n2_left > 20.0f;
+
+    data->engine_right.n1 = snapshot->n1_right;
+    data->engine_right.n2 = snapshot->n2_right;
+    data->engine_right.egt = snapshot->egt_right;
+    data->engine_right.fuel_flow = snapshot->fuel_flow_right;
+    data->engine_right.oil_pressure = snapshot->oil_pressure_right;
+    data->engine_right.oil_temp = snapshot->oil_temperature_right;
+    data->engine_right.oil_quantity = snapshot->oil_quantity_right;
+    data->engine_right.vibration = snapshot->vibration_right;
+    data->engine_right.running = snapshot->n1_right > 20.0f || snapshot->n2_right > 20.0f;
+
+    data->total_air_temperature = snapshot->total_air_temperature;
+    data->fuel_quantity = snapshot->fuel_quantity;
+    data->hydraulic_pressure = snapshot->hydraulic_pressure;
+    data->cabin_pressure = snapshot->cabin_pressure;
+    data->battery_voltage = snapshot->battery_voltage;
+    data->gear_down = snapshot->gear_down;
+    data->flaps_level = snapshot->flaps_level;
+    data->parking_brake_on = snapshot->parking_brake_on;
+    data->simulation_time = snapshot->sim_time;
+
+    data->warning_count = 0;
+    for (int i = 0; i < snapshot->warning_count && i < AIRCRAFT_SYSTEMS_MAX_WARNINGS; ++i)
+    {
+        snprintf(data->warnings[i].text, sizeof(data->warnings[i].text), "%s", snapshot->warnings[i].text);
+        data->warnings[i].level = sim_warning_level_to_aircraft(snapshot->warnings[i].level);
+        data->warnings[i].active = snapshot->warnings[i].active;
+        ++data->warning_count;
+    }
+}
+
+static void apply_sim_snapshot_to_cockpit_modules(
+    const SimSnapshot *snapshot,
+    PFD_Data *pfd_data,
+    ND_Data *nd_data,
+    AircraftSystems_Data *systems_data)
+{
+    apply_sim_snapshot_to_pfd(pfd_data, snapshot);
+    apply_sim_snapshot_to_nd(nd_data, snapshot);
+    apply_sim_snapshot_to_aircraft_systems(systems_data, snapshot);
+}
+
 static void print_data_source_summary(
+    int use_unified_data,
+    const SimDataCenter *sim_data_center,
     const PFD_Data *pfd_data,
     const ND_Data *nd_data,
     int eicas_data_loaded,
     const FMC_Data *fmc_data)
 {
-    printf("Cockpit Data Sources: unified DataCenter=not present; modules use independent loaders.\n");
-    printf("Cockpit Data Sources: PFD=%s; ND=%s%s%s%s; EICAS=%s; FMC=%s.\n",
-           pfd_data != NULL && pfd_data->using_file_data ? "assets/pfd.dat" : "mock fallback",
-           nd_data != NULL && nd_data->data_file_loaded ? "assets/nd.dat" : "mock flight fallback",
-           nd_data != NULL && nd_data->earth_fix_loaded ? " + earth_fix.dat" : "",
-           nd_data != NULL && nd_data->earth_nav_loaded ? " + earth_nav.dat" : "",
-           nd_data != NULL && nd_data->apt_loaded ? " + apt.dat" : "",
-           eicas_data_loaded ? "assets/eicas1.dat/assets/eicas2.dat" : "mock fallback",
-           fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : "default mock route");
-    printf("Cockpit Data Sync: PFD/ND/EICAS/FMC/Cabin still have separate clocks or playback state.\n");
+    if (use_unified_data)
+    {
+        printf("Cockpit Data Sources: unified DataCenter=active; one SimSnapshot drives embedded PFD/ND/EICAS.\n");
+        printf("Cockpit Data Sources: DataCenter pfd=%s nd=%s eicas=%s; FMC=%s.\n",
+               sim_data_center_has_pfd_data(sim_data_center) ? "available" : "default snapshot fallback",
+               sim_data_center_has_nd_data(sim_data_center) ? "available" : "default snapshot fallback",
+               sim_data_center_has_eicas_data(sim_data_center) ? "available" : "default snapshot fallback",
+               fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : "no unified route, existing FMC state");
+        printf("Cockpit Data Sync: unified sim_time advances once per frame in Cockpit.\n");
+    }
+    else
+    {
+        printf("Cockpit Data Sources: unified DataCenter unavailable; using legacy/module fallback path.\n");
+        printf("Cockpit Data Sources: PFD=%s; ND=%s%s%s%s; EICAS=%s; FMC=%s.\n",
+               pfd_data != NULL && pfd_data->using_file_data ? "assets/pfd.dat" : "mock fallback",
+               nd_data != NULL && nd_data->data_file_loaded ? "assets/nd.dat" : "mock flight fallback",
+               nd_data != NULL && nd_data->earth_fix_loaded ? " + earth_fix.dat" : "",
+               nd_data != NULL && nd_data->earth_nav_loaded ? " + earth_nav.dat" : "",
+               nd_data != NULL && nd_data->apt_loaded ? " + apt.dat" : "",
+               eicas_data_loaded ? "assets/eicas1.dat/assets/eicas2.dat" : "mock fallback",
+               fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : "default mock route");
+        printf("Cockpit Data Sync: fallback mode keeps legacy module clocks/playback state.\n");
+    }
+    fflush(stdout);
+}
+
+static void print_cockpit_sync_check(
+    Uint32 current_ticks,
+    Uint32 *last_log_ticks,
+    int use_unified_data,
+    const SimSnapshot *snapshot,
+    const PFD_Data *pfd_data,
+    const ND_Data *nd_data,
+    const AircraftSystems_Data *systems_data,
+    const FMC_Data *fmc_data)
+{
+    if (last_log_ticks == NULL)
+    {
+        return;
+    }
+
+    if (*last_log_ticks != 0 && current_ticks - *last_log_ticks < COCKPIT_SYNC_CHECK_LOG_MS)
+    {
+        return;
+    }
+    *last_log_ticks = current_ticks;
+
+    printf("[Cockpit Sync Check]\n");
+    printf("mode=%s\n", use_unified_data ? "unified SimDataCenter" : "legacy fallback");
+    if (use_unified_data && snapshot != NULL)
+    {
+        printf("sim_time=%.2f\n", snapshot->sim_time);
+        printf("snapshot: alt=%.1f, spd=%.1f, hdg=%.1f, lat=%.6f, lon=%.6f, n1=%.1f/%.1f, egt=%.1f/%.1f\n",
+               snapshot->altitude,
+               snapshot->airspeed,
+               snapshot->heading,
+               snapshot->latitude,
+               snapshot->longitude,
+               snapshot->n1_left,
+               snapshot->n1_right,
+               snapshot->egt_left,
+               snapshot->egt_right);
+    }
+    else
+    {
+        printf("sim_time=not unified (pfd=%.2f, nd=%.2f, eicas=%.2f)\n",
+               pfd_data != NULL ? pfd_data->simulation_time : -1.0f,
+               nd_data != NULL ? nd_data->simulation_time : -1.0f,
+               systems_data != NULL ? systems_data->simulation_time : -1.0f);
+        printf("snapshot: unavailable (Cockpit is using legacy fallback)\n");
+    }
+    printf("pfd: alt=%.1f, spd=%.1f, hdg=%.1f, source=%s, frame=%d\n",
+           pfd_data != NULL ? pfd_data->altitude : 0.0f,
+           pfd_data != NULL ? pfd_data->airspeed_current : 0.0f,
+           pfd_data != NULL ? pfd_data->heading : 0.0f,
+           use_unified_data ? "SimSnapshot" : (pfd_data != NULL && pfd_data->using_file_data ? "pfd.dat/legacy" : "mock"),
+           pfd_data != NULL ? pfd_data->file_sample_index : -1);
+    printf("nd: lat=%.6f, lon=%.6f, hdg=%.1f, gs=%.1f, source=%s, frame=%d\n",
+           nd_data != NULL ? nd_data->latitude : 0.0,
+           nd_data != NULL ? nd_data->longitude : 0.0,
+           nd_data != NULL ? nd_data->heading : 0.0f,
+           nd_data != NULL ? nd_data->ground_speed : 0.0f,
+           use_unified_data ? "SimSnapshot" : (nd_data != NULL && nd_data->data_file_loaded ? "nd.dat/legacy" : "mock"),
+           nd_data != NULL ? nd_data->data_frame_index : -1);
+    printf("eicas: n1=%.1f/%.1f, egt=%.1f/%.1f, source=%s\n",
+           systems_data != NULL ? systems_data->engine_left.n1 : 0.0f,
+           systems_data != NULL ? systems_data->engine_right.n1 : 0.0f,
+           systems_data != NULL ? systems_data->engine_left.egt : 0.0f,
+           systems_data != NULL ? systems_data->engine_right.egt : 0.0f,
+           use_unified_data ? "SimSnapshot" : "legacy eicas/mock");
+    printf("fmc: route_points=%d, route_source=%s\n",
+           fmc_data != NULL ? fmc_data->route_count : 0,
+           fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : (use_unified_data ? "no unified route, existing FMC state" : "independent/default"));
     fflush(stdout);
 }
 
@@ -656,18 +862,40 @@ int cockpit_main_run(void)
     nd_data_init(&nd_data);
     aircraft_systems_data_init(&systems_data);
     eicas_data_init(&eicas_data);
-    const int eicas_data_loaded = eicas_data_load_files(&eicas_data, "assets/eicas1.dat", "assets/eicas2.dat");
-    if (eicas_data_loaded)
+    fmc_data_init(&fmc_data);
+
+    static SimDataCenter sim_data_center;
+    const int use_unified_data = sim_data_center_init(&sim_data_center);
+    int eicas_data_loaded = 0;
+    if (use_unified_data)
     {
-        eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
+        const SimSnapshot *snapshot = sim_data_center_snapshot(&sim_data_center);
+        apply_sim_snapshot_to_cockpit_modules(snapshot, &pfd_data, &nd_data, &systems_data);
+        printf("Cockpit: unified SimDataCenter initialized; embedded displays will use one SimSnapshot.\n");
+        if (!sim_data_center_has_pfd_data(&sim_data_center) ||
+            !sim_data_center_has_nd_data(&sim_data_center) ||
+            !sim_data_center_has_eicas_data(&sim_data_center))
+        {
+            printf("Cockpit: unified snapshot has partial source data; missing fields use SimSnapshot defaults.\n");
+        }
+        printf("Cockpit FMC: no unified route is exposed by SimDataCenter yet; keeping existing FMC state.\n");
+        fflush(stdout);
     }
     else
     {
-        printf("Cockpit EICAS: using mock fallback data.\n");
-        fflush(stdout);
+        printf("Cockpit: unified SimDataCenter initialization failed; falling back to legacy/module data path.\n");
+        eicas_data_loaded = eicas_data_load_files(&eicas_data, "assets/eicas1.dat", "assets/eicas2.dat");
+        if (eicas_data_loaded)
+        {
+            eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
+        }
+        else
+        {
+            printf("Cockpit EICAS: using mock fallback data.\n");
+            fflush(stdout);
+        }
     }
-    fmc_data_init(&fmc_data);
-    print_data_source_summary(&pfd_data, &nd_data, eicas_data_loaded, &fmc_data);
+    print_data_source_summary(use_unified_data, &sim_data_center, &pfd_data, &nd_data, eicas_data_loaded, &fmc_data);
 
     FMC_Display_Assets fmc_display_assets;
     fmc_display_assets_load(renderer, &fmc_display_assets);
@@ -694,6 +922,7 @@ int cockpit_main_run(void)
     SDL_Event event;
     Uint32 last_ticks = SDL_GetTicks();
     Uint32 last_pfd_render_ticks = 0;
+    Uint32 last_sync_check_log_ticks = 0;
 
     while (running)
     {
@@ -877,18 +1106,29 @@ int cockpit_main_run(void)
             delta_time = 0.1f;
         }
 
-        pfd_data_update_mock(&pfd_data, delta_time);
-        nd_data_update_mock(&nd_data, delta_time);
-        if (eicas_data_loaded)
+        const SimSnapshot *snapshot = NULL;
+        if (use_unified_data)
         {
-            eicas_data_update(&eicas_data, delta_time);
-            eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
+            sim_data_center_update(&sim_data_center, delta_time);
+            snapshot = sim_data_center_snapshot(&sim_data_center);
+            apply_sim_snapshot_to_cockpit_modules(snapshot, &pfd_data, &nd_data, &systems_data);
         }
         else
         {
-            aircraft_systems_data_update_mock(&systems_data, delta_time);
+            pfd_data_update_mock(&pfd_data, delta_time);
+            nd_data_update_mock(&nd_data, delta_time);
+            if (eicas_data_loaded)
+            {
+                eicas_data_update(&eicas_data, delta_time);
+                eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
+            }
+            else
+            {
+                aircraft_systems_data_update_mock(&systems_data, delta_time);
+            }
+            fmc_data_update_mock(&fmc_data, delta_time);
         }
-        fmc_data_update_mock(&fmc_data, delta_time);
+        print_cockpit_sync_check(current_ticks, &last_sync_check_log_ticks, use_unified_data, snapshot, &pfd_data, &nd_data, &systems_data, &fmc_data);
 
         const int refresh_pfd = last_pfd_render_ticks == 0 ||
                                 current_ticks - last_pfd_render_ticks >= COCKPIT_PFD_TARGET_FRAME_MS;
@@ -910,6 +1150,7 @@ int cockpit_main_run(void)
 
     SDL_StopTextInput();
     fmc_data_destroy(&fmc_data);
+    sim_data_center_destroy(&sim_data_center);
     fmc_display_assets_destroy(&fmc_display_assets);
     pfd_ui_clear_text_cache(renderer);
     destroy_render_targets(&targets);

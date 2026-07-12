@@ -1,6 +1,13 @@
 #ifndef ND_DATA_H
 #define ND_DATA_H
 
+#include "../Util/xplaneConnect.h"
+
+#define MAX_TOTAL_WAYPOINTS 240000
+#define HASH_BUCKET_SIZE 1009
+#define GRID_SIZE 1.0
+#define DATA_ROOT_PATH "assets/"
+
 #define ND_MAX_NAV_POINTS 6144
 #define ND_MAX_DATA_FRAMES 4096
 #define ND_MAX_VISIBLE_FIX_POINTS 80
@@ -48,6 +55,47 @@ typedef struct ND_DataFrame
     unsigned int fields;
 } ND_DataFrame;
 
+typedef struct NDData
+{
+    double latitude;
+    double longitude;
+
+    float ground_speed;
+    float true_air_speed;
+    float heading;
+} NDData;
+
+typedef struct WAYPOINT
+{
+    int num;
+    double lat;
+    double lon;
+    char name[20];
+    double distance;
+} WAYPOINT;
+
+typedef struct HashNode
+{
+    char grid_key[20];
+    WAYPOINT *wp_list;
+    int wp_count;
+    int wp_capacity;
+    struct HashNode *next;
+} HashNode;
+
+typedef struct WaypointHashTable
+{
+    HashNode **buckets;
+    int bucket_size;
+} WaypointHashTable;
+
+typedef struct WAYPOINT_RESULT
+{
+    WAYPOINT *data;
+    int index;
+    int count;
+} WAYPOINT_RESULT;
+
 typedef struct ND_Data
 {
     double latitude;
@@ -91,6 +139,16 @@ typedef struct ND_Data
     int apt_airport_count;
     int apt_tower_count;
 } ND_Data;
+
+extern int waypoint_total_count;
+extern WaypointHashTable *wp_hash_table;
+extern int wp_result_total;
+extern WAYPOINT_RESULT *wp_result;
+
+int getNDData(XPCSocket sock, NDData *data);
+int load_all_nav_data(void);
+void free_nav_data(void);
+int filter_waypoint_within_148km_ht(double target_lat, double target_lon, float heading);
 
 void nd_data_init(ND_Data *data);
 void nd_data_update_mock(ND_Data *data, float delta_time);
