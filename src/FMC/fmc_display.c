@@ -464,7 +464,12 @@ static void draw_route_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_La
     }
 
     snprintf(page_text, sizeof(page_text), "RTE %d/%d", page_index, page_count);
-    draw_fmc_header(renderer, font, layout, "ACT FPLN", "", page_text);
+    draw_fmc_header(renderer,
+                    font,
+                    layout,
+                    data != NULL && fmc_data_route_has_uncommitted_changes(data) ? "MOD FPLN" : "ACT FPLN",
+                    "",
+                    page_text);
 
     if (page_index == 1)
     {

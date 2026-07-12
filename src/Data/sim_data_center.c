@@ -288,14 +288,16 @@ static void init_planned_route(SimDataCenter *center)
         init_fallback_route(&center->planned_route);
     }
     center->route_initialized = center->planned_route.valid;
+    center->route_revision = center->planned_route.valid ? 1 : 0;
 
-    printf("SimDataCenter route: source=%s origin=%s destination=%s points=%d first=%s last=%s.\n",
+    printf("SimDataCenter route: source=%s origin=%s destination=%s points=%d first=%s last=%s revision=%d.\n",
            sim_data_center_route_source_name(center->planned_route.source),
            center->planned_route.origin,
            center->planned_route.destination,
            center->planned_route.point_count,
            center->planned_route.point_count > 0 ? center->planned_route.points[0].ident : "----",
-           center->planned_route.point_count > 0 ? center->planned_route.points[center->planned_route.point_count - 1].ident : "----");
+           center->planned_route.point_count > 0 ? center->planned_route.points[center->planned_route.point_count - 1].ident : "----",
+           center->route_revision);
     fflush(stdout);
 }
 
@@ -588,6 +590,30 @@ void sim_data_center_set_route(SimDataCenter *center, const SimPlannedRoute *rou
 
     center->planned_route = *route;
     center->route_initialized = 1;
+    center->route_revision++;
+    printf("SimDataCenter route: committed revision=%d origin=%s destination=%s points=%d.\n",
+           center->route_revision,
+           center->planned_route.origin,
+           center->planned_route.destination,
+           center->planned_route.point_count);
+}
+
+void sim_data_center_clear_route(SimDataCenter *center)
+{
+    if (center == NULL)
+    {
+        return;
+    }
+
+    memset(&center->planned_route, 0, sizeof(center->planned_route));
+    center->route_initialized = 0;
+    center->route_revision++;
+    printf("SimDataCenter route: cleared revision=%d.\n", center->route_revision);
+}
+
+int sim_data_center_route_revision(const SimDataCenter *center)
+{
+    return center != NULL ? center->route_revision : 0;
 }
 
 const SimSnapshot *sim_data_center_snapshot(const SimDataCenter *center)

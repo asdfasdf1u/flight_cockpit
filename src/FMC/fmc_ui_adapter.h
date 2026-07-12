@@ -55,6 +55,9 @@ typedef struct FMC_Data
     char route_via[FMC_TEXT_LEN];
     char flight_no[FMC_TEXT_LEN];
     char route_points[FMC_MAX_ROUTE_POINTS][FMC_TEXT_LEN];
+    double origin_latitude;
+    double origin_longitude;
+    int origin_has_position;
     double route_latitudes[FMC_MAX_ROUTE_POINTS];
     double route_longitudes[FMC_MAX_ROUTE_POINTS];
     int route_has_position[FMC_MAX_ROUTE_POINTS];
@@ -93,6 +96,9 @@ typedef struct FMC_Data
     int scratchpad_len;
     char message[FMC_TEXT_LEN];
     int origin_exec_pending;
+    int route_mod_pending;
+    int route_clear_pending;
+    int route_delete_pending;
 } FMC_Data;
 
 void fmc_data_init(FMC_Data *data);
@@ -119,5 +125,8 @@ int fmc_data_activate_current_phase(FMC_Data *data);
 int fmc_data_exec_route_selection(FMC_Data *data);
 int fmc_data_apply_planned_route(FMC_Data *data, const SimPlannedRoute *route);
 int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route);
+int fmc_data_route_has_uncommitted_changes(const FMC_Data *data);
+int fmc_data_route_clear_pending(const FMC_Data *data);
+void fmc_data_mark_route_committed(FMC_Data *data);
 
 #endif

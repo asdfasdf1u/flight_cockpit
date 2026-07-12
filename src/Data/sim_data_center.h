@@ -15,6 +15,7 @@ typedef struct SimDataCenter
     float playback_speed;
     int initialized;
     int route_initialized;
+    int route_revision;
 
     double nd_latitude;
     double nd_longitude;
@@ -27,6 +28,8 @@ void sim_data_center_update(SimDataCenter *center, float delta_time);
 void sim_data_center_set_playback_speed(SimDataCenter *center, float playback_speed);
 void sim_data_center_set_position(SimDataCenter *center, double latitude, double longitude);
 void sim_data_center_set_route(SimDataCenter *center, const SimPlannedRoute *route);
+void sim_data_center_clear_route(SimDataCenter *center);
+int sim_data_center_route_revision(const SimDataCenter *center);
 
 const SimSnapshot *sim_data_center_snapshot(const SimDataCenter *center);
 const SimPlannedRoute *sim_data_center_route(const SimDataCenter *center);

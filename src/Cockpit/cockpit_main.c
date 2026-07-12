@@ -661,6 +661,109 @@ static void handle_fmc_keydown(FMC_Data *data, SDL_Keycode key)
     }
 }
 
+static int cockpit_view_shows_nd(Cockpit_ViewMode view_mode)
+{
+    return view_mode == COCKPIT_VIEW_MAIN || view_mode == COCKPIT_VIEW_ND_ZOOM;
+}
+
+static int sync_nd_route_from_sim_center(ND_Data *data, const SimDataCenter *sim_data_center, int force_check, const char *reason)
+{
+    if (data == NULL || sim_data_center == NULL)
+    {
+        return 0;
+    }
+
+    const int revision = sim_data_center_route_revision(sim_data_center);
+    const SimPlannedRoute *route = sim_data_center_route(sim_data_center);
+    if (force_check)
+    {
+        printf("ND activated: current route revision=%d cached route revision=%d reason=%s.\n",
+               revision,
+               data->route_cached_revision,
+               reason != NULL ? reason : "activate");
+    }
+
+    return nd_data_sync_planned_route(data, route, revision, force_check);
+}
+
+static int route_has_drawable_coordinates(const SimPlannedRoute *route)
+{
+    if (route == NULL || !route->valid || route->point_count <= 0)
+    {
+        return 0;
+    }
+
+    int drawable_count = 0;
+    for (int i = 0; i < route->point_count; ++i)
+    {
+        const SimRoutePoint *point = &route->points[i];
+        if (point->has_position &&
+            point->latitude >= -90.0 && point->latitude <= 90.0 &&
+            point->longitude >= -180.0 && point->longitude <= 180.0 &&
+            (point->latitude != 0.0 || point->longitude != 0.0))
+        {
+            drawable_count++;
+        }
+    }
+
+    return drawable_count > 0;
+}
+
+static int submit_fmc_route_to_sim_center(FMC_Data *data, SimDataCenter *sim_data_center)
+{
+    if (data == NULL || sim_data_center == NULL)
+    {
+        return 0;
+    }
+
+    const int before_revision = sim_data_center_route_revision(sim_data_center);
+    printf("FMC Route: EXEC submit requested; draft_points=%d pending_mod=%d clear_pending=%d revision_before=%d.\n",
+           data->route_count,
+           fmc_data_route_has_uncommitted_changes(data),
+           fmc_data_route_clear_pending(data),
+           before_revision);
+
+    if (fmc_data_route_clear_pending(data))
+    {
+        sim_data_center_clear_route(sim_data_center);
+        fmc_data_mark_route_committed(data);
+        snprintf(data->message, sizeof(data->message), "RTE CLEARED");
+        printf("FMC Route: clear committed; planned_route points=0 revision=%d pending_mod=%d.\n",
+               sim_data_center_route_revision(sim_data_center),
+               fmc_data_route_has_uncommitted_changes(data));
+        return 1;
+    }
+
+    SimPlannedRoute route;
+    if (!fmc_data_export_planned_route(data, &route) ||
+        route.origin[0] == '\0' ||
+        route.destination[0] == '\0' ||
+        route.point_count < 2 ||
+        !route_has_drawable_coordinates(&route))
+    {
+        snprintf(data->message, sizeof(data->message), "RTE EXEC FAIL");
+        printf("FMC Route: EXEC failed; draft origin=%s destination=%s exported_points=%d has_coordinates=%d revision=%d pending_mod=%d.\n",
+               route.origin[0] != '\0' ? route.origin : "----",
+               route.destination[0] != '\0' ? route.destination : "----",
+               route.point_count,
+               route.has_coordinates,
+               sim_data_center_route_revision(sim_data_center),
+               fmc_data_route_has_uncommitted_changes(data));
+        return 0;
+    }
+
+    sim_data_center_set_route(sim_data_center, &route);
+    fmc_data_mark_route_committed(data);
+    snprintf(data->message, sizeof(data->message), "RTE %s-%s EXEC", route.origin, route.destination);
+    printf("FMC Route: EXEC committed; origin=%s destination=%s planned_route points=%d revision=%d pending_mod=%d.\n",
+           route.origin,
+           route.destination,
+           route.point_count,
+           sim_data_center_route_revision(sim_data_center),
+           fmc_data_route_has_uncommitted_changes(data));
+    return 1;
+}
+
 static int handle_nd_map_keydown(ND_Data *data, SDL_Keycode key)
 {
     if (data == NULL)
@@ -703,14 +806,47 @@ static void map_zoom_click_to_fmc(int screen_x, int screen_y, SDL_Rect zoom_rect
     *fmc_y = (screen_y - zoom_rect.y) * COCKPIT_FMC_TEXTURE_HEIGHT / zoom_rect.h;
 }
 
-static int handle_cockpit_fmc_panel_button(FMC_Event_State *state, FMC_Data *data, int fmc_x, int fmc_y)
+static int handle_cockpit_fmc_panel_button(
+    FMC_Event_State *state,
+    FMC_Data *data,
+    SimDataCenter *sim_data_center,
+    int *fmc_uses_unified_route,
+    int fmc_x,
+    int fmc_y)
 {
     if (data == NULL)
     {
         return 0;
     }
 
-    return fmc_event_handle_mouse_button_base(state, data, fmc_x, fmc_y);
+    const int button_count = fmc_key_button_count();
+    for (int i = 0; i < button_count; ++i)
+    {
+        const FMC_Button *button = fmc_key_button_at(i);
+        if (button != NULL && fmc_key_button_contains_base_point(button, fmc_x, fmc_y))
+        {
+            if (state != NULL)
+            {
+                state->hovered_button_index = i;
+                state->hovered_button = button->id;
+            }
+
+            if (button->id == FMC_BUTTON_EXEC)
+            {
+                const int committed = submit_fmc_route_to_sim_center(data, sim_data_center);
+                if (fmc_uses_unified_route != NULL)
+                {
+                    *fmc_uses_unified_route = committed && sim_data_center_has_route(sim_data_center);
+                }
+                return 1;
+            }
+
+            break;
+        }
+    }
+
+    const int handled = fmc_event_handle_mouse_button_base(state, data, fmc_x, fmc_y);
+    return handled;
 }
 
 static Cockpit_ViewMode cockpit_module_hit_test(const Cockpit_Layout *layout, float world_x, float world_y)
@@ -1093,6 +1229,10 @@ int cockpit_main_run(void)
         printf("Cockpit FMC: unified route unavailable; keeping existing FMC state.\n");
         fflush(stdout);
     }
+    if (sim_data_ready)
+    {
+        sync_nd_route_from_sim_center(&nd_data, sim_data_center, 1, "startup");
+    }
     print_data_source_summary(sim_data_ready, sim_data_center, &pfd_data, &nd_data, eicas_data_loaded, &fmc_data, fmc_uses_unified_route);
     cockpit_startup_log(0, "Data initialized (sim_data_ready=%d, eicas_data_loaded=%d).", sim_data_ready, eicas_data_loaded);
 
@@ -1130,6 +1270,7 @@ int cockpit_main_run(void)
     while (running)
     {
         const Uint32 frame_start = SDL_GetTicks();
+        const Cockpit_ViewMode view_mode_before_events = view_mode;
 
         while (SDL_PollEvent(&event))
         {
@@ -1171,7 +1312,12 @@ int cockpit_main_run(void)
                         int fmc_x = 0;
                         int fmc_y = 0;
                         map_zoom_click_to_fmc(event.button.x, event.button.y, zoom_rect, &fmc_x, &fmc_y);
-                        handle_cockpit_fmc_panel_button(&fmc_event_state, &fmc_data, fmc_x, fmc_y);
+                        handle_cockpit_fmc_panel_button(&fmc_event_state,
+                                                        &fmc_data,
+                                                        sim_data_center,
+                                                        &fmc_uses_unified_route,
+                                                        fmc_x,
+                                                        fmc_y);
                     }
                 }
                 else if (view_mode == COCKPIT_VIEW_PFD_ZOOM)
@@ -1308,8 +1454,29 @@ int cockpit_main_run(void)
                 }
                 else if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
                 {
-                    handle_fmc_keydown(&fmc_data, event.key.keysym.sym);
+                    if ((event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER) &&
+                        fmc_data.current_page == FMC_PAGE_ROUTE)
+                    {
+                        fmc_uses_unified_route = submit_fmc_route_to_sim_center(&fmc_data, sim_data_center) &&
+                                                 sim_data_center_has_route(sim_data_center);
+                    }
+                    else
+                    {
+                        handle_fmc_keydown(&fmc_data, event.key.keysym.sym);
+                    }
                 }
+            }
+        }
+
+        if (sim_data_ready)
+        {
+            if (!cockpit_view_shows_nd(view_mode_before_events) && cockpit_view_shows_nd(view_mode))
+            {
+                sync_nd_route_from_sim_center(&nd_data, sim_data_center, 1, "view");
+            }
+            else if (cockpit_view_shows_nd(view_mode))
+            {
+                sync_nd_route_from_sim_center(&nd_data, sim_data_center, 0, "visible");
             }
         }
 

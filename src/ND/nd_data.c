@@ -295,6 +295,26 @@ static void set_nav_point(
     point->active = active;
 }
 
+static int nd_valid_route_position(double latitude, double longitude)
+{
+    return latitude >= -90.0 && latitude <= 90.0 &&
+           longitude >= -180.0 && longitude <= 180.0 &&
+           !(latitude == 0.0 && longitude == 0.0);
+}
+
+static void nd_clear_route_cache(ND_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    memset(data->route_points, 0, sizeof(data->route_points));
+    data->route_point_count = 0;
+    data->route_segment_count = 0;
+    data->route_valid = 0;
+}
+
 static int add_nav_point(
     ND_Data *data,
     const char *ident,
@@ -1531,6 +1551,67 @@ void nd_data_recalculate_nav_points(ND_Data *data)
     update_active_waypoint_info(data);
 }
 
+int nd_data_sync_planned_route(ND_Data *data, const SimPlannedRoute *route, int route_revision, int force_check)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    if (data->route_cached_revision == route_revision)
+    {
+        if (force_check)
+        {
+            printf("ND route sync: current route revision=%d cached route revision=%d route unchanged; displayed waypoint count=%d displayed segment count=%d.\n",
+                   route_revision,
+                   data->route_cached_revision,
+                   data->route_point_count,
+                   data->route_segment_count);
+        }
+        return 0;
+    }
+
+    const int previous_revision = data->route_cached_revision;
+    nd_clear_route_cache(data);
+    data->route_cached_revision = route_revision;
+
+    if (route != NULL && route->valid)
+    {
+        for (int i = 0; i < route->point_count && data->route_point_count < ND_MAX_ROUTE_POINTS; ++i)
+        {
+            const SimRoutePoint *source = &route->points[i];
+            if (source->ident[0] == '\0')
+            {
+                continue;
+            }
+
+            ND_RoutePoint *target = &data->route_points[data->route_point_count++];
+            snprintf(target->ident, sizeof(target->ident), "%.*s", ND_NAME_LEN - 1, source->ident);
+            target->has_position = source->has_position &&
+                                   nd_valid_route_position(source->latitude, source->longitude);
+            target->latitude = target->has_position ? source->latitude : 0.0;
+            target->longitude = target->has_position ? source->longitude : 0.0;
+        }
+    }
+
+    data->route_valid = data->route_point_count > 0;
+    data->route_segment_count = 0;
+    for (int i = 1; i < data->route_point_count; ++i)
+    {
+        if (data->route_points[i - 1].has_position && data->route_points[i].has_position)
+        {
+            data->route_segment_count++;
+        }
+    }
+
+    printf("ND route sync: current route revision=%d cached route revision=%d route refreshed; displayed waypoint count=%d displayed segment count=%d.\n",
+           route_revision,
+           previous_revision,
+           data->route_point_count,
+           data->route_segment_count);
+    return previous_revision != route_revision;
+}
+
 void nd_data_set_range(ND_Data *data, float range_nm)
 {
     if (data == NULL)
@@ -1734,6 +1815,7 @@ void nd_data_init(ND_Data *data)
     data->active_point_index = 0;
     data->simulation_time = 0.0f;
     data->data_frame_step_sec = ND_DATA_DEFAULT_STEP_SEC;
+    data->route_cached_revision = -1;
     nd_data_set_map_layer_visible(data, ND_MAP_LAYER_WPT, 1);
     nd_data_set_map_layer_visible(data, ND_MAP_LAYER_ARPT, 1);
     nd_data_set_map_layer_visible(data, ND_MAP_LAYER_STA, 1);

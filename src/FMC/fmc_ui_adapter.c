@@ -21,6 +21,8 @@ static void set_text(char *dest, int dest_size, const char *text)
     snprintf(dest, (size_t)dest_size, "%s", text);
 }
 
+static int fmc_valid_position(double latitude, double longitude);
+
 static void sync_library_route_fields(const FMC_Data *data)
 {
     if (data == NULL)
@@ -50,6 +52,25 @@ static void update_exec_ready(FMC_Data *data)
     }
 }
 
+static void mark_route_modified(FMC_Data *data, const char *reason)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    if (!data->route_mod_pending)
+    {
+        printf("FMC Route: MOD entered (%s); draft origin=%s destination=%s points=%d.\n",
+               reason != NULL ? reason : "edit",
+               data->origin[0] != '\0' ? data->origin : "----",
+               data->destination[0] != '\0' ? data->destination : "----",
+               data->route_count);
+    }
+
+    data->route_mod_pending = 1;
+}
+
 static void clear_auto_route(FMC_Data *data)
 {
     if (data == NULL)
@@ -75,6 +96,18 @@ static void clear_auto_route(FMC_Data *data)
         via_to_list_count = 0;
     }
     rte_index = 1;
+}
+
+static void set_origin_position(FMC_Data *data, double latitude, double longitude, int has_position)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->origin_latitude = latitude;
+    data->origin_longitude = longitude;
+    data->origin_has_position = has_position;
 }
 
 static int add_route_point_geo(FMC_Data *data, const char *ident, double latitude, double longitude, int has_position)
@@ -153,6 +186,8 @@ static int add_viato_route_point(FMC_Data *data, const char *ident)
     via_to_list_count++;
     update_exec_ready(data);
     fmc_data_clear_scratchpad(data);
+    data->route_clear_pending = 0;
+    mark_route_modified(data, "add waypoint");
     return 1;
 }
 
@@ -196,6 +231,7 @@ static int load_fms_route_file(FMC_Data *data, const char *path)
             if (strcmp(ident, data->origin) == 0)
             {
                 seen_origin = 1;
+                set_origin_position(data, latitude, longitude, fmc_valid_position(latitude, longitude));
             }
             continue;
         }
@@ -352,10 +388,19 @@ static int set_airport_field(FMC_Data *data, char *dest_field, int dest_size, co
     }
 
     set_text(dest_field, dest_size, airport->icao_code);
+    if (dest_field == data->origin)
+    {
+        set_origin_position(data,
+                            airport->datum_lat,
+                            airport->datum_lon,
+                            fmc_valid_position(airport->datum_lat, airport->datum_lon));
+    }
     fmc_data_clear_scratchpad(data);
     sync_library_route_fields(data);
     update_exec_ready(data);
     update_auto_route(data);
+    data->route_clear_pending = 0;
+    mark_route_modified(data, label);
     if (data->origin[0] != '\0' && data->destination[0] != '\0' && data->route_count > 0)
     {
         return 1;
@@ -381,7 +426,59 @@ static int set_scratchpad_text(FMC_Data *data, char *dest_field, int dest_size, 
     fmc_data_clear_scratchpad(data);
     sync_library_route_fields(data);
     update_exec_ready(data);
+    if (strcmp(label, "CO ROUTE") == 0 || strcmp(label, "VIA") == 0)
+    {
+        mark_route_modified(data, label);
+    }
     snprintf(data->message, sizeof(data->message), "%s SET", label);
+    return 1;
+}
+
+static void clear_route_draft(FMC_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->origin[0] = '\0';
+    data->destination[0] = '\0';
+    set_origin_position(data, 0.0, 0.0, 0);
+    data->company_route[0] = '\0';
+    data->route_via[0] = '\0';
+    clear_auto_route(data);
+    sync_library_route_fields(data);
+    data->route_delete_pending = 0;
+    data->route_clear_pending = 1;
+    mark_route_modified(data, "clear draft");
+    set_text(data->message, sizeof(data->message), "RTE DELETE MOD");
+}
+
+static int delete_last_route_point(FMC_Data *data)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    data->route_delete_pending = 0;
+    if (data->route_count <= 0)
+    {
+        set_text(data->message, sizeof(data->message), "NO ROUTE POINT");
+        return 0;
+    }
+
+    --data->route_count;
+    data->route_points[data->route_count][0] = '\0';
+    data->route_latitudes[data->route_count] = 0.0;
+    data->route_longitudes[data->route_count] = 0.0;
+    data->route_has_position[data->route_count] = 0;
+    if (via_to_list != NULL && via_to_list_count > 0)
+    {
+        --via_to_list_count;
+    }
+    mark_route_modified(data, "delete waypoint");
+    set_text(data->message, sizeof(data->message), "WPT DELETE MOD");
     return 1;
 }
 
@@ -471,6 +568,7 @@ void fmc_data_append_char(FMC_Data *data, char c)
 
     data->scratchpad[data->scratchpad_len++] = (char)toupper((unsigned char)c);
     data->scratchpad[data->scratchpad_len] = '\0';
+    data->route_delete_pending = 0;
     data->message[0] = '\0';
 }
 
@@ -483,6 +581,7 @@ void fmc_data_backspace(FMC_Data *data)
 
     if (data->scratchpad_len <= 0)
     {
+        data->route_delete_pending = 0;
         data->message[0] = '\0';
         return;
     }
@@ -500,6 +599,7 @@ void fmc_data_show_delete(FMC_Data *data)
 
     data->scratchpad[0] = '\0';
     data->scratchpad_len = 0;
+    data->route_delete_pending = 1;
     set_text(data->message, sizeof(data->message), "DELETE");
 }
 
@@ -512,6 +612,7 @@ void fmc_data_clear_scratchpad(FMC_Data *data)
 
     data->scratchpad[0] = '\0';
     data->scratchpad_len = 0;
+    data->route_delete_pending = 0;
     data->message[0] = '\0';
 }
 
@@ -561,6 +662,23 @@ int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field)
 {
     if (data == NULL)
     {
+        return 0;
+    }
+
+    if (data->route_delete_pending)
+    {
+        if (field == FMC_ROUTE_FIELD_ORIGIN || field == FMC_ROUTE_FIELD_DESTINATION)
+        {
+            clear_route_draft(data);
+            return 1;
+        }
+        if (field == FMC_ROUTE_FIELD_TO_FIX)
+        {
+            return delete_last_route_point(data);
+        }
+
+        data->route_delete_pending = 0;
+        set_text(data->message, sizeof(data->message), "DELETE INVALID");
         return 0;
     }
 
@@ -1020,10 +1138,22 @@ int fmc_data_apply_planned_route(FMC_Data *data, const SimPlannedRoute *route)
     clear_auto_route(data);
     set_text(data->origin, sizeof(data->origin), route->origin);
     set_text(data->destination, sizeof(data->destination), route->destination);
+    if (route->point_count > 0)
+    {
+        const SimRoutePoint *origin_point = &route->points[0];
+        set_origin_position(data,
+                            origin_point->latitude,
+                            origin_point->longitude,
+                            origin_point->has_position);
+    }
     set_text(data->fms_plan_path, sizeof(data->fms_plan_path), route->source_path);
     data->route_loaded_from_file = route->source == SIM_ROUTE_SOURCE_FMC_FMS_FILE;
     data->route_source = route->source;
     data->active_waypoint_index = route->active_waypoint_index > 0 ? route->active_waypoint_index - 1 : 0;
+    if (data->active_waypoint_index < 0)
+    {
+        data->active_waypoint_index = 0;
+    }
 
     if (via_to_list == NULL)
     {
@@ -1042,7 +1172,15 @@ int fmc_data_apply_planned_route(FMC_Data *data, const SimPlannedRoute *route)
         }
     }
 
+    if (data->active_waypoint_index >= data->route_count)
+    {
+        data->active_waypoint_index = data->route_count > 0 ? 0 : -1;
+    }
+
     sync_library_route_fields(data);
+    data->route_mod_pending = 0;
+    data->route_clear_pending = 0;
+    data->route_delete_pending = 0;
     snprintf(data->message, sizeof(data->message), "UNIFIED RTE %s-%s", data->origin, data->destination);
     return data->route_count > 0;
 }
@@ -1068,12 +1206,15 @@ int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route)
     if (route->point_count < SIM_ROUTE_MAX_POINTS && data->origin[0] != '\0')
     {
         Airport *origin_airport = fmc_query_airport_by_icao(data->origin);
-        const int has_position = origin_airport != NULL && fmc_valid_position(origin_airport->datum_lat, origin_airport->datum_lon);
+        const int has_draft_origin = data->origin_has_position &&
+                                     fmc_valid_position(data->origin_latitude, data->origin_longitude);
+        const int has_position = has_draft_origin ||
+                                 (origin_airport != NULL && fmc_valid_position(origin_airport->datum_lat, origin_airport->datum_lon));
         set_sim_route_point(&route->points[route->point_count++],
                             data->origin,
                             "AIRPORT",
-                            has_position ? origin_airport->datum_lat : 0.0,
-                            has_position ? origin_airport->datum_lon : 0.0,
+                            has_draft_origin ? data->origin_latitude : (has_position ? origin_airport->datum_lat : 0.0),
+                            has_draft_origin ? data->origin_longitude : (has_position ? origin_airport->datum_lon : 0.0),
                             has_position);
         if (has_position)
         {
@@ -1097,7 +1238,9 @@ int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route)
         }
     }
 
-    route->valid = route->point_count > 0;
+    route->valid = route->origin[0] != '\0' &&
+                   route->destination[0] != '\0' &&
+                   route->point_count >= 2;
     route->has_coordinates = route->point_count > 0 && coordinate_count == route->point_count;
     return route->valid;
 }
@@ -1134,4 +1277,27 @@ int fmc_data_exec_route_selection(FMC_Data *data)
     data->origin_exec_pending = 0;
     snprintf(data->message, sizeof(data->message), "RTE %s-%s SENT", data->origin, data->destination);
     return 1;
+}
+
+int fmc_data_route_has_uncommitted_changes(const FMC_Data *data)
+{
+    return data != NULL && data->route_mod_pending;
+}
+
+int fmc_data_route_clear_pending(const FMC_Data *data)
+{
+    return data != NULL && data->route_clear_pending;
+}
+
+void fmc_data_mark_route_committed(FMC_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->route_mod_pending = 0;
+    data->route_clear_pending = 0;
+    data->route_delete_pending = 0;
+    data->origin_exec_pending = 0;
 }

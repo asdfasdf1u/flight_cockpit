@@ -377,6 +377,55 @@ static int nd_project_point_to_screen(
     return rect_contains_point_margin(&clip, *x, *y, ND_SYMBOL_MARGIN);
 }
 
+static int nd_project_latlon_to_screen(
+    const ND_Layout *layout,
+    const ND_Data *data,
+    double latitude,
+    double longitude,
+    int *x,
+    int *y)
+{
+    if (layout == NULL || data == NULL || x == NULL || y == NULL)
+    {
+        return 0;
+    }
+
+    const float range_nm = nd_map_range_nm(data);
+    if (range_nm <= 0.1f)
+    {
+        return 0;
+    }
+
+    const float aircraft_lat_rad = (float)data->latitude * ND_DEG_TO_RAD;
+    const float lon_scale = cosf(aircraft_lat_rad);
+    const double delta_lat = latitude - data->latitude;
+    const double delta_lon = longitude - data->longitude;
+    const float north_nm = (float)(delta_lat * 60.0);
+    const float east_nm = (float)(delta_lon * 60.0 * (double)lon_scale);
+    const float distance_nm = sqrtf(north_nm * north_nm + east_nm * east_nm);
+    if (distance_nm > range_nm)
+    {
+        return 0;
+    }
+
+    const float bearing = atan2f(east_nm, north_nm) / ND_DEG_TO_RAD;
+    const float relative_bearing = normalize_signed_degrees(bearing - data->track);
+    if (relative_bearing < -ND_MAP_FORWARD_SECTOR_DEG || relative_bearing > ND_MAP_FORWARD_SECTOR_DEG)
+    {
+        return 0;
+    }
+
+    const float relative_rad = relative_bearing * ND_DEG_TO_RAD;
+    const float distance_ratio = distance_nm / range_nm;
+    const float map_radius = (float)layout->arc_radius * 0.92f;
+
+    *x = layout->center_x + (int)(sinf(relative_rad) * distance_ratio * map_radius);
+    *y = layout->aircraft_y - (int)(cosf(relative_rad) * distance_ratio * map_radius);
+
+    const SDL_Rect clip = nd_map_clip_rect(layout);
+    return rect_contains_point_margin(&clip, *x, *y, ND_SYMBOL_MARGIN);
+}
+
 static void draw_waypoint_triangle(SDL_Renderer *renderer, int x, int y, SDL_Color color)
 {
     set_color(renderer, color);
@@ -746,6 +795,54 @@ static void draw_nav_points(SDL_Renderer *renderer, TTF_Font *font, const ND_Lay
     }
 }
 
+static void draw_route_layer(SDL_Renderer *renderer, const ND_Layout *layout, const ND_Data *data)
+{
+    if (renderer == NULL || layout == NULL || data == NULL || !data->route_valid)
+    {
+        return;
+    }
+
+    int screen_x[ND_MAX_ROUTE_POINTS];
+    int screen_y[ND_MAX_ROUTE_POINTS];
+    int visible[ND_MAX_ROUTE_POINTS];
+    memset(screen_x, 0, sizeof(screen_x));
+    memset(screen_y, 0, sizeof(screen_y));
+    memset(visible, 0, sizeof(visible));
+
+    const int count = data->route_point_count < ND_MAX_ROUTE_POINTS ? data->route_point_count : ND_MAX_ROUTE_POINTS;
+    for (int i = 0; i < count; ++i)
+    {
+        const ND_RoutePoint *point = &data->route_points[i];
+        if (point->has_position)
+        {
+            visible[i] = nd_project_latlon_to_screen(layout,
+                                                     data,
+                                                     point->latitude,
+                                                     point->longitude,
+                                                     &screen_x[i],
+                                                     &screen_y[i]);
+        }
+    }
+
+    set_color(renderer, COLOR_MAGENTA);
+    for (int i = 1; i < count; ++i)
+    {
+        if (visible[i - 1] && visible[i])
+        {
+            SDL_RenderDrawLine(renderer, screen_x[i - 1], screen_y[i - 1], screen_x[i], screen_y[i]);
+            SDL_RenderDrawLine(renderer, screen_x[i - 1] + 1, screen_y[i - 1], screen_x[i] + 1, screen_y[i]);
+        }
+    }
+
+    for (int i = 0; i < count; ++i)
+    {
+        if (visible[i])
+        {
+            draw_hollow_circle(renderer, screen_x[i], screen_y[i], 5, COLOR_MAGENTA);
+        }
+    }
+}
+
 static void draw_map_layer_status_row(
     SDL_Renderer *renderer,
     TTF_Font *font,
@@ -825,6 +922,7 @@ void nd_ui_render(SDL_Renderer *renderer, TTF_Font *font, const ND_Data *data)
     draw_heading_arc(renderer, font, &layout, data);
     draw_track_line(renderer, &layout);
     draw_nav_points(renderer, font, &layout, data);
+    draw_route_layer(renderer, &layout, data);
     draw_aircraft_symbol(renderer, &layout);
     draw_top_status(renderer, font, &layout, data);
     draw_active_waypoint_info(renderer, font, &layout, data);
