@@ -1,165 +1,182 @@
 #ifndef FMC_DATA_H
 #define FMC_DATA_H
 
-#include "fmc_airport.h"
-#include "fmc_waypoint.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
 
-#define FMC_MAX_ROUTE_POINTS 64
-#define FMC_TEXT_LEN 64
-#define FMC_RTE_PAGE_SIZE 5
+#define MAX_VIATO_NUM 20
 
-typedef enum FMC_RTE_InputMode
+#define MAX_ICAO_CODE_LEN 8     // 机场ICAO代码最大长度
+#define MAX_WAYPOINT_CODE_LEN 8 // 航路点代码最大长度
+#define MAX_LINE_BUF_LEN 256    // 读取文件行缓冲区长度
+#define MAX_AIRPORT_NUM 14000   // 最大机场数量（仅用于读取限制，非数组容量）
+#define MAX_WAYPOINT_NUM 200000 // 最大航路点数量（仅用于读取限制，非数组容量）
+
+// 机场结构体
+typedef struct
 {
-    FMC_RTE_INPUT_AIRPORT,
-    FMC_RTE_INPUT_WAYPOINT
-} FMC_RTE_InputMode;
-
-typedef enum FMC_Page
+    char icao_code[MAX_ICAO_CODE_LEN]; // 机场ICAO代码
+    double datum_lat;                  // 基准纬度
+    double datum_lon;                  // 基准经度
+} Airport;
+// 航路点结构体（符合ARINC 424标准）
+typedef struct
 {
-    FMC_PAGE_HOME,
-    FMC_PAGE_INDEX = FMC_PAGE_HOME,
-    FMC_PAGE_ROUTE,
-    FMC_PAGE_DEP_ARR,
-    FMC_PAGE_PERF,
-    FMC_PAGE_CLIMB,
-    FMC_PAGE_CRUISE,
-    FMC_PAGE_DESCENT,
-    FMC_PAGE_LEGS,
-    FMC_PAGE_HOLD,
-    FMC_PAGE_STATUS,
-    FMC_PAGE_COUNT
-} FMC_Page;
-
-typedef enum FMC_FlightPhase
+    double lat;                                // 纬度（如33.492513889）
+    double lon;                                // 经度（如9.217400000）
+    char wp_code[MAX_WAYPOINT_CODE_LEN];       // 航路点代码（如07EBA）
+    char icao_airport_code[MAX_ICAO_CODE_LEN]; // 所属机场（如ENRT）
+    char route_procedure[20];                  // 航路 / 程序	（如DT）
+    long record_index;                         // 记录编号/索引（如2118994）
+} Waypoint;
+// 机场AVL树节点（关键字：机场ICAO代码）
+typedef struct AirportAVLNode {
+    Airport data;                      // 机场数据
+    struct AirportAVLNode *left;       // 左子树
+    struct AirportAVLNode *right;      // 右子树
+    int height;                        // 节点高度
+} AirportAVLNode;
+// 航路点AVL树节点（关键字：航路点代码）
+typedef struct WaypointAVLNode {
+    Waypoint data;                     // 航路点数据
+    struct WaypointAVLNode *left;      // 左子树
+    struct WaypointAVLNode *right;     // 右子树
+    int height;                        // 节点高度
+} WaypointAVLNode;
+//航路 包括航路点名和航段名
+typedef struct fmc_data
 {
-    FMC_PHASE_PREFLIGHT,
-    FMC_PHASE_CLIMB,
-    FMC_PHASE_CRUISE,
-    FMC_PHASE_DESCENT
-} FMC_FlightPhase;
+    char VIA[10];
+    char TO[10];
+} VIATO;
 
-typedef enum FMC_RouteField
+// 空速结构体
+typedef struct
 {
-    FMC_ROUTE_FIELD_ORIGIN = 1,
-    FMC_ROUTE_FIELD_DESTINATION,
-    FMC_ROUTE_FIELD_COMPANY_ROUTE,
-    FMC_ROUTE_FIELD_FLIGHT_NO,
-    FMC_ROUTE_FIELD_VIA,
-    FMC_ROUTE_FIELD_TO_FIX
-} FMC_RouteField;
+    int speed1; // 低空 公里数
+    int speed2; // 高空 马赫数
+} TgtSpeed;
 
-typedef struct FMC_RoutePoint
+// 速度高度约束结构体
+typedef struct
 {
-    char ident[FMC_TEXT_LEN];
-    char type[FMC_TEXT_LEN];
-    double latitude;
-    double longitude;
-    double altitude;
-    char speed_restriction[FMC_TEXT_LEN];
-    char altitude_restriction[FMC_TEXT_LEN];
-} FMC_RoutePoint;
+    int spd_limit; // 速度限制
+    int alt_limit; // 高度限制
+} SpdAltLimit;
 
-typedef struct FMC_Data
+
+// 元素类型枚举AAA
+typedef enum
 {
-    FMC_Page current_page;
-    FMC_Page previous_page;
-    int page_switch_count;
-    FMC_FlightPhase active_phase;
+    TYPE_RUNWAY,       // 跑道
+    TYPE_TAKEOFF_PROC, // 离场/进场程序
+    TYPE_WAYPOINT      // 过渡点
+} ElementType;
 
-    char origin[FMC_TEXT_LEN];
-    char destination[FMC_TEXT_LEN];
-    char company_route[FMC_TEXT_LEN];
-    char route_via[FMC_TEXT_LEN];
-    char flight_no[FMC_TEXT_LEN];
+// 基础元素结构体（跑道/起飞程序/过渡点）
+typedef struct
+{
+    char name[20];    // 元素名称（如RW16C、ATOM E2、COV）
+    ElementType type; // 元素类型
+    char airport[20]; // 所属机场（KSEA/KBFI）
+} AirportElement;
 
-    char route_points[FMC_MAX_ROUTE_POINTS][FMC_TEXT_LEN];
-    FMC_RoutePoint route_point_data[FMC_MAX_ROUTE_POINTS];
-    int route_count;
-    int active_leg_index;
-    FMC_RoutePoint *configured_route;
-    int configured_route_count;
-    int configured_route_capacity;
-    int configured_route_page;
-    int route_loaded_from_file;
-    char fms_plan_path[FMC_TEXT_LEN];
+// 关联关系结构体（存储两个元素的关联）
+typedef struct
+{
+    char airport[20];       // 所属机场
+    char elem1[20];         // 关联元素1名称
+    ElementType elem1_type; // 关联元素1的类型
+    char elem2[20];         // 关联元素2名称
+    ElementType elem2_type; // 关联元素2的类型
 
-    int cruise_altitude;
-    int cruise_altitude_from_file;
-    int target_speed;
-    float cost_index;
-    int climb_speed;
-    int climb_accel_altitude;
-    int climb_thrust_limit;
-    char climb_target_speed_text[FMC_TEXT_LEN];
-    char climb_spd_alt_limit_text[FMC_TEXT_LEN];
-    char climb_transition_alt_text[FMC_TEXT_LEN];
-    int cruise_speed;
-    int descent_speed;
-    int descent_vertical_speed;
-    int descent_transition_level;
+} Relation;
+// 选择跑道、起飞程序、过渡点结构体
+typedef struct
+{
+    char select_runway[20];
+    char select_proc[20];
+    char select_runway_trans[20];
+    char select_proc_trans[20];
+    int select_flag;
+} SelectDepArr;
+// AVL树根节点（核心存储）
+extern AirportAVLNode *airport_avl_root;     // 机场AVL树根
+extern WaypointAVLNode *waypoint_avl_root;   // 航路点AVL树根
 
-    char departure_runway[FMC_TEXT_LEN];
-    char arrival_runway[FMC_TEXT_LEN];
-    char departure_procedure[FMC_TEXT_LEN];
-    char arrival_procedure[FMC_TEXT_LEN];
-    char departure_transition[FMC_TEXT_LEN];
-    char arrival_transition[FMC_TEXT_LEN];
+// 航线和航路点列表
+extern VIATO *via_to_list;
+extern int via_to_list_count;
+extern int rte_index;
+// 目标速度与速度高度限制,分别表示爬升、巡航、降落
+extern TgtSpeed tgt_speed1;
+extern TgtSpeed tgt_speed2;
+extern TgtSpeed tgt_speed3;
+// 两个速度限制，爬升和降落共用，巡航不用
+extern SpdAltLimit spd_alt_limit1;
+extern SpdAltLimit spd_alt_limit2;
 
-    char legs_sequence[FMC_TEXT_LEN];
-    char hold_fix[FMC_TEXT_LEN];
-    char hold_inbound_course[FMC_TEXT_LEN];
-    char hold_turn_direction[FMC_TEXT_LEN];
-    char hold_leg_time[FMC_TEXT_LEN];
-    char hold_speed_altitude[FMC_TEXT_LEN];
+// 过渡高度
+extern int trans_alt;
+extern int crz_alt;
+extern int trans_fl;
+extern float vpa;
 
-    char scratchpad[FMC_TEXT_LEN];
-    int scratchpad_len;
+// 元素与关联关系全局数组AAA
+extern AirportElement g_elements[200];
+extern Relation g_relations[2000];
+extern int g_element_count;
+extern int g_relation_count;
+// 当前展示的跑道、起飞程序和过渡点AAA
+extern char **runway;
+extern char **proc;
+extern char **runway_trans;
+extern char **proc_trans;
+extern int runway_count;
+extern int proc_count;
+extern int runway_trans_count;
+extern int proc_trans_count;
 
-    char message[FMC_TEXT_LEN];
-    char airport_query[FMC_TEXT_LEN];
-    FMC_AirportMatchList airport_matches;
-    int selected_airport_index;
-    FMC_Airport selected_origin_airport;
-    int has_selected_origin_airport;
-    int airport_index_count;
-    char xpc_status[FMC_TEXT_LEN];
+// 选择的跑道、起飞程序和过渡点
+extern SelectDepArr select_dep_arr[3];
 
-    FMC_RTE_InputMode route_input_mode;
-    char waypoint_query[FMC_TEXT_LEN];
-    FMC_WaypointMatchList waypoint_matches;
-    int selected_waypoint_index;
-    FMC_Waypoint selected_waypoint;
-    int has_selected_waypoint;
-    int waypoint_index_count;
-} FMC_Data;
 
-void fmc_data_init(FMC_Data *data);
-void fmc_data_update_mock(FMC_Data *data, float delta_time);
-void fmc_data_set_page(FMC_Data *data, FMC_Page page);
-void fmc_data_append_char(FMC_Data *data, char c);
-void fmc_data_backspace(FMC_Data *data);
-void fmc_data_clear_scratchpad(FMC_Data *data);
-void fmc_data_destroy(FMC_Data *data);
-int fmc_data_load_fms_plan(FMC_Data *data, const char *path);
-int fmc_data_commit_scratchpad_to_origin(FMC_Data *data);
-void fmc_data_query_airports(FMC_Data *data);
-int fmc_data_select_airport_candidate(FMC_Data *data, int index);
-int fmc_data_confirm_selected_airport(FMC_Data *data);
-void fmc_data_set_route_input_mode(FMC_Data *data, FMC_RTE_InputMode mode);
-void fmc_data_query_waypoints(FMC_Data *data);
-int fmc_data_select_waypoint_candidate(FMC_Data *data, int index);
-int fmc_data_add_selected_waypoint(FMC_Data *data);
-int fmc_data_route_next_page(FMC_Data *data);
-int fmc_data_route_prev_page(FMC_Data *data);
-int fmc_data_route_page_count(const FMC_Data *data);
-int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field);
-int fmc_data_exec_route_selection(FMC_Data *data);
-int fmc_data_set_phase_parameter(FMC_Data *data, int line_select_index);
-int fmc_data_activate_current_phase(FMC_Data *data);
-int fmc_data_set_dep_arr_parameter(FMC_Data *data, int arrival_side, int field_index);
-int fmc_data_set_legs_parameter(FMC_Data *data, int field_index);
-int fmc_data_set_hold_parameter(FMC_Data *data, int field_index);
-const char *fmc_data_phase_name(FMC_FlightPhase phase);
-const char *fmc_data_page_name(FMC_Page page);
+// 起飞机场
+extern char origin[24];
+// 目的地机场
+extern char dest[24];
+// 公司航路
+extern char co_route[24];
+// 航班号
+extern char flt_no[24];
+void initVIATO();
+// 核心数据加载与查询函数（AVL树实现）
+bool load_airport_data();
+bool load_waypoint_data();
+Airport *fmc_query_airport_by_icao(const char *icao_code);
+Waypoint *fmc_query_waypoint_by_code(const char *wp_code);
+// AVL树销毁（内部调用，外部可选使用）
+void destroy_airport_avl(AirportAVLNode *root);
+void destroy_waypoint_avl(WaypointAVLNode *root);
+// 统计信息（可选，用于查看加载数量）
+extern int airport_count;          // 实际加载的机场数量
+extern int waypoint_count;         // 实际加载的航路点数量
+// 速度与限制设置
+int setTgtSpeed(char *speed, TgtSpeed *target_speed);
+int setSpdAltLimit(const char *spd_alt_str, SpdAltLimit *spd_alt_limit);
+// 机场元素与关联关系 AAA
+void add_element(char *name, ElementType type, char *airport);
+void add_relation(char *airport, char *elem1, ElementType el1_type, char *elem2, ElementType el2_type);
+void init_airport_data(void);
+void destroy_airport_data(void);
+// 查询相关
+int query_runway_proc_by_airport(const char *airport);
+int query_proc_by_runway(const char *airport, const char *runway);
+int query_trans_by_runway(const char *airport, const char *runway);
+int query_runway_by_proc(const char *airport, const char *proc);
+int query_trans_by_proc(const char *airport, const char *proc);
+
 
 #endif

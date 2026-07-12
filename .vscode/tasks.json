@@ -4,25 +4,33 @@
         {                                                                               
             "type": "shell",
             "label": "build test",
-            "command": "gcc",
+            "command": "gcc.exe",
             "args": [
                 "-g",
                 "${workspaceFolder}/src/test.c",
                 "${workspaceFolder}/src/Cockpit/cockpit_main.c",
                 "${workspaceFolder}/src/Cockpit/cockpit_ui.c",
                 "${workspaceFolder}/src/Cockpit/cockpit_layout.c",
+                "${workspaceFolder}/src/Cockpit/cockpit_alarm.c",
                 "${workspaceFolder}/src/Cabin/cabin_main.c",
                 "${workspaceFolder}/src/Cabin/cabin_ui.c",
                 "${workspaceFolder}/src/Cabin/cabin_data.c",
                 "${workspaceFolder}/src/Cabin/cabin_api.c",
                 "${workspaceFolder}/src/FMC/fmc_main.c",
-                "${workspaceFolder}/src/FMC/fmc_ui.c",
                 "${workspaceFolder}/src/FMC/fmc_data.c",
+<<<<<<< HEAD
                 "${workspaceFolder}/src/FMC/fmc_airport.c",
                 "${workspaceFolder}/src/FMC/fmc_waypoint.c",
                 "${workspaceFolder}/src/FMC/fmc_xpc.c",
                 "${workspaceFolder}/src/Util/xplaneConnect.c",
                 "${workspaceFolder}/src/Util/xplane_live_data.c",
+=======
+                "${workspaceFolder}/src/FMC/fmc_ui_adapter.c",
+                "${workspaceFolder}/src/FMC/fmc_display.c",
+                "${workspaceFolder}/src/FMC/fmc_event.c",
+                "${workspaceFolder}/src/FMC/fmc_key.c",
+                "${workspaceFolder}/src/FMC/fmc_connect.c",
+>>>>>>> aa0a184b7273aecbbd40efc09a43d1050ee9fee7
                 "${workspaceFolder}/src/Util/eicas_ui_common.c",
                 "${workspaceFolder}/src/Systems/aircraft_systems_data.c",
                 "${workspaceFolder}/src/EICAS1/eicas_data.c",
@@ -37,10 +45,10 @@
                 "${workspaceFolder}/src/PFD/pfd_ui.c",
                 "${workspaceFolder}/src/PFD/pfd_data.c",
                 "${workspaceFolder}/src/Util/SDL_Util.c",
+                "${workspaceFolder}/src/Data/sim_data_center.c",
+                "${workspaceFolder}/src/Data/sim_data_loader.c",
                 "-o",
                 "${workspaceFolder}/build/test.exe",
-                "-IF:\\msys2\\mingw64\\include",
-                "-LF:\\msys2\\mingw64\\lib",
                 "-lmingw32",
                 "-lSDL2main",
                 "-lSDL2",
@@ -51,7 +59,7 @@
             ],
             "group": {
                 "kind": "build",
-                "isDefault": false
+                "isDefault": true
             },
             "options": {
                 "env": {
@@ -80,7 +88,7 @@
         {
             "type": "cppbuild",
             "label": "C/C++: gcc.exe build active file",
-            "command": "D:\\msys2-x86\\mingw64\\bin\\gcc.exe",
+            "command": "gcc.exe",
             "args": [
                 "-fdiagnostics-color=always",
                 "-g",
@@ -96,7 +104,7 @@
             ],
             "group": {
                 "kind": "build",
-                "isDefault": true
+                "isDefault": false
             },
             "detail": "Debugger generated task."
         }

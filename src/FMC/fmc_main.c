@@ -1,12 +1,11 @@
-#include "fmc_main.h"
-
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
 
-#include "fmc_data.h"
-#include "fmc_ui.h"
+#include "fmc_ui_adapter.h"
+#include "fmc_display.h"
+#include "fmc_event.h"
 
 #define FMC_WINDOW_WIDTH 638
 #define FMC_WINDOW_HEIGHT 998
@@ -112,14 +111,14 @@ int fmc_main_run(void)
         return -1;
     }
 
-    FMC_UI_Assets ui_assets;
-    fmc_ui_assets_load(renderer, &ui_assets);
+    FMC_Display_Assets ui_assets;
+    fmc_display_assets_load(renderer, &ui_assets);
 
     FMC_Data data;
     fmc_data_init(&data);
 
-    FMC_UI_State ui_state;
-    fmc_ui_state_init(&ui_state);
+    FMC_Event_State ui_state;
+    fmc_event_state_init(&ui_state);
 
     SDL_StartTextInput();
 
@@ -139,11 +138,11 @@ int fmc_main_run(void)
             }
             else if (event.type == SDL_MOUSEMOTION)
             {
-                fmc_ui_update_hover(renderer, &ui_state, event.motion.x, event.motion.y);
+                fmc_event_update_hover(renderer, &ui_state, event.motion.x, event.motion.y);
             }
             else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
             {
-                fmc_ui_handle_mouse_button(renderer, &ui_state, &data, event.button.x, event.button.y);
+                fmc_event_handle_mouse_button(renderer, &ui_state, &data, event.button.x, event.button.y);
             }
             else if (event.type == SDL_TEXTINPUT)
             {
@@ -211,7 +210,7 @@ int fmc_main_run(void)
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-        fmc_ui_render(renderer, font, &ui_assets, &ui_state, &data);
+        fmc_display_render(renderer, font, &ui_assets, &ui_state, &data);
         SDL_RenderPresent(renderer);
 
         const Uint32 frame_time = SDL_GetTicks() - frame_start;
@@ -223,7 +222,7 @@ int fmc_main_run(void)
 
     SDL_StopTextInput();
     fmc_data_destroy(&data);
-    fmc_ui_assets_destroy(&ui_assets);
+    fmc_display_assets_destroy(&ui_assets);
     TTF_CloseFont(font);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

@@ -35,6 +35,8 @@ typedef struct Cockpit_Layout
     SDL_Rect left_fmc_rect;
     SDL_Rect eicas2_rect;
     SDL_Rect right_fmc_rect;
+    SDL_Rect master_caution_rect;
+    SDL_Rect fire_warn_rect;
 } Cockpit_Layout;
 
 const char *cockpit_layout_background_path(void);

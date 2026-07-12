@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 //Copyright (c) 2013-2018 United States Government as represented by the Administrator of the
 //National Aeronautics and Space Administration. All Rights Reserved.
 //
@@ -322,4 +323,18 @@ int sendCOMM(XPCSocket sock, const char* comm);
 #ifdef __cplusplus
     }
 #endif
+=======
+#ifndef XPLANE_CONNECT_H
+#define XPLANE_CONNECT_H
+
+typedef void *XPCSocket;
+
+static inline int sendCOMM(XPCSocket socket, const char *command)
+{
+    (void)socket;
+    (void)command;
+    return 0;
+}
+
+>>>>>>> aa0a184b7273aecbbd40efc09a43d1050ee9fee7
 #endif
