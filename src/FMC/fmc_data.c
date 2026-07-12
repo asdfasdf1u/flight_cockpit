@@ -1,5 +1,11 @@
 #include "fmc_data.h"
 
+#include <ctype.h>
+#include <errno.h>
+#include <float.h>
+#include <limits.h>
+#include <math.h>
+
 // AVL树树根
 AirportAVLNode *airport_avl_root = NULL;
 WaypointAVLNode *waypoint_avl_root = NULL;
@@ -47,6 +53,86 @@ int proc_trans_count = 0;
 
 // 选择项
 SelectDepArr select_dep_arr[3] = {{0},{0},{0}};
+char show_ariport[20] = {0};
+int dep_arr_index = 1;
+int dep_arr_type = 0;
+
+int is_string_in_range(const char *str, int min_val, int max_val, int *result)
+{
+    if (!str || !result)
+    {
+        return 0;
+    }
+
+    const char *p = str;
+    while (*p && isspace((unsigned char)*p))
+    {
+        p++;
+    }
+    if (*p == '\0')
+    {
+        return 0;
+    }
+
+    char *endptr;
+    errno = 0;
+    long val = strtol(p, &endptr, 10);
+    if (errno != 0 || *endptr != '\0')
+    {
+        return 0;
+    }
+    if (val < INT_MIN || val > INT_MAX)
+    {
+        return 0;
+    }
+
+    int int_val = (int)val;
+    if (int_val < min_val || int_val > max_val)
+    {
+        return 0;
+    }
+
+    *result = int_val;
+    return 1;
+}
+
+int is_string_in_range_f(const char *str, float min_val, float max_val, float *result)
+{
+    if (!str || !result)
+    {
+        return 0;
+    }
+
+    const char *p = str;
+    while (*p && isspace((unsigned char)*p))
+    {
+        p++;
+    }
+    if (*p == '\0')
+    {
+        return 0;
+    }
+
+    char *endptr;
+    errno = 0;
+    float val = strtof(p, &endptr);
+    if (errno != 0 || *endptr != '\0')
+    {
+        return 0;
+    }
+    if (isnan(val) || val < -FLT_MAX || val > FLT_MAX)
+    {
+        return 0;
+    }
+    if (val < min_val || val > max_val)
+    {
+        return 0;
+    }
+
+    *result = val;
+    return 1;
+}
+
 void initVIATO() {
     if (via_to_list != NULL) {
         free(via_to_list);
@@ -619,14 +705,12 @@ int setSpdAltLimit(const char *spd_alt_str, SpdAltLimit *spd_alt_limit) {
     strncpy(speed_str, spd_alt_str, speed_len);
     strcpy(altitude_str, slash_pos + 1);
 
-    int speed = atoi(speed_str);
-    int altitude = atoi(altitude_str);
-
-    if (speed < 100 || speed > 399) {
+    int speed = 0;
+    int altitude = 0;
+    if (!is_string_in_range(speed_str, 100, 399, &speed)) {
         return -2;
     }
-
-    if (altitude < 1000 || altitude > 99990) {
+    if (!is_string_in_range(altitude_str, 1000, 99990, &altitude)) {
         return -3;
     }
 
@@ -643,21 +727,19 @@ int setTgtSpeed(char *speed, TgtSpeed *target_speed) {
     }
 
     if (speed[0] == '/' && speed[1] == '.') {
-        int mach = atoi(speed + 2);
-        if (mach >= 40 && mach <= 95) {
-            target_speed->speed2 = mach;
-            return 2;
-        } else {
+        int mach = 0;
+        if (!is_string_in_range(speed + 2, 40, 95, &mach)) {
             return -3;
         }
+        target_speed->speed2 = mach;
+        return 2;
     } else {
-        int spd = atoi(speed);
-        if (spd >= 100 && spd <= 399) {
-            target_speed->speed1 = spd;
-            return 1;
-        } else {
+        int spd = 0;
+        if (!is_string_in_range(speed, 100, 399, &spd)) {
             return -2;
         }
+        target_speed->speed1 = spd;
+        return 1;
     }
 
     return 0;

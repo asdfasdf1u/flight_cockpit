@@ -477,6 +477,10 @@ static void draw_route_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_La
         draw_text(renderer, font, layout, COLOR_WHITE, 126, 182, "%s", data->company_route[0] ? data->company_route : "----");
         draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 210, "FLT NO");
         draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 231, "%s", data->flight_no[0] ? data->flight_no : "----");
+        if (via_to_list_count > 0)
+        {
+            draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 259, "RTE LIST>");
+        }
 
         draw_text(renderer, font, layout, COLOR_TEXT, 126, 296, via_to_list_count > 0 ? "<VIA" : "VIA");
         draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 296, "TO");
@@ -511,31 +515,123 @@ static void draw_route_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_La
     draw_fmc_softkeys(renderer, font, layout, "<ROUTE MENU", "VNAV>");
 }
 
+static void draw_dep_arr_choice(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, int right_side, int row, const char *label, const char *value)
+{
+    const int y = 112 + row * 48;
+    if (right_side)
+    {
+        if (label != NULL && label[0] != '\0')
+        {
+            draw_right_text(renderer, font, layout, COLOR_TEXT, 510, y, "%s", label);
+        }
+        draw_right_text(renderer, font, layout, COLOR_WHITE, 510, y + 20, "%s", value != NULL && value[0] != '\0' ? value : "----");
+    }
+    else
+    {
+        if (label != NULL && label[0] != '\0')
+        {
+            draw_text(renderer, font, layout, COLOR_TEXT, 126, y, "%s", label);
+        }
+        draw_text(renderer, font, layout, COLOR_WHITE, 126, y + 20, "%s", value != NULL && value[0] != '\0' ? value : "----");
+    }
+}
+
+static void draw_dep_arr_index_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
+{
+    draw_fmc_header(renderer, font, layout, "DEP/ARR INDEX", "ACT FPLN", "");
+    if (data->origin[0] != '\0')
+    {
+        draw_dep_arr_choice(renderer, font, layout, 0, 0, "<DEP", data->origin);
+        draw_dep_arr_choice(renderer, font, layout, 1, 0, "ARR>", data->origin);
+    }
+    if (data->destination[0] != '\0')
+    {
+        draw_dep_arr_choice(renderer, font, layout, 1, 1, "ARR>", data->destination);
+    }
+    draw_fmc_softkeys(renderer, font, layout, "", "");
+}
+
+static void draw_dep_arr_selection_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
+{
+    (void)data;
+    char title[32];
+    char page_text[16];
+    int total_count = (runway_count > proc_count ? (runway_count + 1) / 5 : (proc_count + 1) / 5) + 1;
+    int start_index = (dep_arr_index - 1) * 5;
+    int end_index = start_index + 4;
+    SelectDepArr sda = select_dep_arr[dep_arr_type];
+
+    snprintf(title, sizeof(title), "%s %s", show_ariport, dep_arr_type == 0 ? "DEPART" : "ARRIVAL");
+    snprintf(page_text, sizeof(page_text), "%d/%d", dep_arr_index, total_count);
+    draw_fmc_header(renderer, font, layout, title, data != NULL && data->origin_exec_pending ? "MODEL FPLN" : "ACT FPLN", page_text);
+
+    if (strlen(sda.select_proc) > 0)
+    {
+        char proc_text[32];
+        snprintf(proc_text, sizeof(proc_text), "%s <%s>", sda.select_proc, sda.select_flag == 0 ? "SEL" : "ACT");
+        draw_dep_arr_choice(renderer, font, layout, 0, 0, dep_arr_type == 0 ? "SID" : "STARS", proc_text);
+        if (strlen(sda.select_proc_trans) > 0)
+        {
+            char proc_trans_text[32];
+            snprintf(proc_trans_text, sizeof(proc_trans_text), "%s <%s>", sda.select_proc_trans, sda.select_flag == 0 ? "SEL" : "ACT");
+            draw_dep_arr_choice(renderer, font, layout, 0, 1, "TRANS", proc_trans_text);
+        }
+        else
+        {
+            for (int i = 0, row = 1; i < 5 && i < proc_trans_count; ++i, ++row)
+            {
+                draw_dep_arr_choice(renderer, font, layout, 0, row, i == 0 ? "TRANS" : "", proc_trans[i]);
+            }
+        }
+    }
+    else
+    {
+        for (int i = start_index, row = 0; i <= end_index && i < proc_count; ++i, ++row)
+        {
+            draw_dep_arr_choice(renderer, font, layout, 0, row, i == start_index ? (dep_arr_type == 0 ? "SID" : "STARS") : "", proc[i]);
+        }
+    }
+
+    if (strlen(sda.select_runway) > 0)
+    {
+        char runway_text[32];
+        snprintf(runway_text, sizeof(runway_text), "%s <%s>", sda.select_runway, sda.select_flag == 0 ? "SEL" : "ACT");
+        draw_dep_arr_choice(renderer, font, layout, 1, 0, dep_arr_type == 0 ? "RWYS" : "APPR", runway_text);
+        if (strlen(sda.select_runway_trans) > 0)
+        {
+            char runway_trans_text[32];
+            snprintf(runway_trans_text, sizeof(runway_trans_text), "%s <%s>", sda.select_runway_trans, sda.select_flag == 0 ? "SEL" : "ACT");
+            draw_dep_arr_choice(renderer, font, layout, 1, 1, "TRANS", runway_trans_text);
+        }
+        else
+        {
+            for (int i = 0, row = 1; i < 5 && i < runway_trans_count; ++i, ++row)
+            {
+                draw_dep_arr_choice(renderer, font, layout, 1, row, i == 0 ? "TRANS" : "", runway_trans[i]);
+            }
+        }
+    }
+    else
+    {
+        for (int i = start_index, row = 0; i <= end_index && i < runway_count; ++i, ++row)
+        {
+            draw_dep_arr_choice(renderer, font, layout, 1, row, i == start_index ? (dep_arr_type == 0 ? "RWYS" : "APPR") : "", runway[i]);
+        }
+    }
+
+    draw_fmc_softkeys(renderer, font, layout, "<INDEX", "");
+}
+
 static void draw_dep_arr_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
 {
-    draw_fmc_header(renderer, font, layout, "DEP/ARR", "ACT FPLN", "1/1");
-
-    draw_text(renderer, font, layout, COLOR_TEXT, 126, 112, "DEP AIRPORT");
-    draw_text(renderer, font, layout, COLOR_WHITE, 126, 133, "%s", airport_display_text(data->origin));
-    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 112, "ARR AIRPORT");
-    draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 133, "%s", airport_display_text(data->destination));
-
-    draw_text(renderer, font, layout, COLOR_TEXT, 126, 161, "RUNWAY");
-    draw_text(renderer, font, layout, COLOR_WHITE, 126, 182, "%s", data->departure_runway[0] ? data->departure_runway : "----");
-    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 161, "RUNWAY");
-    draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 182, "%s", data->arrival_runway[0] ? data->arrival_runway : "----");
-
-    draw_text(renderer, font, layout, COLOR_TEXT, 126, 210, "SID");
-    draw_text(renderer, font, layout, COLOR_WHITE, 126, 231, "%s", data->departure_procedure[0] ? data->departure_procedure : "----");
-    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 210, "STAR");
-    draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 231, "%s", data->arrival_procedure[0] ? data->arrival_procedure : "----");
-
-    draw_text(renderer, font, layout, COLOR_TEXT, 126, 259, "DEP TRANS");
-    draw_text(renderer, font, layout, COLOR_WHITE, 126, 280, "%s", data->departure_transition[0] ? data->departure_transition : "----");
-    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 259, "APPROACH");
-    draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 280, "%s", data->arrival_transition[0] ? data->arrival_transition : "----");
-
-    draw_fmc_softkeys(renderer, font, layout, "", "");
+    if (show_ariport[0] == '\0')
+    {
+        draw_dep_arr_index_page(renderer, font, layout, data);
+    }
+    else
+    {
+        draw_dep_arr_selection_page(renderer, font, layout, data);
+    }
 }
 
 static void draw_perf_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
@@ -581,15 +677,21 @@ static void draw_perf_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Lay
 
 static void draw_climb_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
 {
+    (void)data;
+    char tgt_speed_text[24];
+    char limit_text[24];
+    snprintf(tgt_speed_text, sizeof(tgt_speed_text), "%d/.%02d", tgt_speed1.speed1, tgt_speed1.speed2);
+    snprintf(limit_text, sizeof(limit_text), "%d/%d", spd_alt_limit1.spd_limit, spd_alt_limit1.alt_limit);
+
     draw_fmc_header(renderer, font, layout, "ACT VNAV CLIMB", "", "1/3");
 
     draw_text(renderer, font, layout, COLOR_TEXT, 132, 124, "TGT SPEED");
-    draw_text(renderer, font, layout, COLOR_WHITE, 132, 150, "%s", data->climb_target_speed_text[0] ? data->climb_target_speed_text : "----");
+    draw_text(renderer, font, layout, COLOR_WHITE, 132, 150, "%s", tgt_speed_text);
     draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 124, "TRANS ALT");
-    draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 150, "%s", data->climb_transition_alt_text[0] ? data->climb_transition_alt_text : "----");
+    draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 150, "%d", trans_alt);
 
     draw_text(renderer, font, layout, COLOR_TEXT, 132, 190, "SPD/ALT LIMIT");
-    draw_text(renderer, font, layout, COLOR_WHITE, 132, 216, "%s", data->climb_spd_alt_limit_text[0] ? data->climb_spd_alt_limit_text : "----");
+    draw_text(renderer, font, layout, COLOR_WHITE, 132, 216, "%s", limit_text);
     draw_text(renderer, font, layout, COLOR_DIM, 132, 260, "--/-----");
 
     draw_fmc_softkeys(renderer, font, layout, "<RTE", "CRZ>");
@@ -597,32 +699,52 @@ static void draw_climb_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_La
 
 static void draw_cruise_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
 {
+    (void)data;
+    char tgt_speed_text[24];
+    snprintf(tgt_speed_text, sizeof(tgt_speed_text), "%d/.%02d", tgt_speed2.speed1, tgt_speed2.speed2);
+
     draw_fmc_header(renderer, font, layout, "VNAV CRUISE", "", "2/3");
 
     draw_text(renderer, font, layout, COLOR_TEXT, 132, 124, "TGT SPEED");
-    draw_text(renderer, font, layout, COLOR_WHITE, 132, 150, "%dKT", data->cruise_speed);
+    draw_text(renderer, font, layout, COLOR_WHITE, 132, 150, "%s", tgt_speed_text);
 
-    draw_text(renderer, font, layout, COLOR_TEXT, 132, 190, "CRZ ALT");
-    draw_text(renderer, font, layout, COLOR_WHITE, 132, 216, "FL%03d", data->cruise_altitude / 100);
+    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 124, "CRZ ALT");
+    if (crz_alt > 0)
+    {
+        draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 150, "FL%03d", crz_alt / 100);
+    }
+    else
+    {
+        draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 150, "----");
+    }
 
-    draw_text(renderer, font, layout, COLOR_TEXT, 132, 256, "COST INDEX");
-    draw_text(renderer, font, layout, COLOR_WHITE, 132, 282, "%.0f", data->cost_index);
+    draw_text(renderer, font, layout, COLOR_DIM, 132, 216, "--/-----");
 
     draw_fmc_softkeys(renderer, font, layout, "<CLB", "DES>");
 }
 
 static void draw_descent_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
 {
+    (void)data;
+    char tgt_speed_text[24];
+    char limit_text[24];
+    snprintf(tgt_speed_text, sizeof(tgt_speed_text), "%d/.%02d", tgt_speed3.speed1, tgt_speed3.speed2);
+    snprintf(limit_text, sizeof(limit_text), "%d/%d", spd_alt_limit1.spd_limit, spd_alt_limit1.alt_limit);
+
     draw_fmc_header(renderer, font, layout, "VNAV DESCENT", "", "3/3");
 
     draw_text(renderer, font, layout, COLOR_TEXT, 132, 124, "TGT SPEED");
-    draw_text(renderer, font, layout, COLOR_WHITE, 132, 150, "%dKT", data->descent_speed);
+    draw_text(renderer, font, layout, COLOR_WHITE, 132, 150, "%s", tgt_speed_text);
 
-    draw_text(renderer, font, layout, COLOR_TEXT, 132, 190, "TRANS LVL");
-    draw_text(renderer, font, layout, COLOR_WHITE, 132, 216, "%d", data->descent_transition_level);
+    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 124, "TRANS FL");
+    draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 150, "FL%03d", trans_fl);
 
-    draw_text(renderer, font, layout, COLOR_TEXT, 132, 256, "DES V/S");
-    draw_text(renderer, font, layout, COLOR_WHITE, 132, 282, "%dFPM", data->descent_vertical_speed);
+    draw_text(renderer, font, layout, COLOR_TEXT, 132, 190, "SPD/ALT LIMIT");
+    draw_text(renderer, font, layout, COLOR_WHITE, 132, 216, "%s", limit_text);
+    draw_text(renderer, font, layout, COLOR_DIM, 132, 260, "--/-----");
+
+    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 256, "VPA");
+    draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 282, "%.1f", vpa);
 
     draw_fmc_softkeys(renderer, font, layout, "<CRZ", "");
 }
@@ -630,8 +752,8 @@ static void draw_descent_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_
 static void draw_legs_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
 {
     (void)data;
-    draw_fmc_header(renderer, font, layout, "ACT LEGS", "", "1/1");
-    draw_text(renderer, font, layout, COLOR_TEXT, 126, 112, "VIA");
+    draw_fmc_header(renderer, font, layout, "ACT LEGS", "ROUTE SEGMENTS", "1/1");
+    draw_text(renderer, font, layout, COLOR_TEXT, 126, 112, "LEG");
     draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 112, "TO");
 
     if (via_to_list_count <= 0)

@@ -225,6 +225,80 @@ static void init_snapshot_defaults(SimSnapshot *snapshot)
     update_warnings(snapshot);
 }
 
+const char *sim_data_center_route_source_name(SimRouteSource source)
+{
+    switch (source)
+    {
+    case SIM_ROUTE_SOURCE_FMC_FMS_FILE:
+        return "FMC_FMS_FILE";
+    case SIM_ROUTE_SOURCE_FMC_FALLBACK:
+        return "FMC_FALLBACK";
+    case SIM_ROUTE_SOURCE_NONE:
+    default:
+        return "NONE";
+    }
+}
+
+static void set_route_point(SimRoutePoint *point, const char *ident, const char *type, double latitude, double longitude)
+{
+    if (point == NULL)
+    {
+        return;
+    }
+
+    memset(point, 0, sizeof(*point));
+    copy_text(point->ident, sizeof(point->ident), ident);
+    copy_text(point->type, sizeof(point->type), type);
+    point->latitude = latitude;
+    point->longitude = longitude;
+    point->altitude = 0.0;
+    point->has_position = 1;
+}
+
+static void init_fallback_route(SimPlannedRoute *route)
+{
+    if (route == NULL)
+    {
+        return;
+    }
+
+    memset(route, 0, sizeof(*route));
+    route->valid = 1;
+    route->source = SIM_ROUTE_SOURCE_FMC_FALLBACK;
+    route->loaded_from_file = 0;
+    route->has_coordinates = 1;
+    route->active_waypoint_index = 1;
+    copy_text(route->origin, sizeof(route->origin), "KSEA");
+    copy_text(route->destination, sizeof(route->destination), "KBFI");
+    copy_text(route->source_path, sizeof(route->source_path), "fallback");
+    route->point_count = 2;
+    set_route_point(&route->points[0], "KSEA", "AIRPORT", 47.448900, -122.309400);
+    set_route_point(&route->points[1], "KBFI", "AIRPORT", 47.540100, -122.309400);
+}
+
+static void init_planned_route(SimDataCenter *center)
+{
+    if (center == NULL)
+    {
+        return;
+    }
+
+    if (!sim_data_loader_load_fms_route(&center->planned_route, "assets/KSEAKBFI.fms"))
+    {
+        init_fallback_route(&center->planned_route);
+    }
+    center->route_initialized = center->planned_route.valid;
+
+    printf("SimDataCenter route: source=%s origin=%s destination=%s points=%d first=%s last=%s.\n",
+           sim_data_center_route_source_name(center->planned_route.source),
+           center->planned_route.origin,
+           center->planned_route.destination,
+           center->planned_route.point_count,
+           center->planned_route.point_count > 0 ? center->planned_route.points[0].ident : "----",
+           center->planned_route.point_count > 0 ? center->planned_route.points[center->planned_route.point_count - 1].ident : "----");
+    fflush(stdout);
+}
+
 static void integrate_nd_position(SimDataCenter *center, float delta_time)
 {
     if (center == NULL || delta_time <= 0.0f)
@@ -437,6 +511,7 @@ int sim_data_center_init(SimDataCenter *center)
     center->nd_position_initialized = 1;
 
     center->initialized = sim_data_loader_load_all(&center->store);
+    init_planned_route(center);
     rebuild_snapshot(center, 0.0f);
 
     if (center->initialized)
@@ -504,6 +579,17 @@ void sim_data_center_set_position(SimDataCenter *center, double latitude, double
     center->snapshot.longitude = longitude;
 }
 
+void sim_data_center_set_route(SimDataCenter *center, const SimPlannedRoute *route)
+{
+    if (center == NULL || route == NULL || !route->valid)
+    {
+        return;
+    }
+
+    center->planned_route = *route;
+    center->route_initialized = 1;
+}
+
 const SimSnapshot *sim_data_center_snapshot(const SimDataCenter *center)
 {
     if (center == NULL || !center->initialized)
@@ -513,9 +599,23 @@ const SimSnapshot *sim_data_center_snapshot(const SimDataCenter *center)
     return &center->snapshot;
 }
 
+const SimPlannedRoute *sim_data_center_route(const SimDataCenter *center)
+{
+    if (center == NULL || !center->route_initialized || !center->planned_route.valid)
+    {
+        return NULL;
+    }
+    return &center->planned_route;
+}
+
 int sim_data_center_is_ready(const SimDataCenter *center)
 {
     return center != NULL && center->initialized;
+}
+
+int sim_data_center_has_route(const SimDataCenter *center)
+{
+    return center != NULL && center->route_initialized && center->planned_route.valid;
 }
 
 int sim_data_center_has_pfd_data(const SimDataCenter *center)

@@ -68,21 +68,6 @@ static void resolve_weather_city(const Cabin_Data *data, char *city, size_t city
     snprintf(city, city_size, "%s", "飞行途中");
     snprintf(adcode, adcode_size, "%s", "");
     return;
-    if (strcmp(data->current_city, "北京") == 0 || strcmp(data->current_city, "北京市") == 0)
-    {
-        snprintf(city, city_size, "%s", "北京");
-        snprintf(adcode, adcode_size, "%s", "110000");
-    }
-    else if (strcmp(data->current_city, "成都") == 0 || strcmp(data->current_city, "成都市") == 0)
-    {
-        snprintf(city, city_size, "%s", "成都");
-        snprintf(adcode, adcode_size, "%s", "510100");
-    }
-    else
-    {
-        snprintf(city, city_size, "%s", "飞行途中");
-        snprintf(adcode, adcode_size, "%s", "");
-    }
 }
 
 static void update_weather_if_city_changed(Cabin_Data *data, char *last_city, size_t last_city_size, char *last_adcode, size_t last_adcode_size)
@@ -110,6 +95,15 @@ static void update_weather_if_city_changed(Cabin_Data *data, char *last_city, si
            last_adcode[0] != '\0' ? last_adcode : "none",
            city,
            adcode[0] != '\0' ? adcode : "none");
+
+    if (adcode[0] == '\0')
+    {
+        printf("Cabin Weather: enroute segment has no city adcode, keep current weather source=%s.\n",
+               data->weather_source);
+        snprintf(last_city, last_city_size, "%s", city);
+        snprintf(last_adcode, last_adcode_size, "%s", adcode);
+        return;
+    }
 
     cabin_api_update_weather_for_city(data, city, adcode);
 

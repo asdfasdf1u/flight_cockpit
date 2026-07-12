@@ -71,6 +71,32 @@ static void draw_text(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, i
     SDL_FreeSurface(surface);
 }
 
+static void draw_text_scaled(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, int x, int y, float scale, const char *text)
+{
+    if (renderer == NULL || font == NULL || text == NULL || scale <= 0.0f)
+    {
+        return;
+    }
+
+    SDL_Surface *surface = TTF_RenderUTF8_Blended(font, text, color);
+    if (surface == NULL)
+    {
+        return;
+    }
+
+    SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
+    if (texture == NULL)
+    {
+        SDL_FreeSurface(surface);
+        return;
+    }
+
+    SDL_Rect dest = {x, y, (int)((float)surface->w * scale), (int)((float)surface->h * scale)};
+    SDL_RenderCopy(renderer, texture, NULL, &dest);
+    SDL_DestroyTexture(texture);
+    SDL_FreeSurface(surface);
+}
+
 static void draw_centered_text(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, const SDL_Rect *rect, const char *format, ...)
 {
     if (renderer == NULL || font == NULL || rect == NULL || format == NULL)
@@ -302,18 +328,44 @@ static int nd_project_point_to_screen(const ND_Layout *layout, const ND_Data *da
 static void draw_waypoint_triangle(SDL_Renderer *renderer, int x, int y, SDL_Color color)
 {
     set_color(renderer, color);
-    SDL_RenderDrawLine(renderer, x, y - 6, x - 6, y + 5);
+    SDL_RenderDrawLine(renderer, x, y - 5, x - 6, y + 5);
     SDL_RenderDrawLine(renderer, x - 6, y + 5, x + 6, y + 5);
-    SDL_RenderDrawLine(renderer, x + 6, y + 5, x, y - 6);
+    SDL_RenderDrawLine(renderer, x + 6, y + 5, x, y - 5);
 }
 
-static void draw_cross_symbol(SDL_Renderer *renderer, int x, int y, SDL_Color color)
+static void draw_hollow_circle(SDL_Renderer *renderer, int cx, int cy, int radius, SDL_Color color)
 {
     set_color(renderer, color);
-    SDL_RenderDrawLine(renderer, x - 7, y, x + 7, y);
-    SDL_RenderDrawLine(renderer, x, y - 7, x, y + 7);
-    SDL_RenderDrawLine(renderer, x - 4, y - 4, x + 4, y + 4);
-    SDL_RenderDrawLine(renderer, x - 4, y + 4, x + 4, y - 4);
+
+    int previous_x = cx + radius;
+    int previous_y = cy;
+    for (int degree = 1; degree <= 360; ++degree)
+    {
+        const float radians = (float)degree * ND_DEG_TO_RAD;
+        const int x = cx + (int)(cosf(radians) * (float)radius);
+        const int y = cy + (int)(sinf(radians) * (float)radius);
+        SDL_RenderDrawLine(renderer, previous_x, previous_y, x, y);
+        previous_x = x;
+        previous_y = y;
+    }
+}
+
+static int nav_point_is_map_target(const ND_NavPoint *point)
+{
+    if (point == NULL)
+    {
+        return 0;
+    }
+
+    switch (point->type)
+    {
+    case ND_POINT_WAYPOINT:
+    case ND_POINT_AIRPORT:
+    case ND_POINT_TOWER:
+        return 1;
+    default:
+        return 0;
+    }
 }
 
 static SDL_Color nav_point_symbol_color(const ND_NavPoint *point)
@@ -321,36 +373,22 @@ static SDL_Color nav_point_symbol_color(const ND_NavPoint *point)
     switch (point->type)
     {
     case ND_POINT_AIRPORT:
+        return COLOR_WHITE;
     case ND_POINT_TOWER:
-    case ND_POINT_VOR:
-    case ND_POINT_NDB:
-    case ND_POINT_ILS:
-        return COLOR_MAGENTA;
     case ND_POINT_WAYPOINT:
     default:
         return COLOR_BLUE;
     }
 }
 
-static SDL_Color nav_point_label_color(const ND_NavPoint *point)
-{
-    switch (point->type)
-    {
-    case ND_POINT_WAYPOINT:
-        return COLOR_WHITE;
-    case ND_POINT_AIRPORT:
-    case ND_POINT_TOWER:
-    case ND_POINT_VOR:
-    case ND_POINT_NDB:
-    case ND_POINT_ILS:
-    default:
-        return COLOR_MAGENTA;
-    }
-}
-
 static int nav_point_priority(const ND_NavPoint *point)
 {
     if (point == NULL)
+    {
+        return 0;
+    }
+
+    if (!nav_point_is_map_target(point))
     {
         return 0;
     }
@@ -368,12 +406,8 @@ static int nav_point_priority(const ND_NavPoint *point)
         return 3;
     case ND_POINT_TOWER:
         return 2;
-    case ND_POINT_VOR:
-    case ND_POINT_NDB:
-        return 2;
-    case ND_POINT_ILS:
     default:
-        return 1;
+        return 0;
     }
 }
 
@@ -382,11 +416,10 @@ static void draw_nav_point_symbol(SDL_Renderer *renderer, const ND_NavPoint *poi
     switch (point->type)
     {
     case ND_POINT_AIRPORT:
+        draw_hollow_circle(renderer, x, y, 7, color);
+        break;
     case ND_POINT_TOWER:
-    case ND_POINT_VOR:
-    case ND_POINT_NDB:
-    case ND_POINT_ILS:
-        draw_cross_symbol(renderer, x, y, color);
+        draw_hollow_circle(renderer, x, y, 6, color);
         break;
     case ND_POINT_WAYPOINT:
     default:
@@ -414,7 +447,6 @@ static void draw_nav_points(SDL_Renderer *renderer, TTF_Font *font, const ND_Lay
             }
 
             const SDL_Color symbol_color = nav_point_symbol_color(point);
-            const SDL_Color label_color = nav_point_label_color(point);
             draw_nav_point_symbol(renderer, point, x, y, symbol_color);
 
             int text_w = 0;
@@ -424,13 +456,11 @@ static void draw_nav_points(SDL_Renderer *renderer, TTF_Font *font, const ND_Lay
                 continue;
             }
 
+            text_w = (text_w * 2) / 3;
+            text_h = (text_h * 2) / 3;
+
             const int offsets[][2] = {
-                {12, -12},
-                {12, 8},
-                {-text_w - 12, -12},
-                {-text_w - 12, 8},
-                {12, -text_h - 8},
-                {-text_w - 12, -text_h - 8}};
+                {-text_w / 2, 12}};
             const int offset_count = (int)(sizeof(offsets) / sizeof(offsets[0]));
             SDL_Rect chosen = {x + offsets[0][0], y + offsets[0][1], text_w, text_h};
             int found = 0;
@@ -439,6 +469,12 @@ static void draw_nav_points(SDL_Renderer *renderer, TTF_Font *font, const ND_Lay
             {
                 SDL_Rect candidate = {x + offsets[offset_index][0], y + offsets[offset_index][1], text_w, text_h};
                 int overlaps = 0;
+
+                if (candidate.x < 0 || candidate.y < 90 ||
+                    candidate.x + candidate.w > layout->width || candidate.y + candidate.h > layout->height)
+                {
+                    continue;
+                }
 
                 for (int label_index = 0; label_index < label_count; ++label_index)
                 {
@@ -457,18 +493,28 @@ static void draw_nav_points(SDL_Renderer *renderer, TTF_Font *font, const ND_Lay
                 }
             }
 
-            if (!found && nav_point_priority(point) < 3)
+            if (!found)
             {
                 continue;
             }
 
-            draw_text(renderer, font, label_color, chosen.x, chosen.y, "%s", point->ident);
+            draw_text_scaled(renderer, font, COLOR_WHITE, chosen.x, chosen.y, 0.6667f, point->ident);
             if (label_count < ND_MAX_LABEL_RECTS)
             {
                 labels[label_count++] = chosen;
             }
         }
     }
+}
+
+static void draw_map_layer_status(SDL_Renderer *renderer, TTF_Font *font, const ND_Layout *layout)
+{
+    const int x = 20;
+    const int y = layout->height - 220;
+
+    draw_text(renderer, font, COLOR_BLUE, x, y, "ARPT");
+    draw_text(renderer, font, COLOR_BLUE, x, y + 18, "WPT");
+    draw_text(renderer, font, COLOR_BLUE, x, y + 36, "STA");
 }
 
 static void draw_aircraft_symbol(SDL_Renderer *renderer, const ND_Layout *layout)
@@ -523,9 +569,10 @@ void nd_ui_render(SDL_Renderer *renderer, TTF_Font *font, const ND_Data *data)
 
     draw_nd_background(renderer, &layout);
     draw_heading_arc(renderer, font, &layout, data);
-    draw_nav_points(renderer, font, &layout, data);
     draw_track_line(renderer, &layout);
+    draw_nav_points(renderer, font, &layout, data);
     draw_aircraft_symbol(renderer, &layout);
     draw_top_status(renderer, font, &layout, data);
     draw_active_waypoint_info(renderer, font, &layout, data);
+    draw_map_layer_status(renderer, font, &layout);
 }

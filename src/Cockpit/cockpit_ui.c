@@ -85,7 +85,7 @@ static void draw_centered_text(SDL_Renderer *renderer, TTF_Font *font, SDL_Color
     draw_text(renderer, font, color, rect->x + (rect->w - text_w) / 2, rect->y + (rect->h - text_h) / 2, "%s", text);
 }
 
-static void draw_display_texture(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *rect, SDL_Texture *texture, const char *label)
+static void draw_display_texture(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *rect, SDL_Texture *texture, const char *label, int preserve_aspect)
 {
     SDL_Rect bezel = {rect->x - 18, rect->y - 22, rect->w + 36, rect->h + 54};
     fill_rect(renderer, &bezel, COLOR_BEZEL);
@@ -94,7 +94,28 @@ static void draw_display_texture(SDL_Renderer *renderer, TTF_Font *font, const S
     fill_rect(renderer, rect, COLOR_BLACK);
     if (texture != NULL)
     {
-        SDL_RenderCopy(renderer, texture, NULL, rect);
+        SDL_Rect texture_rect = *rect;
+        int texture_width = 0;
+        int texture_height = 0;
+
+        if (preserve_aspect &&
+            SDL_QueryTexture(texture, NULL, NULL, &texture_width, &texture_height) == 0 &&
+            texture_width > 0 && texture_height > 0)
+        {
+            float scale = (float)rect->w / (float)texture_width;
+            const float vertical_scale = (float)rect->h / (float)texture_height;
+            if (scale > vertical_scale)
+            {
+                scale = vertical_scale;
+            }
+
+            texture_rect.w = (int)((float)texture_width * scale);
+            texture_rect.h = (int)((float)texture_height * scale);
+            texture_rect.x = rect->x + (rect->w - texture_rect.w) / 2;
+            texture_rect.y = rect->y + (rect->h - texture_rect.h) / 2;
+        }
+
+        SDL_RenderCopy(renderer, texture, NULL, &texture_rect);
     }
     else
     {
@@ -147,14 +168,14 @@ void cockpit_ui_render_scene(
         draw_fallback_background(renderer, font, layout);
     }
 
-    draw_display_texture(renderer, font, &layout->capt_pfd_rect, capt_pfd_texture, "CAPT PFD");
-    draw_display_texture(renderer, font, &layout->capt_nd_rect, capt_nd_texture, "CAPT ND");
-    draw_display_texture(renderer, font, &layout->eicas1_rect, eicas1_texture, "EICAS1");
-    draw_display_texture(renderer, font, &layout->fo_nd_rect, fo_nd_texture, "FO ND");
-    draw_display_texture(renderer, font, &layout->fo_pfd_rect, fo_pfd_texture, "FO PFD");
-    draw_display_texture(renderer, font, &layout->left_fmc_rect, fmc_texture, "LEFT FMC");
-    draw_display_texture(renderer, font, &layout->eicas2_rect, eicas2_texture, "EICAS2");
-    draw_display_texture(renderer, font, &layout->right_fmc_rect, fmc_texture, "RIGHT FMC");
+    draw_display_texture(renderer, font, &layout->capt_pfd_rect, capt_pfd_texture, "CAPT PFD", 0);
+    draw_display_texture(renderer, font, &layout->capt_nd_rect, capt_nd_texture, "CAPT ND", 1);
+    draw_display_texture(renderer, font, &layout->eicas1_rect, eicas1_texture, "EICAS1", 0);
+    draw_display_texture(renderer, font, &layout->fo_nd_rect, fo_nd_texture, "FO ND", 1);
+    draw_display_texture(renderer, font, &layout->fo_pfd_rect, fo_pfd_texture, "FO PFD", 0);
+    draw_display_texture(renderer, font, &layout->left_fmc_rect, fmc_texture, "LEFT FMC", 0);
+    draw_display_texture(renderer, font, &layout->eicas2_rect, eicas2_texture, "EICAS2", 0);
+    draw_display_texture(renderer, font, &layout->right_fmc_rect, fmc_texture, "RIGHT FMC", 0);
 
     draw_fmc_hotspot_hint(renderer, font, &layout->left_fmc_rect, "LEFT FMC");
     draw_fmc_hotspot_hint(renderer, font, &layout->right_fmc_rect, "RIGHT FMC");
