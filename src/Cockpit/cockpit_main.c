@@ -1,4 +1,4 @@
-﻿#include "cockpit_main.h"
+#include "cockpit_main.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
@@ -21,6 +21,8 @@
 
 #include "../FMC/fmc_data.h"
 #include "../FMC/fmc_ui.h"
+
+#include "../Util/xplane_live_data.h"
 
 #define COCKPIT_WINDOW_WIDTH 1600
 #define COCKPIT_WINDOW_HEIGHT 900
@@ -312,7 +314,9 @@ static void print_data_source_summary(
     int eicas_data_loaded,
     const FMC_Data *fmc_data)
 {
-    printf("Cockpit Data Sources: unified DataCenter=not present; modules use independent loaders.\n");
+    printf("Cockpit Data Sources: X-Plane live bridge enabled at %s:%u; local loaders remain as fallback.\n",
+           XPLANE_LIVE_DEFAULT_IP,
+           XPLANE_LIVE_DEFAULT_PORT);
     printf("Cockpit Data Sources: PFD=%s; ND=%s%s%s%s; EICAS=%s; FMC=%s.\n",
            pfd_data != NULL && pfd_data->using_file_data ? "assets/pfd.dat" : "mock fallback",
            nd_data != NULL && nd_data->data_file_loaded ? "assets/nd.dat" : "mock flight fallback",
@@ -321,7 +325,7 @@ static void print_data_source_summary(
            nd_data != NULL && nd_data->apt_loaded ? " + apt.dat" : "",
            eicas_data_loaded ? "assets/eicas1.dat/assets/eicas2.dat" : "mock fallback",
            fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : "default mock route");
-    printf("Cockpit Data Sync: PFD/ND/EICAS/FMC/Cabin still have separate clocks or playback state.\n");
+    printf("Cockpit Data Sync: PFD/ND/EICAS use X-Plane live data when available; FMC/Cabin keep local state.\n");
     fflush(stdout);
 }
 
@@ -552,6 +556,9 @@ static void render_window(
 
 int cockpit_main_run(void)
 {
+    // 使用最近邻缩放，避免纹理缩放时产生模糊
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
     {
         printf("SDL_Init failed: %s\n", SDL_GetError());
@@ -649,11 +656,13 @@ int cockpit_main_run(void)
     ND_Data nd_data;
     AircraftSystems_Data systems_data;
     EICAS_Data eicas_data;
+    XPlaneLiveData xplane_live_data;
     FMC_Data fmc_data;
     pfd_data_init(&pfd_data);
     nd_data_init(&nd_data);
     aircraft_systems_data_init(&systems_data);
     eicas_data_init(&eicas_data);
+    xplane_live_data_init(&xplane_live_data, XPLANE_LIVE_DEFAULT_IP, XPLANE_LIVE_DEFAULT_PORT);
     const int eicas_data_loaded = eicas_data_load_files(&eicas_data, "assets/eicas1.dat", "assets/eicas2.dat");
     if (eicas_data_loaded)
     {
@@ -875,14 +884,22 @@ int cockpit_main_run(void)
             delta_time = 0.1f;
         }
 
-        pfd_data_update_mock(&pfd_data, delta_time);
-        nd_data_update_mock(&nd_data, delta_time);
-        if (eicas_data_loaded)
+        xplane_live_data_update(&xplane_live_data, &pfd_data, &nd_data, &eicas_data, &systems_data, delta_time);
+
+        if (!xplane_live_data_pfd_active(&xplane_live_data))
+        {
+            pfd_data_update_mock(&pfd_data, delta_time);
+        }
+        if (!xplane_live_data_nd_active(&xplane_live_data))
+        {
+            nd_data_update_mock(&nd_data, delta_time);
+        }
+        if (!xplane_live_data_eicas_active(&xplane_live_data) && eicas_data_loaded)
         {
             eicas_data_update(&eicas_data, delta_time);
             eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
         }
-        else
+        else if (!xplane_live_data_eicas_active(&xplane_live_data))
         {
             aircraft_systems_data_update_mock(&systems_data, delta_time);
         }
@@ -907,6 +924,7 @@ int cockpit_main_run(void)
     }
 
     SDL_StopTextInput();
+    xplane_live_data_shutdown(&xplane_live_data);
     fmc_data_destroy(&fmc_data);
     fmc_ui_assets_destroy(&fmc_ui_assets);
     pfd_ui_clear_text_cache(renderer);

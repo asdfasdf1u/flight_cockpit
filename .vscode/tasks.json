@@ -1,7 +1,7 @@
 {
     "version": "2.0.0",
     "tasks": [
-        {
+        {                                                                               
             "type": "shell",
             "label": "build test",
             "command": "gcc",
@@ -21,6 +21,8 @@
                 "${workspaceFolder}/src/FMC/fmc_airport.c",
                 "${workspaceFolder}/src/FMC/fmc_waypoint.c",
                 "${workspaceFolder}/src/FMC/fmc_xpc.c",
+                "${workspaceFolder}/src/Util/xplaneConnect.c",
+                "${workspaceFolder}/src/Util/xplane_live_data.c",
                 "${workspaceFolder}/src/Util/eicas_ui_common.c",
                 "${workspaceFolder}/src/Systems/aircraft_systems_data.c",
                 "${workspaceFolder}/src/EICAS1/eicas_data.c",
