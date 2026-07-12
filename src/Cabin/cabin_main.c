@@ -426,6 +426,7 @@ int cabin_main_run(void)
 
     /* Load fonts early so the API key dialog can render text. */
     TTF_Font *title_font = open_font(24);
+    TTF_Font *emergency_font = open_font(54);
     TTF_Font *font = open_font(20);
     TTF_Font *small_font = open_font(17);
     if (title_font == NULL || font == NULL || small_font == NULL)
@@ -447,6 +448,7 @@ int cabin_main_run(void)
     assets.add_texture = load_texture(renderer, CABIN_ADD_PATH, "zoom plus");
     assets.sub_texture = load_texture(renderer, CABIN_SUB_PATH, "zoom minus");
     assets.title_font = title_font;
+    assets.emergency_font = emergency_font;
     assets.font = font;
     assets.small_font = small_font;
 
@@ -486,22 +488,6 @@ int cabin_main_run(void)
                                    sizeof(last_weather_city),
                                    last_weather_adcode,
                                    sizeof(last_weather_adcode));
-
-    Cabin_Assets assets;
-    assets.map_texture = load_cabin_map_texture(renderer, &data);
-    assets.plane_texture = load_texture(renderer, CABIN_PLANE_PATH, "plane icon");
-    assets.fullscreen_texture = load_texture(renderer, CABIN_FULLSCREEN_PATH, "fullscreen control");
-    assets.add_texture = load_texture(renderer, CABIN_ADD_PATH, "zoom plus");
-    assets.sub_texture = load_texture(renderer, CABIN_SUB_PATH, "zoom minus");
-    assets.title_font = open_font(24);
-    assets.emergency_font = open_font(54);
-    assets.font = open_font(20);
-    assets.small_font = open_font(17);
-
-    if (assets.title_font == NULL || assets.font == NULL || assets.small_font == NULL)
-    {
-        printf("Cabin: font load failed, text rendering will be skipped where font is missing: %s\n", TTF_GetError());
-    }
 
     int running = 1;
     SDL_Event event;
