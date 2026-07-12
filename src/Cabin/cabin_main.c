@@ -3,6 +3,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -14,12 +15,147 @@
 #define CABIN_WINDOW_HEIGHT 900
 #define CABIN_TARGET_FRAME_MS 16
 
+#define CABIN_CRASH_AUDIO_RATE 44100
+#define CABIN_CRASH_AUDIO_CHUNK_MS 180
+#define CABIN_CRASH_AUDIO_SAMPLES (CABIN_CRASH_AUDIO_RATE * CABIN_CRASH_AUDIO_CHUNK_MS / 1000)
+#define CABIN_CRASH_BEEP_HZ 1350.0f
+#define CABIN_CRASH_BEEP_PERIOD_MS 260
+#define CABIN_CRASH_BEEP_ON_MS 160
+#define CABIN_CRASH_BEEP_EDGE_MS 6
+
 #define CABIN_MAP_PATH "assets/20260303110928.png"
 #define CABIN_PLANE_PATH "assets/plane.png"
 #define CABIN_FULLSCREEN_PATH "assets/full_screen.png"
 #define CABIN_ADD_PATH "assets/add.png"
 #define CABIN_SUB_PATH "assets/sub.png"
 #define CABIN_FONT_PATH "assets/ALIBABAPUHUITI-2-45-LIGHT.TTF"
+
+typedef struct Cabin_Crash_Audio
+{
+    SDL_AudioDeviceID device;
+    int was_active;
+    Uint64 sample_cursor;
+} Cabin_Crash_Audio;
+
+static void cabin_crash_audio_init(Cabin_Crash_Audio *audio)
+{
+    SDL_AudioSpec desired;
+
+    if (audio == NULL)
+    {
+        return;
+    }
+
+    memset(audio, 0, sizeof(*audio));
+    if ((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) == 0 && SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
+    {
+        printf("Cabin CRASH DEMO: audio subsystem unavailable: %s\n", SDL_GetError());
+        return;
+    }
+
+    SDL_zero(desired);
+    desired.freq = CABIN_CRASH_AUDIO_RATE;
+    desired.format = AUDIO_S16SYS;
+    desired.channels = 1;
+    desired.samples = 1024;
+    audio->device = SDL_OpenAudioDevice(NULL, 0, &desired, NULL, 0);
+    if (audio->device == 0)
+    {
+        printf("Cabin CRASH DEMO: audio device unavailable: %s\n", SDL_GetError());
+    }
+}
+
+static int cabin_crash_audio_queue_chunk(Cabin_Crash_Audio *audio)
+{
+    Sint16 samples[CABIN_CRASH_AUDIO_SAMPLES];
+    const float two_pi = 6.28318530717958647692f;
+    const Uint64 period_samples = (Uint64)CABIN_CRASH_AUDIO_RATE * CABIN_CRASH_BEEP_PERIOD_MS / 1000u;
+    const Uint64 on_samples = (Uint64)CABIN_CRASH_AUDIO_RATE * CABIN_CRASH_BEEP_ON_MS / 1000u;
+    const Uint64 edge_samples = (Uint64)CABIN_CRASH_AUDIO_RATE * CABIN_CRASH_BEEP_EDGE_MS / 1000u;
+
+    if (audio == NULL || audio->device == 0)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < CABIN_CRASH_AUDIO_SAMPLES; ++i)
+    {
+        const Uint64 cycle_sample = audio->sample_cursor % period_samples;
+        float envelope = 0.0f;
+
+        if (cycle_sample < on_samples)
+        {
+            envelope = 1.0f;
+            if (cycle_sample < edge_samples)
+            {
+                envelope = (float)cycle_sample / (float)edge_samples;
+            }
+            else if (cycle_sample > on_samples - edge_samples)
+            {
+                envelope = (float)(on_samples - cycle_sample) / (float)edge_samples;
+            }
+        }
+
+        const float time = (float)audio->sample_cursor / (float)CABIN_CRASH_AUDIO_RATE;
+        const float fundamental = sinf(time * two_pi * CABIN_CRASH_BEEP_HZ);
+        const float harmonic = sinf(time * two_pi * CABIN_CRASH_BEEP_HZ * 2.0f);
+        const float buzzer = fundamental * 0.82f + harmonic * 0.18f;
+        samples[i] = (Sint16)(buzzer * envelope * 11800.0f);
+        ++audio->sample_cursor;
+    }
+    if (SDL_QueueAudio(audio->device, samples, (Uint32)sizeof(samples)) != 0)
+    {
+        printf("Cabin CRASH DEMO: failed to queue alarm audio: %s\n", SDL_GetError());
+        return 0;
+    }
+    SDL_PauseAudioDevice(audio->device, 0);
+    return 1;
+}
+
+static void cabin_crash_audio_update(Cabin_Crash_Audio *audio, int active)
+{
+    const Uint32 chunk_bytes = (Uint32)(CABIN_CRASH_AUDIO_SAMPLES * (int)sizeof(Sint16));
+
+    if (audio == NULL || audio->device == 0)
+    {
+        return;
+    }
+
+    if (!active)
+    {
+        if (audio->was_active)
+        {
+            SDL_ClearQueuedAudio(audio->device);
+            SDL_PauseAudioDevice(audio->device, 1);
+            audio->sample_cursor = 0;
+        }
+        audio->was_active = 0;
+        return;
+    }
+
+    audio->was_active = 1;
+    while (SDL_GetQueuedAudioSize(audio->device) < chunk_bytes * 2u)
+    {
+        if (!cabin_crash_audio_queue_chunk(audio))
+        {
+            break;
+        }
+    }
+}
+
+static void cabin_crash_audio_destroy(Cabin_Crash_Audio *audio)
+{
+    if (audio == NULL)
+    {
+        return;
+    }
+    if (audio->device != 0)
+    {
+        SDL_ClearQueuedAudio(audio->device);
+        SDL_CloseAudioDevice(audio->device);
+    }
+    memset(audio, 0, sizeof(*audio));
+}
 
 static void resolve_weather_city(const Cabin_Data *data, char *city, size_t city_size, char *adcode, size_t adcode_size)
 {
@@ -219,6 +355,10 @@ static void destroy_assets(Cabin_Assets *assets)
     {
         TTF_CloseFont(assets->title_font);
     }
+    if (assets->emergency_font != NULL)
+    {
+        TTF_CloseFont(assets->emergency_font);
+    }
     if (assets->font != NULL)
     {
         TTF_CloseFont(assets->font);
@@ -286,6 +426,8 @@ int cabin_main_run(void)
 
     Cabin_Data data;
     cabin_data_init(&data);
+    Cabin_Crash_Audio crash_audio;
+    cabin_crash_audio_init(&crash_audio);
     printf("Cabin Route: using Beijing-Chengdu mock route; FMC route integration disabled for now.\n");
     fflush(stdout);
 
@@ -304,6 +446,7 @@ int cabin_main_run(void)
     assets.add_texture = load_texture(renderer, CABIN_ADD_PATH, "zoom plus");
     assets.sub_texture = load_texture(renderer, CABIN_SUB_PATH, "zoom minus");
     assets.title_font = open_font(24);
+    assets.emergency_font = open_font(54);
     assets.font = open_font(20);
     assets.small_font = open_font(17);
 
@@ -330,6 +473,27 @@ int cabin_main_run(void)
             {
                 running = 0;
             }
+            else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_y)
+            {
+                if (!data.crash_demo_active)
+                {
+                    data.crash_demo_active = 1;
+                    data.crash_demo_started_ticks = SDL_GetTicks();
+                    printf("Cabin CRASH DEMO: triggered by Y.\n");
+                    fflush(stdout);
+                }
+            }
+            else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_r)
+            {
+                if (data.crash_demo_active)
+                {
+                    data.crash_demo_active = 0;
+                    data.crash_demo_started_ticks = 0;
+                    cabin_crash_audio_update(&crash_audio, 0);
+                    printf("Cabin CRASH DEMO: reset by R.\n");
+                    fflush(stdout);
+                }
+            }
             else
             {
                 cabin_ui_handle_event(window, &event);
@@ -345,6 +509,7 @@ int cabin_main_run(void)
                                        sizeof(last_weather_city),
                                        last_weather_adcode,
                                        sizeof(last_weather_adcode));
+        cabin_crash_audio_update(&crash_audio, data.crash_demo_active);
 
         SDL_SetRenderDrawColor(renderer, 45, 72, 96, 255);
         SDL_RenderClear(renderer);
@@ -358,6 +523,7 @@ int cabin_main_run(void)
         }
     }
 
+    cabin_crash_audio_destroy(&crash_audio);
     destroy_assets(&assets);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

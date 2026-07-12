@@ -78,6 +78,9 @@ typedef struct Cabin_Data
     int api_map_loaded;
     int api_map_failed;
     char api_map_error_message[CABIN_ERROR_LEN];
+
+    int crash_demo_active;
+    unsigned int crash_demo_started_ticks;
 } Cabin_Data;
 
 void cabin_data_init(Cabin_Data *data);

@@ -21,6 +21,8 @@ static const SDL_Color COLOR_ROUTE_SOFT = {126, 188, 242, 255};
 static const SDL_Color COLOR_GREEN = {68, 176, 68, 255};
 static const SDL_Color COLOR_BLACK_OVERLAY = {16, 26, 35, 198};
 static const SDL_Color COLOR_PROGRESS_BG = {64, 80, 92, 255};
+static const SDL_Color COLOR_EMERGENCY_RED = {242, 24, 35, 255};
+static const SDL_Color COLOR_EMERGENCY_DARK = {70, 0, 4, 232};
 
 static float g_map_zoom = 1.0f;
 static float g_map_pan_x = 0.0f;
@@ -862,6 +864,33 @@ static void draw_flight_info_bar(SDL_Renderer *renderer, const Cabin_Assets *ass
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
+static void draw_crash_demo_overlay(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, int width, int height)
+{
+    TTF_Font *emergency_font = assets->emergency_font != NULL ? assets->emergency_font : assets->title_font;
+    const Uint32 elapsed = SDL_GetTicks() - data->crash_demo_started_ticks;
+    const int flash_on = ((elapsed / 110u) % 2u) == 0u;
+    const SDL_Color overlay_color = flash_on ? (SDL_Color){126, 0, 8, 74} : (SDL_Color){52, 0, 4, 46};
+    const SDL_Color panel_border_color = {215, 30, 40, 255};
+    const int panel_width = width > 1000 ? 720 : (width * 4) / 5;
+    const int panel_height = height > 600 ? 250 : 210;
+    const SDL_Rect screen = {0, 0, width, height};
+    const SDL_Rect panel = {(width - panel_width) / 2, (height - panel_height) / 2, panel_width, panel_height};
+    const SDL_Rect emergency_line = {panel.x + 18, panel.y + 28, panel.w - 36, 82};
+    const SDL_Rect detected_line = {panel.x + 18, panel.y + 106, panel.w - 36, 58};
+    const SDL_Rect reset_line = {panel.x + 18, panel.y + panel.h - 56, panel.w - 36, 34};
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    fill_rect(renderer, &screen, overlay_color);
+
+    fill_rect(renderer, &panel, COLOR_EMERGENCY_DARK);
+    draw_rect(renderer, &panel, panel_border_color);
+    draw_rect(renderer, &(SDL_Rect){panel.x + 5, panel.y + 5, panel.w - 10, panel.h - 10}, panel_border_color);
+    draw_text_centered(renderer, emergency_font, COLOR_EMERGENCY_RED, &emergency_line, "EMERGENCY");
+    draw_text_centered(renderer, assets->title_font, COLOR_WHITE, &detected_line, "CRASH DETECTED");
+    draw_text_centered(renderer, assets->small_font, COLOR_WHITE, &reset_line, "CRASH DEMO  -  PRESS R TO RESET");
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+}
+
 static SDL_Rect cabin_geo_map_rect(int width, int height)
 {
     SDL_Rect rect = {0, 0, width, height};
@@ -914,6 +943,10 @@ void cabin_ui_render(SDL_Renderer *renderer, const Cabin_Assets *assets, const C
     if (!g_compact_mode)
     {
         draw_status_badge(renderer, assets, data, &map_view_rect);
+    }
+    if (data->crash_demo_active)
+    {
+        draw_crash_demo_overlay(renderer, assets, data, width, height);
     }
 }
 
