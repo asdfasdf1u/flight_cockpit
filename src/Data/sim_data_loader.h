@@ -1,6 +1,8 @@
 #ifndef SIM_DATA_LOADER_H
 #define SIM_DATA_LOADER_H
 
+#include "sim_route.h"
+
 #define SIM_MAX_PFD_SAMPLES 12000
 #define SIM_MAX_ND_FRAMES 4096
 #define SIM_MAX_EICAS_FRAMES 4096
@@ -93,5 +95,6 @@ int sim_data_loader_load_pfd(SimDataStore *store, const char *path);
 int sim_data_loader_load_nd(SimDataStore *store, const char *path);
 int sim_data_loader_load_eicas_upper(SimDataStore *store, const char *path);
 int sim_data_loader_load_eicas_lower(SimDataStore *store, const char *path);
+int sim_data_loader_load_fms_route(SimPlannedRoute *route, const char *path);
 
 #endif

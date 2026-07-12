@@ -473,6 +473,99 @@ int sim_data_loader_load_eicas_lower(SimDataStore *store, const char *path)
     return store->eicas_lower_count > 0;
 }
 
+static const char *sim_fms_point_type_name(int type)
+{
+    switch (type)
+    {
+    case 1:
+        return "AIRPORT";
+    case 2:
+        return "NDB";
+    case 3:
+        return "NAVAID";
+    case 11:
+        return "FIX";
+    default:
+        return "POINT";
+    }
+}
+
+static int sim_valid_route_position(double latitude, double longitude)
+{
+    return latitude >= -90.0 && latitude <= 90.0 &&
+           longitude >= -180.0 && longitude <= 180.0 &&
+           !(latitude == 0.0 && longitude == 0.0);
+}
+
+int sim_data_loader_load_fms_route(SimPlannedRoute *route, const char *path)
+{
+    if (route == NULL || path == NULL)
+    {
+        return 0;
+    }
+
+    memset(route, 0, sizeof(*route));
+    FILE *file = fopen(path, "r");
+    if (file == NULL)
+    {
+        return 0;
+    }
+
+    char line[512];
+    int coordinate_count = 0;
+    while (fgets(line, sizeof(line), file) != NULL && route->point_count < SIM_ROUTE_MAX_POINTS)
+    {
+        int type = 0;
+        char ident[SIM_ROUTE_TEXT_LEN];
+        double altitude = 0.0;
+        double latitude = 0.0;
+        double longitude = 0.0;
+
+        strip_comment(line);
+        char *content = trim_whitespace(line);
+        if (content == NULL || *content == '\0')
+        {
+            continue;
+        }
+
+        ident[0] = '\0';
+        if (sscanf(content, "%d %63s %lf %lf %lf", &type, ident, &altitude, &latitude, &longitude) != 5)
+        {
+            continue;
+        }
+
+        SimRoutePoint *point = &route->points[route->point_count++];
+        snprintf(point->ident, sizeof(point->ident), "%s", ident);
+        snprintf(point->type, sizeof(point->type), "%s", sim_fms_point_type_name(type));
+        point->altitude = altitude;
+        point->latitude = latitude;
+        point->longitude = longitude;
+        point->has_position = sim_valid_route_position(latitude, longitude);
+        if (point->has_position)
+        {
+            coordinate_count++;
+        }
+    }
+
+    fclose(file);
+
+    if (route->point_count <= 0)
+    {
+        memset(route, 0, sizeof(*route));
+        return 0;
+    }
+
+    snprintf(route->origin, sizeof(route->origin), "%s", route->points[0].ident);
+    snprintf(route->destination, sizeof(route->destination), "%s", route->points[route->point_count - 1].ident);
+    snprintf(route->source_path, sizeof(route->source_path), "%s", path);
+    route->valid = 1;
+    route->source = SIM_ROUTE_SOURCE_FMC_FMS_FILE;
+    route->loaded_from_file = 1;
+    route->has_coordinates = coordinate_count == route->point_count;
+    route->active_waypoint_index = route->point_count > 1 ? 1 : 0;
+    return 1;
+}
+
 int sim_data_loader_load_all(SimDataStore *store)
 {
     if (store == NULL)
