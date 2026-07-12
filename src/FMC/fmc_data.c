@@ -23,6 +23,7 @@ SpdAltLimit spd_alt_limit2 = {0, 0};
 // VIATO列表
 VIATO *via_to_list = NULL;
 int via_to_list_count = 0;
+int rte_index = 1;
 // 起飞，目标机场，航路设置，航班号
 char origin[24] = {0};
 char dest[24] = {0};
@@ -47,7 +48,11 @@ int proc_trans_count = 0;
 // 选择项
 SelectDepArr select_dep_arr[3] = {{0},{0},{0}};
 void initVIATO() {
-    via_to_list = (VIATO *)malloc(sizeof(VIATO) * 20);
+    if (via_to_list != NULL) {
+        free(via_to_list);
+        via_to_list = NULL;
+    }
+    via_to_list = (VIATO *)malloc(sizeof(VIATO) * MAX_VIATO_NUM);
     via_to_list_count = 0;
 }
 

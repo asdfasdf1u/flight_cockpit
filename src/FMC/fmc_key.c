@@ -215,6 +215,11 @@ static void action_lsk(FMC_Data *data, const FMC_Button *button)
         }
         if (button->line_select == FMC_LSK_L5)
         {
+            if (rte_index == 1 && data->scratchpad_len == 0 && fmc_data_route_page_count(data) > 1)
+            {
+                fmc_data_route_next_page(data);
+                return;
+            }
             fmc_data_set_route_field(data, FMC_ROUTE_FIELD_VIA);
             return;
         }
@@ -245,7 +250,7 @@ static void action_lsk(FMC_Data *data, const FMC_Button *button)
         }
         if (button->line_select == FMC_LSK_L6)
         {
-            fmc_data_clear_scratchpad(data);
+            fmc_data_set_page(data, FMC_PAGE_ROUTE);
             return;
         }
         return;

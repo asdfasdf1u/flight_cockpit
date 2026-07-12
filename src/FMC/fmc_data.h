@@ -6,6 +6,8 @@
 #include <string.h>
 #include <stdbool.h>
 
+#define MAX_VIATO_NUM 20
+
 #define MAX_ICAO_CODE_LEN 8     // 机场ICAO代码最大长度
 #define MAX_WAYPOINT_CODE_LEN 8 // 航路点代码最大长度
 #define MAX_LINE_BUF_LEN 256    // 读取文件行缓冲区长度
@@ -107,6 +109,7 @@ extern WaypointAVLNode *waypoint_avl_root;   // 航路点AVL树根
 // 航线和航路点列表
 extern VIATO *via_to_list;
 extern int via_to_list_count;
+extern int rte_index;
 // 目标速度与速度高度限制,分别表示爬升、巡航、降落
 extern TgtSpeed tgt_speed1;
 extern TgtSpeed tgt_speed2;
