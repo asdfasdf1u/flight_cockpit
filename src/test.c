@@ -10,6 +10,9 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <windows.h>
 
 #ifdef TEST_MODULE_PFD
 #include "PFD/pfd_main.h"
@@ -49,6 +52,39 @@ typedef enum LauncherChoice
     LAUNCHER_CHOICE_COCKPIT,
     LAUNCHER_CHOICE_CABIN
 } LauncherChoice;
+
+static void launcher_runtime_log(int truncate, const char *format, ...)
+{
+    char log_path[MAX_PATH];
+    DWORD path_length = GetModuleFileNameA(NULL, log_path, (DWORD)sizeof(log_path));
+    FILE *log_file = NULL;
+
+    if (path_length > 0 && path_length < sizeof(log_path))
+    {
+        char *file_name = strrchr(log_path, '\\');
+        if (file_name != NULL)
+        {
+            snprintf(file_name + 1, sizeof(log_path) - (size_t)(file_name + 1 - log_path), "launcher_runtime.log");
+            log_file = fopen(log_path, truncate ? "w" : "a");
+        }
+    }
+
+    if (log_file == NULL)
+    {
+        log_file = fopen("launcher_runtime.log", truncate ? "w" : "a");
+    }
+    if (log_file == NULL)
+    {
+        return;
+    }
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(log_file, format, args);
+    va_end(args);
+    fputc('\n', log_file);
+    fclose(log_file);
+}
 
 static TTF_Font *open_launcher_font(int size)
 {
@@ -162,15 +198,18 @@ static void draw_launcher_button(
 
 static LauncherChoice run_launcher_window(void)
 {
+    launcher_runtime_log(0, "Creating launcher window.");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
     {
         printf("Launcher: SDL_Init failed: %s\n", SDL_GetError());
+        launcher_runtime_log(0, "FAILED: SDL_Init: %s", SDL_GetError());
         return LAUNCHER_CHOICE_QUIT;
     }
 
     if (TTF_Init() != 0)
     {
         printf("Launcher: TTF_Init failed: %s\n", TTF_GetError());
+        launcher_runtime_log(0, "FAILED: TTF_Init: %s", TTF_GetError());
         SDL_Quit();
         return LAUNCHER_CHOICE_QUIT;
     }
@@ -185,6 +224,7 @@ static LauncherChoice run_launcher_window(void)
     if (window == NULL)
     {
         printf("Launcher: SDL_CreateWindow failed: %s\n", SDL_GetError());
+        launcher_runtime_log(0, "FAILED: SDL_CreateWindow: %s", SDL_GetError());
         TTF_Quit();
         SDL_Quit();
         return LAUNCHER_CHOICE_QUIT;
@@ -198,6 +238,7 @@ static LauncherChoice run_launcher_window(void)
     if (renderer == NULL)
     {
         printf("Launcher: SDL_CreateRenderer failed: %s\n", SDL_GetError());
+        launcher_runtime_log(0, "FAILED: SDL_CreateRenderer: %s", SDL_GetError());
         SDL_DestroyWindow(window);
         TTF_Quit();
         SDL_Quit();
@@ -210,7 +251,9 @@ static LauncherChoice run_launcher_window(void)
     if (title_font == NULL || font == NULL || small_font == NULL)
     {
         printf("Launcher: font load failed: %s\n", TTF_GetError());
+        launcher_runtime_log(0, "WARNING: launcher font load: %s", TTF_GetError());
     }
+    launcher_runtime_log(0, "Launcher event loop entered.");
 
     const SDL_Color bg = {18, 28, 42, 255};
     const SDL_Color title = {240, 246, 252, 255};
@@ -257,11 +300,13 @@ static LauncherChoice run_launcher_window(void)
                 {
                     running = 0;
                     choice = LAUNCHER_CHOICE_COCKPIT;
+                    launcher_runtime_log(0, "Cockpit button selected.");
                 }
                 else if (point_in_rect(event.button.x, event.button.y, &cabin_rect))
                 {
                     running = 0;
                     choice = LAUNCHER_CHOICE_CABIN;
+                    launcher_runtime_log(0, "Cabin button selected.");
                 }
             }
         }
@@ -294,6 +339,8 @@ static LauncherChoice run_launcher_window(void)
     TTF_Quit();
     SDL_Quit();
 
+    launcher_runtime_log(0, "Launcher window released; choice=%d.", choice);
+
     return choice;
 }
 
@@ -301,21 +348,28 @@ static int run_launcher(void)
 {
     int exit_code = 0;
 
+    launcher_runtime_log(1, "Launcher process started.");
+
     for (;;)
     {
         LauncherChoice choice = run_launcher_window();
         if (choice == LAUNCHER_CHOICE_QUIT)
         {
+            launcher_runtime_log(0, "Launcher exit selected.");
             break;
         }
 
         if (choice == LAUNCHER_CHOICE_COCKPIT)
         {
+            launcher_runtime_log(0, "Calling cockpit_main_run.");
             exit_code = cockpit_main_run();
+            launcher_runtime_log(0, "cockpit_main_run returned %d.", exit_code);
         }
         else if (choice == LAUNCHER_CHOICE_CABIN)
         {
+            launcher_runtime_log(0, "Calling cabin_main_run.");
             exit_code = cabin_main_run();
+            launcher_runtime_log(0, "cabin_main_run returned %d.", exit_code);
         }
 
         if (exit_code != 0)
@@ -324,6 +378,7 @@ static int run_launcher(void)
         }
     }
 
+    launcher_runtime_log(0, "Launcher process exiting with code=%d.", exit_code);
     return exit_code;
 }
 #endif

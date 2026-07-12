@@ -1,136 +1,309 @@
 #include "cockpit_alarm.h"
 
 #include <math.h>
-#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
-typedef struct AlarmAudioContext
+#define COCKPIT_ALARM_FLASH_PERIOD_MS 900u
+#define COCKPIT_ALARM_CAUTION_TONE_HZ 880
+#define COCKPIT_ALARM_CAUTION_TONE_MS 280
+#define COCKPIT_ALARM_AUDIO_RATE 44100
+
+static int text_contains(const char *text, const char *needle)
 {
-    double phase;
-    double pulse_phase;
-    int warning_on;
-    int caution_on;
-} AlarmAudioContext;
-
-#define COCKPIT_ALARM_FLASH_PERIOD_MS 1100u
-
-static void alarm_audio_callback(void *userdata, Uint8 *stream, int len)
-{
-    AlarmAudioContext *audio = (AlarmAudioContext *)userdata;
-    float *samples = (float *)stream;
-    const int count = len / (int)sizeof(float);
-    const double frequency = audio->warning_on ? 880.0 : 520.0;
-    const double step = 6.283185307179586 * frequency / 48000.0;
-    const double pulse_step = 6.283185307179586 * 1.6 / 48000.0;
-    const float base_volume = audio->warning_on ? 0.16f : (audio->caution_on ? 0.10f : 0.0f);
-
-    for (int i = 0; i < count; ++i)
-    {
-        const float envelope = 0.35f + 0.65f * (0.5f + 0.5f * (float)sin(audio->pulse_phase));
-        samples[i] = base_volume * envelope * (float)sin(audio->phase);
-        audio->phase += step;
-        audio->pulse_phase += pulse_step;
-        if (audio->phase >= 6.283185307179586)
-        {
-            audio->phase -= 6.283185307179586;
-        }
-        if (audio->pulse_phase >= 6.283185307179586)
-        {
-            audio->pulse_phase -= 6.283185307179586;
-        }
-    }
+    return text != NULL && needle != NULL && strstr(text, needle) != NULL;
 }
 
-static void set_audio_flags(Cockpit_AlarmState *state)
+static int is_fire_warning(const SimWarning *warning)
 {
-    if (state == NULL || state->audio_context == NULL || state->audio_device == 0)
-    {
-        return;
-    }
-    SDL_LockAudioDevice(state->audio_device);
-    AlarmAudioContext *audio = (AlarmAudioContext *)state->audio_context;
-    audio->warning_on = state->warning_active && !state->warning_acknowledged;
-    audio->caution_on = state->caution_active && !state->caution_acknowledged;
-    SDL_UnlockAudioDevice(state->audio_device);
-}
-
-void cockpit_alarm_init(Cockpit_AlarmState *state)
-{
-    if (state == NULL) return;
-    memset(state, 0, sizeof(*state));
-
-    AlarmAudioContext *audio = (AlarmAudioContext *)calloc(1, sizeof(*audio));
-    if (audio == NULL) return;
-    SDL_AudioSpec wanted = {0};
-    wanted.freq = 48000;
-    wanted.format = AUDIO_F32SYS;
-    wanted.channels = 1;
-    wanted.samples = 1024;
-    wanted.callback = alarm_audio_callback;
-    wanted.userdata = audio;
-    state->audio_device = SDL_OpenAudioDevice(NULL, 0, &wanted, NULL, 0);
-    if (state->audio_device == 0)
-    {
-        free(audio);
-        return;
-    }
-    state->audio_context = audio;
-    SDL_PauseAudioDevice(state->audio_device, 0);
-}
-
-void cockpit_alarm_destroy(Cockpit_AlarmState *state)
-{
-    if (state == NULL) return;
-    if (state->audio_device != 0) SDL_CloseAudioDevice(state->audio_device);
-    free(state->audio_context);
-    memset(state, 0, sizeof(*state));
-}
-
-static int is_engine_warning_text(const char *text)
-{
-    if (text == NULL)
+    if (warning == NULL || !warning->active || warning->level != SIM_WARNING_WARNING)
     {
         return 0;
     }
 
-    return strstr(text, "ENG 1") != NULL ||
-           strstr(text, "ENG1") != NULL ||
-           strstr(text, "ENG 2") != NULL ||
-           strstr(text, "ENG2") != NULL;
+    return text_contains(warning->text, "FIRE");
 }
 
-void cockpit_alarm_update(Cockpit_AlarmState *state, const AircraftSystems_Data *systems)
+static int is_master_caution_warning(const SimWarning *warning)
 {
-    if (state == NULL || systems == NULL) return;
-    int engine_warning = 0;
-    for (int i = 0; i < systems->warning_count; ++i)
+    if (warning == NULL || !warning->active || warning->level == SIM_WARNING_INFO)
     {
-        const AircraftSystems_WarningItem *item = &systems->warnings[i];
-        if (!item->active || item->level == AIRCRAFT_SYSTEMS_WARNING_INFO)
+        return 0;
+    }
+
+    if (is_fire_warning(warning))
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+static void append_signature(char *signature, size_t signature_size, const char *text)
+{
+    if (signature == NULL || signature_size == 0 || text == NULL)
+    {
+        return;
+    }
+
+    const size_t used = strlen(signature);
+    if (used >= signature_size - 1)
+    {
+        return;
+    }
+
+    snprintf(signature + used, signature_size - used, "%s%s", used > 0 ? "|" : "", text);
+}
+
+static void first_source(char *dest, size_t dest_size, const char *signature)
+{
+    const char *separator = NULL;
+    size_t len = 0;
+
+    if (dest == NULL || dest_size == 0)
+    {
+        return;
+    }
+
+    if (signature == NULL || signature[0] == '\0')
+    {
+        snprintf(dest, dest_size, "NONE");
+        return;
+    }
+
+    separator = strchr(signature, '|');
+    len = separator != NULL ? (size_t)(separator - signature) : strlen(signature);
+    if (len >= dest_size)
+    {
+        len = dest_size - 1;
+    }
+
+    memcpy(dest, signature, len);
+    dest[len] = '\0';
+}
+
+static void log_alarm_state(const CockpitAlarmState *state)
+{
+    char log_signature[sizeof(state->last_log_signature)];
+    char fire_source[64];
+    char caution_source[64];
+
+    if (state == NULL)
+    {
+        return;
+    }
+
+    snprintf(
+        log_signature,
+        sizeof(log_signature),
+        "fire=%d:%d:%s caution=%d:%d:%s",
+        state->fire_active,
+        state->fire_acknowledged,
+        state->fire_signature,
+        state->caution_active,
+        state->caution_acknowledged,
+        state->caution_signature);
+
+    if (strcmp(log_signature, state->last_log_signature) == 0)
+    {
+        return;
+    }
+
+    first_source(fire_source, sizeof(fire_source), state->fire_signature);
+    first_source(caution_source, sizeof(caution_source), state->caution_signature);
+    printf(
+        "Cockpit Alarm: FIRE_WARN active=%d ack=%d source=%s; MASTER_CAUTION active=%d ack=%d source=%s\n",
+        state->fire_active,
+        state->fire_acknowledged,
+        fire_source,
+        state->caution_active,
+        state->caution_acknowledged,
+        caution_source);
+    fflush(stdout);
+}
+
+static void remember_logged_state(CockpitAlarmState *state)
+{
+    if (state == NULL)
+    {
+        return;
+    }
+
+    snprintf(
+        state->last_log_signature,
+        sizeof(state->last_log_signature),
+        "fire=%d:%d:%s caution=%d:%d:%s",
+        state->fire_active,
+        state->fire_acknowledged,
+        state->fire_signature,
+        state->caution_active,
+        state->caution_acknowledged,
+        state->caution_signature);
+}
+
+static void play_master_caution_tone(CockpitAlarmState *state)
+{
+    const int sample_count = COCKPIT_ALARM_AUDIO_RATE * COCKPIT_ALARM_CAUTION_TONE_MS / 1000;
+    Sint16 samples[COCKPIT_ALARM_AUDIO_RATE * COCKPIT_ALARM_CAUTION_TONE_MS / 1000];
+
+    if (state == NULL || state->caution_audio_device == 0)
+    {
+        return;
+    }
+
+    for (int i = 0; i < sample_count; ++i)
+    {
+        const float time = (float)i / (float)COCKPIT_ALARM_AUDIO_RATE;
+        const float edge = 0.025f;
+        const float duration = (float)COCKPIT_ALARM_CAUTION_TONE_MS / 1000.0f;
+        float envelope = 1.0f;
+
+        if (time < edge)
         {
-            continue;
+            envelope = time / edge;
         }
-        if (is_engine_warning_text(item->text))
+        else if (time > duration - edge)
         {
-            engine_warning = 1;
-            break;
+            envelope = (duration - time) / edge;
+        }
+
+        samples[i] = (Sint16)(sinf(time * 6.283185307179586f * (float)COCKPIT_ALARM_CAUTION_TONE_HZ) * envelope * 7200.0f);
+    }
+
+    SDL_ClearQueuedAudio(state->caution_audio_device);
+    if (SDL_QueueAudio(state->caution_audio_device, samples, (Uint32)sizeof(samples)) != 0)
+    {
+        printf("Cockpit Alarm: master caution tone queue failed: %s\n", SDL_GetError());
+        fflush(stdout);
+        return;
+    }
+
+    SDL_PauseAudioDevice(state->caution_audio_device, 0);
+    printf("Cockpit Alarm: MASTER_CAUTION single tone played.\n");
+    fflush(stdout);
+}
+
+void cockpit_alarm_init(CockpitAlarmState *state)
+{
+    if (state == NULL)
+    {
+        return;
+    }
+
+    memset(state, 0, sizeof(*state));
+    state->last_log_signature[0] = '\0';
+
+    if ((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) == 0)
+    {
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
+        {
+            printf("Cockpit Alarm: audio subsystem unavailable: %s\n", SDL_GetError());
+            fflush(stdout);
+            return;
+        }
+        state->caution_audio_subsystem_owned = 1;
+    }
+
+    SDL_AudioSpec desired;
+    SDL_zero(desired);
+    desired.freq = COCKPIT_ALARM_AUDIO_RATE;
+    desired.format = AUDIO_S16SYS;
+    desired.channels = 1;
+    desired.samples = 1024;
+    desired.callback = NULL;
+    state->caution_audio_device = SDL_OpenAudioDevice(NULL, 0, &desired, NULL, 0);
+    if (state->caution_audio_device == 0)
+    {
+        printf("Cockpit Alarm: master caution tone unavailable: %s\n", SDL_GetError());
+        fflush(stdout);
+    }
+}
+
+void cockpit_alarm_destroy(CockpitAlarmState *state)
+{
+    if (state == NULL)
+    {
+        return;
+    }
+
+    if (state->caution_audio_device != 0)
+    {
+        SDL_CloseAudioDevice(state->caution_audio_device);
+    }
+    if (state->caution_audio_subsystem_owned)
+    {
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    }
+    memset(state, 0, sizeof(*state));
+}
+
+void cockpit_alarm_update(CockpitAlarmState *state, const SimSnapshot *snapshot)
+{
+    char fire_signature[sizeof(state->fire_signature)];
+    char caution_signature[sizeof(state->caution_signature)];
+    int fire_active = 0;
+    int caution_active = 0;
+    int caution_is_new = 0;
+
+    if (state == NULL)
+    {
+        return;
+    }
+
+    fire_signature[0] = '\0';
+    caution_signature[0] = '\0';
+
+    if (snapshot != NULL)
+    {
+        for (int i = 0; i < snapshot->warning_count; ++i)
+        {
+            const SimWarning *warning = &snapshot->warnings[i];
+            if (is_fire_warning(warning))
+            {
+                fire_active = 1;
+                append_signature(fire_signature, sizeof(fire_signature), warning->text);
+            }
+            else if (is_master_caution_warning(warning))
+            {
+                caution_active = 1;
+                append_signature(caution_signature, sizeof(caution_signature), warning->text);
+            }
         }
     }
 
-    if (engine_warning && (!state->warning_active || !state->caution_active))
+    if (!fire_active)
     {
-        state->warning_acknowledged = 0;
+        state->fire_acknowledged = 0;
+    }
+    else if (!state->fire_active || strcmp(state->fire_signature, fire_signature) != 0)
+    {
+        state->fire_acknowledged = 0;
+    }
+
+    caution_is_new = caution_active &&
+                     (!state->caution_active || strcmp(state->caution_signature, caution_signature) != 0);
+
+    if (!caution_active)
+    {
         state->caution_acknowledged = 0;
     }
-    if (!engine_warning)
+    else if (caution_is_new)
     {
-        state->warning_acknowledged = 0;
         state->caution_acknowledged = 0;
     }
 
-    state->warning_active = engine_warning;
-    state->caution_active = engine_warning;
-    set_audio_flags(state);
+    state->fire_active = fire_active;
+    state->caution_active = caution_active;
+    snprintf(state->fire_signature, sizeof(state->fire_signature), "%s", fire_signature);
+    snprintf(state->caution_signature, sizeof(state->caution_signature), "%s", caution_signature);
+
+    if (caution_is_new)
+    {
+        play_master_caution_tone(state);
+    }
+
+    log_alarm_state(state);
+    remember_logged_state(state);
 }
 
 static void fill(SDL_Renderer *renderer, SDL_Rect rect, SDL_Color color)
@@ -142,8 +315,14 @@ static void fill(SDL_Renderer *renderer, SDL_Rect rect, SDL_Color color)
 static Uint8 scaled_alpha(Uint8 alpha, float intensity)
 {
     const int value = (int)((float)alpha * intensity + 0.5f);
-    if (value < 0) return 0;
-    if (value > 255) return 255;
+    if (value < 0)
+    {
+        return 0;
+    }
+    if (value > 255)
+    {
+        return 255;
+    }
     return (Uint8)value;
 }
 
@@ -158,13 +337,18 @@ static float smooth_flash_intensity(Uint32 ticks)
     const float phase = (float)(ticks % COCKPIT_ALARM_FLASH_PERIOD_MS) / (float)COCKPIT_ALARM_FLASH_PERIOD_MS;
     const float wave = 0.5f + 0.5f * sinf(phase * 6.283185307179586f - 1.5707963267948966f);
     const float eased = wave * wave * (3.0f - 2.0f * wave);
-    return 0.22f + 0.78f * eased;
+    return 0.24f + 0.76f * eased;
 }
 
 static void draw_lamp_glow(SDL_Renderer *renderer, SDL_Rect rect, SDL_Color color, float intensity)
 {
-    if (intensity <= 0.0f) return;
     SDL_BlendMode previous;
+
+    if (intensity <= 0.0f)
+    {
+        return;
+    }
+
     SDL_GetRenderDrawBlendMode(renderer, &previous);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_ADD);
     fill(renderer, (SDL_Rect){rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2}, with_intensity(color, intensity * 0.34f));
@@ -173,28 +357,57 @@ static void draw_lamp_glow(SDL_Renderer *renderer, SDL_Rect rect, SDL_Color colo
     SDL_SetRenderDrawBlendMode(renderer, previous);
 }
 
-void cockpit_alarm_render(SDL_Renderer *renderer, const Cockpit_Layout *layout, const Cockpit_AlarmState *state, Uint32 ticks)
+void cockpit_alarm_render(SDL_Renderer *renderer, const Cockpit_Layout *layout, const CockpitAlarmState *state, Uint32 ticks)
 {
-    if (renderer == NULL || layout == NULL || state == NULL) return;
     const float flash = smooth_flash_intensity(ticks);
-    const float warning_intensity = state->warning_active ? (state->warning_acknowledged ? 0.55f : flash) : 0.0f;
-    const float caution_intensity = state->caution_active ? (state->caution_acknowledged ? 0.55f : flash) : 0.0f;
-    draw_lamp_glow(renderer, layout->fire_warn_rect, (SDL_Color){205, 16, 18, 170}, warning_intensity);
-    draw_lamp_glow(renderer, layout->master_caution_rect, (SDL_Color){220, 135, 5, 160}, caution_intensity);
+
+    if (renderer == NULL || layout == NULL || state == NULL)
+    {
+        return;
+    }
+
+    draw_lamp_glow(
+        renderer,
+        layout->fire_warn_rect,
+        (SDL_Color){205, 16, 18, 170},
+        state->fire_active && !state->fire_acknowledged ? flash : 0.0f);
+    draw_lamp_glow(
+        renderer,
+        layout->master_caution_rect,
+        (SDL_Color){220, 135, 5, 160},
+        state->caution_active && !state->caution_acknowledged ? 1.0f : 0.0f);
 }
 
-int cockpit_alarm_handle_click(Cockpit_AlarmState *state, float world_x, float world_y, const Cockpit_Layout *layout)
+int cockpit_alarm_handle_click(CockpitAlarmState *state, float world_x, float world_y, const Cockpit_Layout *layout)
 {
-    if (state == NULL || layout == NULL) return 0;
     SDL_Point point = {(int)world_x, (int)world_y};
     int handled = 0;
-    if (SDL_PointInRect(&point, &layout->fire_warn_rect) || SDL_PointInRect(&point, &layout->master_caution_rect))
+
+    if (state == NULL || layout == NULL)
     {
-        state->warning_acknowledged = 1;
-        state->caution_acknowledged = 1;
+        return 0;
+    }
+
+    if (SDL_PointInRect(&point, &layout->fire_warn_rect))
+    {
+        state->fire_acknowledged = 1;
         handled = 1;
     }
-    if (!handled) return 0;
-    set_audio_flags(state);
-    return 1;
+    if (SDL_PointInRect(&point, &layout->master_caution_rect))
+    {
+        state->caution_acknowledged = 1;
+        if (state->caution_audio_device != 0)
+        {
+            SDL_ClearQueuedAudio(state->caution_audio_device);
+        }
+        handled = 1;
+    }
+
+    if (handled)
+    {
+        log_alarm_state(state);
+        remember_logged_state(state);
+    }
+
+    return handled;
 }

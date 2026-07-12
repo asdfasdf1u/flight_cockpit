@@ -2,23 +2,28 @@
 #define COCKPIT_ALARM_H
 
 #include <SDL2/SDL.h>
-#include "../Systems/aircraft_systems_data.h"
+#include "../Data/sim_snapshot.h"
 #include "cockpit_layout.h"
 
-typedef struct Cockpit_AlarmState
+typedef struct CockpitAlarmState
 {
-    int warning_active;
+    int fire_active;
     int caution_active;
-    int warning_acknowledged;
+    int fire_acknowledged;
     int caution_acknowledged;
-    SDL_AudioDeviceID audio_device;
-    void *audio_context;
-} Cockpit_AlarmState;
+    SDL_AudioDeviceID caution_audio_device;
+    int caution_audio_subsystem_owned;
+    char fire_signature[128];
+    char caution_signature[128];
+    char last_log_signature[384];
+} CockpitAlarmState;
 
-void cockpit_alarm_init(Cockpit_AlarmState *state);
-void cockpit_alarm_destroy(Cockpit_AlarmState *state);
-void cockpit_alarm_update(Cockpit_AlarmState *state, const AircraftSystems_Data *systems);
-void cockpit_alarm_render(SDL_Renderer *renderer, const Cockpit_Layout *layout, const Cockpit_AlarmState *state, Uint32 ticks);
-int cockpit_alarm_handle_click(Cockpit_AlarmState *state, float world_x, float world_y, const Cockpit_Layout *layout);
+typedef CockpitAlarmState Cockpit_AlarmState;
+
+void cockpit_alarm_init(CockpitAlarmState *state);
+void cockpit_alarm_destroy(CockpitAlarmState *state);
+void cockpit_alarm_update(CockpitAlarmState *state, const SimSnapshot *snapshot);
+void cockpit_alarm_render(SDL_Renderer *renderer, const Cockpit_Layout *layout, const CockpitAlarmState *state, Uint32 ticks);
+int cockpit_alarm_handle_click(CockpitAlarmState *state, float world_x, float world_y, const Cockpit_Layout *layout);
 
 #endif

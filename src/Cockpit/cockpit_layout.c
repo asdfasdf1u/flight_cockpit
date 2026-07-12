@@ -57,6 +57,9 @@ Cockpit_Layout cockpit_layout_default(int world_width, int world_height)
     layout.eicas2_rect = scale_rect(3570, 1965, 740, 760, sx, sy);
     layout.right_fmc_rect = scale_rect(4535, 1930, 510, 820, sx, sy);
 
+    layout.master_caution_rect = scale_rect(6215, 276, 171, 202, sx, sy);
+    layout.fire_warn_rect = scale_rect(6408, 276, 166, 202, sx, sy);
+
     return layout;
 }
 
