@@ -77,6 +77,54 @@ static int add_route_point(FMC_Data *data, const char *ident)
     return 1;
 }
 
+static int add_viato_route_point(FMC_Data *data, const char *ident)
+{
+    Waypoint *wpt = NULL;
+    Airport *arp = NULL;
+    const char *to = NULL;
+
+    if (data == NULL || ident == NULL || ident[0] == '\0')
+    {
+        return 0;
+    }
+
+    if (via_to_list == NULL)
+    {
+        initVIATO();
+    }
+    if (via_to_list == NULL)
+    {
+        set_text(data->message, sizeof(data->message), "ROUTE MEMORY ERR");
+        return 0;
+    }
+    if (via_to_list_count >= MAX_VIATO_NUM)
+    {
+        set_text(data->message, sizeof(data->message), "ROUTE FULL");
+        return 0;
+    }
+
+    wpt = fmc_query_waypoint_by_code(ident);
+    arp = fmc_query_airport_by_icao(ident);
+    if (wpt == NULL && arp == NULL)
+    {
+        set_text(data->message, sizeof(data->message), "NOT IN DATABASE");
+        return 0;
+    }
+
+    to = wpt != NULL ? wpt->wp_code : arp->icao_code;
+    set_text(via_to_list[via_to_list_count].VIA, sizeof(via_to_list[via_to_list_count].VIA), "DIRECT");
+    set_text(via_to_list[via_to_list_count].TO, sizeof(via_to_list[via_to_list_count].TO), to);
+    if (data->route_count < FMC_MAX_ROUTE_POINTS)
+    {
+        set_text(data->route_points[data->route_count], sizeof(data->route_points[data->route_count]), to);
+        data->route_count++;
+    }
+    via_to_list_count++;
+    data->origin_exec_pending = 1;
+    fmc_data_clear_scratchpad(data);
+    return 1;
+}
+
 static int load_fms_route_file(FMC_Data *data, const char *path)
 {
     FILE *fp = NULL;
@@ -238,6 +286,7 @@ static int set_airport_field(FMC_Data *data, char *dest_field, int dest_size, co
     sync_library_route_fields(data);
     update_exec_ready(data);
     update_auto_route(data);
+    data->origin_exec_pending = 1;
     if (data->origin[0] != '\0' && data->destination[0] != '\0' && data->route_count > 0)
     {
         return 1;
@@ -290,7 +339,9 @@ void fmc_data_init(FMC_Data *data)
     set_text(data->climb_transition_alt_text, sizeof(data->climb_transition_alt_text), "18000");
     set_text(data->legs_sequence, sizeof(data->legs_sequence), "AUTO/INHIBIT");
     sync_library_route_fields(data);
+    initVIATO();
     load_airport_data();
+    load_waypoint_data();
 }
 
 void fmc_data_destroy(FMC_Data *data)
@@ -319,6 +370,11 @@ void fmc_data_set_page(FMC_Data *data, FMC_Page page)
     }
 
     data->current_page = page;
+    if (page == FMC_PAGE_ROUTE)
+    {
+        rte_index = 1;
+        data->configured_route_page = 0;
+    }
     data->message[0] = '\0';
 }
 
@@ -382,33 +438,40 @@ void fmc_data_clear_scratchpad(FMC_Data *data)
 
 int fmc_data_route_page_count(const FMC_Data *data)
 {
-    int count = data != NULL ? data->route_count : 0;
-    if (count <= 0)
-    {
-        return 1;
-    }
-    return (count + FMC_RTE_PAGE_SIZE - 1) / FMC_RTE_PAGE_SIZE;
+    (void)data;
+    return (via_to_list_count + FMC_RTE_PAGE_SIZE - 1) / FMC_RTE_PAGE_SIZE + 1;
 }
 
 int fmc_data_route_next_page(FMC_Data *data)
 {
-    int page_count = fmc_data_route_page_count(data);
-    if (data == NULL || data->configured_route_page + 1 >= page_count)
+    if (data == NULL || data->current_page != FMC_PAGE_ROUTE)
     {
         return 0;
     }
-    data->configured_route_page++;
-    return 1;
+    if (rte_index < (via_to_list_count + FMC_RTE_PAGE_SIZE - 1) / FMC_RTE_PAGE_SIZE + 1)
+    {
+        rte_index++;
+        data->configured_route_page = rte_index - 1;
+        return 1;
+    }
+    data->configured_route_page = rte_index - 1;
+    return 0;
 }
 
 int fmc_data_route_prev_page(FMC_Data *data)
 {
-    if (data == NULL || data->configured_route_page <= 0)
+    if (data == NULL || data->current_page != FMC_PAGE_ROUTE)
     {
         return 0;
     }
-    data->configured_route_page--;
-    return 1;
+    if (rte_index > 1)
+    {
+        rte_index--;
+        data->configured_route_page = rte_index - 1;
+        return 1;
+    }
+    data->configured_route_page = rte_index - 1;
+    return 0;
 }
 
 int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field)
@@ -429,9 +492,22 @@ int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field)
     case FMC_ROUTE_FIELD_FLIGHT_NO:
         return set_scratchpad_text(data, data->flight_no, sizeof(data->flight_no), "FLT NO");
     case FMC_ROUTE_FIELD_VIA:
+        if (rte_index != 1)
+        {
+            return 0;
+        }
         return set_scratchpad_text(data, data->route_via, sizeof(data->route_via), "VIA");
     case FMC_ROUTE_FIELD_TO_FIX:
-        return set_scratchpad_text(data, data->route_points[0], sizeof(data->route_points[0]), "TO");
+        if (rte_index != 1)
+        {
+            return 0;
+        }
+        if (data->scratchpad_len <= 0)
+        {
+            set_text(data->message, sizeof(data->message), "ENTER TO");
+            return 0;
+        }
+        return add_viato_route_point(data, data->scratchpad);
     default:
         set_text(data->message, sizeof(data->message), "NO ROUTE FIELD");
         return 0;

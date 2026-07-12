@@ -195,7 +195,16 @@ static void draw_scaled_circle_outline(SDL_Renderer *renderer, const FMC_Layout 
     }
 }
 
-static void draw_hover_outline(SDL_Renderer *renderer, const FMC_Layout *layout, const FMC_Button *button)
+static SDL_Rect expand_rect(SDL_Rect rect, int amount)
+{
+    rect.x -= amount;
+    rect.y -= amount;
+    rect.w += amount * 2;
+    rect.h += amount * 2;
+    return rect;
+}
+
+static void draw_button_highlight(SDL_Renderer *renderer, const FMC_Layout *layout, const FMC_Button *button, SDL_Color color)
 {
     if (button == NULL || button->id == FMC_BUTTON_NONE)
     {
@@ -204,12 +213,23 @@ static void draw_hover_outline(SDL_Renderer *renderer, const FMC_Layout *layout,
 
     if (button->shape == FMC_BUTTON_SHAPE_RECT)
     {
-        draw_scaled_outline(renderer, layout, &button->rect, COLOR_WHITE);
+        for (int i = 0; i < 3; ++i)
+        {
+            SDL_Rect outline = expand_rect(button->rect, i);
+            draw_scaled_outline(renderer, layout, &outline, color);
+        }
+        return;
     }
-    else
+
+    for (int i = 0; i < 3; ++i)
     {
-        draw_scaled_circle_outline(renderer, layout, button->center, button->radius, COLOR_WHITE);
+        draw_scaled_circle_outline(renderer, layout, button->center, button->radius + i, color);
     }
+}
+
+static void draw_hover_outline(SDL_Renderer *renderer, const FMC_Layout *layout, const FMC_Button *button)
+{
+    draw_button_highlight(renderer, layout, button, COLOR_WHITE);
 }
 
 static void draw_text(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, SDL_Color color, int x, int y, const char *format, ...)
@@ -431,52 +451,60 @@ static void draw_home_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Lay
 static void draw_route_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
 {
     const int page_count = fmc_data_route_page_count(data);
-    int page_index = data->configured_route_page;
+    int page_index = rte_index;
     char page_text[16];
-    const int route_rows = FMC_RTE_PAGE_SIZE;
 
-    if (page_index < 0)
+    if (page_index < 1)
     {
-        page_index = 0;
+        page_index = 1;
     }
-    if (page_index >= page_count)
+    if (page_index > page_count)
     {
-        page_index = page_count - 1;
+        page_index = page_count;
     }
 
-    snprintf(page_text, sizeof(page_text), "RTE %d/%d", page_index + 1, page_count);
+    snprintf(page_text, sizeof(page_text), "RTE %d/%d", page_index, page_count);
     draw_fmc_header(renderer, font, layout, "ACT FPLN", "", page_text);
 
-    draw_text(renderer, font, layout, COLOR_TEXT, 126, 112, "ORIGIN");
-    draw_text(renderer, font, layout, COLOR_WHITE, 126, 133, "%s", airport_display_text(data->origin));
-    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 112, "DEST");
-    draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 133, "%s", airport_display_text(data->destination));
-
-    draw_text(renderer, font, layout, COLOR_TEXT, 126, 161, "FLT NO");
-    draw_text(renderer, font, layout, COLOR_WHITE, 126, 182, "%s", data->flight_no[0] ? data->flight_no : "----");
-    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 161, "CRZ ALT");
-    if (data->cruise_altitude > 0)
+    if (page_index == 1)
     {
-        draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 182, "FL%03d", data->cruise_altitude / 100);
+        draw_text(renderer, font, layout, COLOR_TEXT, 126, 112, "ORIGIN");
+        draw_text(renderer, font, layout, COLOR_WHITE, 126, 133, "%s", airport_display_text(data->origin));
+        draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 112, "DESTINATION");
+        draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 133, "%s", airport_display_text(data->destination));
+
+        draw_text(renderer, font, layout, COLOR_TEXT, 126, 161, "CO ROUTE");
+        draw_text(renderer, font, layout, COLOR_WHITE, 126, 182, "%s", data->company_route[0] ? data->company_route : "----");
+        draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 210, "FLT NO");
+        draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 231, "%s", data->flight_no[0] ? data->flight_no : "----");
+
+        draw_text(renderer, font, layout, COLOR_TEXT, 126, 296, via_to_list_count > 0 ? "<VIA" : "VIA");
+        draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 296, "TO");
+        if (via_to_list_count > 0)
+        {
+            draw_text(renderer, font, layout, COLOR_WHITE, 126, 317, "%s", via_to_list[0].VIA);
+            draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 317, "%s", via_to_list[0].TO);
+        }
+        else
+        {
+            draw_text(renderer, font, layout, COLOR_WHITE, 126, 317, "DIRECT");
+            draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 317, "----");
+        }
     }
     else
     {
-        draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 182, "----");
-    }
+        const int start_index = (page_index - 2) * FMC_RTE_PAGE_SIZE;
+        const int end_index = start_index + 4;
+        const int row_y = 132;
+        const int row_spacing = 48;
 
-    draw_text(renderer, font, layout, COLOR_TEXT, 126, 210, "VIA");
-    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 210, "TO");
+        draw_text(renderer, font, layout, COLOR_TEXT, 126, 112, "VIA");
+        draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 112, "TO");
 
-    const int start_index = page_index * FMC_RTE_PAGE_SIZE;
-    const int row_y = 231;
-    const int row_spacing = 24;
-    for (int row = 0; row < route_rows; ++row)
-    {
-        const int route_index = start_index + row;
-        if (route_index < data->route_count && data->route_points[route_index][0] != '\0')
+        for (int route_index = start_index, row = 0; route_index <= end_index && route_index < via_to_list_count; ++route_index, ++row)
         {
-            draw_text(renderer, font, layout, COLOR_DIM, 126, row_y + row * row_spacing, "%02d DIRECT", route_index + 1);
-            draw_right_text(renderer, font, layout, COLOR_WHITE, 510, row_y + row * row_spacing, "%s", data->route_points[route_index]);
+            draw_text(renderer, font, layout, COLOR_WHITE, 126, row_y + row * row_spacing, "%s", via_to_list[route_index].VIA);
+            draw_right_text(renderer, font, layout, COLOR_WHITE, 510, row_y + row * row_spacing, "%s", via_to_list[route_index].TO);
         }
     }
 
@@ -601,10 +629,29 @@ static void draw_descent_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_
 
 static void draw_legs_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
 {
-    draw_text(renderer, font, layout, COLOR_TEXT, 132, 92, "ACT LEGS");
-    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 124, "SEQUENCE");
-    draw_right_text(renderer, font, layout, COLOR_WHITE, 510, 150, "%s", data->legs_sequence[0] ? data->legs_sequence : "AUTO/INHIBIT");
-    draw_fmc_softkeys(renderer, font, layout, "", "");
+    (void)data;
+    draw_fmc_header(renderer, font, layout, "ACT LEGS", "", "1/1");
+    draw_text(renderer, font, layout, COLOR_TEXT, 126, 112, "VIA");
+    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 112, "TO");
+
+    if (via_to_list_count <= 0)
+    {
+        draw_centered_text(renderer, font, layout, COLOR_DIM, &(SDL_Rect){126, 190, 384, 24}, "NO ROUTE");
+        draw_fmc_softkeys(renderer, font, layout, "<RTE", "");
+        return;
+    }
+
+    const int max_rows = 6;
+    const int row_y = 132;
+    const int row_spacing = 36;
+    int rows = via_to_list_count < max_rows ? via_to_list_count : max_rows;
+    for (int i = 0; i < rows; ++i)
+    {
+        draw_text(renderer, font, layout, COLOR_DIM, 126, row_y + i * row_spacing, "%02d %s", i + 1, via_to_list[i].VIA);
+        draw_right_text(renderer, font, layout, COLOR_WHITE, 510, row_y + i * row_spacing, "%s", via_to_list[i].TO);
+    }
+
+    draw_fmc_softkeys(renderer, font, layout, "<RTE", "");
 }
 
 static void draw_hold_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
@@ -708,13 +755,7 @@ static void draw_active_button(SDL_Renderer *renderer, const FMC_Layout *layout,
         const FMC_Button *button = fmc_key_button_at(i);
         if (fmc_key_is_page_button(button) && button->page == current_page)
         {
-            draw_scaled_outline(renderer, layout, &button->rect, COLOR_CYAN);
-            draw_scaled_outline(renderer, layout, &(SDL_Rect){
-                                              button->rect.x + 2,
-                                              button->rect.y + 2,
-                                              button->rect.w - 4,
-                                              button->rect.h - 4},
-                                COLOR_CYAN);
+            draw_button_highlight(renderer, layout, button, COLOR_CYAN);
             return;
         }
     }
@@ -735,13 +776,7 @@ static void draw_exec_light(SDL_Renderer *renderer, const FMC_Layout *layout, co
         {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             draw_scaled_rect(renderer, layout, &button->rect, COLOR_EXEC);
-            draw_scaled_outline(renderer, layout, &button->rect, COLOR_EXEC);
-            draw_scaled_outline(renderer, layout, &(SDL_Rect){
-                                                  button->rect.x + 2,
-                                                  button->rect.y + 2,
-                                                  button->rect.w - 4,
-                                                  button->rect.h - 4},
-                                COLOR_EXEC);
+            draw_button_highlight(renderer, layout, button, COLOR_EXEC);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
             return;
         }

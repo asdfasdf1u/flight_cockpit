@@ -11,6 +11,7 @@
                 "${workspaceFolder}/src/Cockpit/cockpit_main.c",
                 "${workspaceFolder}/src/Cockpit/cockpit_ui.c",
                 "${workspaceFolder}/src/Cockpit/cockpit_layout.c",
+                "${workspaceFolder}/src/Cockpit/cockpit_alarm.c",
                 "${workspaceFolder}/src/Cabin/cabin_main.c",
                 "${workspaceFolder}/src/Cabin/cabin_ui.c",
                 "${workspaceFolder}/src/Cabin/cabin_data.c",
@@ -50,7 +51,7 @@
             ],
             "group": {
                 "kind": "build",
-                "isDefault": false
+                "isDefault": true
             },
             "options": {
                 "env": {
@@ -95,7 +96,7 @@
             ],
             "group": {
                 "kind": "build",
-                "isDefault": true
+                "isDefault": false
             },
             "detail": "Debugger generated task."
         }

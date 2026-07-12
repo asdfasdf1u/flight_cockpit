@@ -4,9 +4,14 @@
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+#include <windows.h>
 
 #include "cockpit_layout.h"
 #include "cockpit_ui.h"
+#include "cockpit_alarm.h"
 
 #include "../PFD/pfd_data.h"
 #include "../PFD/pfd_ui.h"
@@ -17,6 +22,7 @@
 #include "../Data/sim_data_center.h"
 
 #include "../Systems/aircraft_systems_data.h"
+#include "../Data/sim_data_center.h"
 #include "../EICAS1/eicas_data.h"
 #include "../EICAS1/eicas1_ui.h"
 #include "../EICAS2/eicas2_ui.h"
@@ -59,6 +65,57 @@ typedef struct Cockpit_Camera
     float offset_x;
     float offset_y;
 } Cockpit_Camera;
+
+typedef struct Cockpit_MainState
+{
+    CockpitAlarmState alarm;
+} Cockpit_MainState;
+
+static void cockpit_startup_log(int truncate, const char *format, ...)
+{
+    char log_path[MAX_PATH];
+    DWORD path_length = GetModuleFileNameA(NULL, log_path, (DWORD)sizeof(log_path));
+    FILE *log_file = NULL;
+
+    if (path_length > 0 && path_length < sizeof(log_path))
+    {
+        char *file_name = strrchr(log_path, '\\');
+        if (file_name != NULL)
+        {
+            snprintf(file_name + 1, sizeof(log_path) - (size_t)(file_name + 1 - log_path), "cockpit_startup.log");
+            log_file = fopen(log_path, truncate ? "w" : "a");
+        }
+    }
+
+    if (log_file == NULL)
+    {
+        log_file = fopen("cockpit_startup.log", truncate ? "w" : "a");
+    }
+    if (log_file == NULL)
+    {
+        return;
+    }
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(log_file, format, args);
+    va_end(args);
+    fputc('\n', log_file);
+    fclose(log_file);
+}
+
+static void cockpit_show_startup_error(const char *stage, const char *detail)
+{
+    char message[512];
+
+    snprintf(
+        message,
+        sizeof(message),
+        "Cockpit failed during %s.\n\n%s\n\nDetails were written to build/cockpit_startup.log.",
+        stage != NULL ? stage : "startup",
+        detail != NULL ? detail : "No additional SDL error was supplied.");
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Cockpit startup failed", message, NULL);
+}
 
 static TTF_Font *open_cockpit_font(void)
 {
@@ -229,6 +286,67 @@ static void render_eicas2_adapter(SDL_Renderer *renderer, TTF_Font *font, const 
     eicas2_ui_render(renderer, font, (const AircraftSystems_Data *)data);
 }
 
+static AircraftSystems_WarningLevel sim_warning_level_to_aircraft(SimWarningLevel level)
+{
+    switch (level)
+    {
+    case SIM_WARNING_WARNING:
+        return AIRCRAFT_SYSTEMS_WARNING_WARNING;
+    case SIM_WARNING_CAUTION:
+        return AIRCRAFT_SYSTEMS_WARNING_CAUTION;
+    case SIM_WARNING_INFO:
+    default:
+        return AIRCRAFT_SYSTEMS_WARNING_INFO;
+    }
+}
+
+static void apply_sim_snapshot_to_aircraft_systems(AircraftSystems_Data *data, const SimSnapshot *snapshot)
+{
+    if (data == NULL || snapshot == NULL)
+    {
+        return;
+    }
+
+    data->engine_left.n1 = snapshot->n1_left;
+    data->engine_left.n2 = snapshot->n2_left;
+    data->engine_left.egt = snapshot->egt_left;
+    data->engine_left.fuel_flow = snapshot->fuel_flow_left;
+    data->engine_left.oil_pressure = snapshot->oil_pressure_left;
+    data->engine_left.oil_temp = snapshot->oil_temperature_left;
+    data->engine_left.oil_quantity = snapshot->oil_quantity_left;
+    data->engine_left.vibration = snapshot->vibration_left;
+    data->engine_left.running = snapshot->n1_left > 20.0f || snapshot->n2_left > 20.0f;
+
+    data->engine_right.n1 = snapshot->n1_right;
+    data->engine_right.n2 = snapshot->n2_right;
+    data->engine_right.egt = snapshot->egt_right;
+    data->engine_right.fuel_flow = snapshot->fuel_flow_right;
+    data->engine_right.oil_pressure = snapshot->oil_pressure_right;
+    data->engine_right.oil_temp = snapshot->oil_temperature_right;
+    data->engine_right.oil_quantity = snapshot->oil_quantity_right;
+    data->engine_right.vibration = snapshot->vibration_right;
+    data->engine_right.running = snapshot->n1_right > 20.0f || snapshot->n2_right > 20.0f;
+
+    data->total_air_temperature = snapshot->total_air_temperature;
+    data->fuel_quantity = snapshot->fuel_quantity;
+    data->hydraulic_pressure = snapshot->hydraulic_pressure;
+    data->cabin_pressure = snapshot->cabin_pressure;
+    data->battery_voltage = snapshot->battery_voltage;
+    data->gear_down = snapshot->gear_down;
+    data->flaps_level = snapshot->flaps_level;
+    data->parking_brake_on = snapshot->parking_brake_on;
+    data->simulation_time = snapshot->sim_time;
+
+    data->warning_count = 0;
+    for (int i = 0; i < snapshot->warning_count && i < AIRCRAFT_SYSTEMS_MAX_WARNINGS; ++i)
+    {
+        snprintf(data->warnings[i].text, sizeof(data->warnings[i].text), "%s", snapshot->warnings[i].text);
+        data->warnings[i].level = sim_warning_level_to_aircraft(snapshot->warnings[i].level);
+        data->warnings[i].active = snapshot->warnings[i].active;
+        ++data->warning_count;
+    }
+}
+
 static void render_fmc_to_texture(
     SDL_Renderer *renderer,
     SDL_Texture *texture,
@@ -287,7 +405,9 @@ static void update_scene_texture(
     TTF_Font *font,
     Cockpit_RenderTargets *targets,
     const Cockpit_Layout *layout,
-    SDL_Texture *background_texture)
+    SDL_Texture *background_texture,
+    const CockpitAlarmState *alarm_state,
+    Uint32 ticks)
 {
     SDL_SetRenderTarget(renderer, targets->scene_texture);
     SDL_RenderSetViewport(renderer, NULL);
@@ -306,6 +426,8 @@ static void update_scene_texture(
         targets->pfd_texture,
         targets->eicas2_texture,
         targets->fmc_texture);
+
+    cockpit_alarm_render(renderer, layout, alarm_state, ticks);
 
     SDL_SetRenderTarget(renderer, NULL);
     SDL_RenderSetViewport(renderer, NULL);
@@ -437,99 +559,16 @@ static void print_data_source_summary(
     int eicas_data_loaded,
     const FMC_Data *fmc_data)
 {
-    if (use_unified_data)
-    {
-        printf("Cockpit Data Sources: unified DataCenter=active; one SimSnapshot drives embedded PFD/ND/EICAS.\n");
-        printf("Cockpit Data Sources: DataCenter pfd=%s nd=%s eicas=%s; FMC=%s.\n",
-               sim_data_center_has_pfd_data(sim_data_center) ? "available" : "default snapshot fallback",
-               sim_data_center_has_nd_data(sim_data_center) ? "available" : "default snapshot fallback",
-               sim_data_center_has_eicas_data(sim_data_center) ? "available" : "default snapshot fallback",
-               fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : "no unified route, existing FMC state");
-        printf("Cockpit Data Sync: unified sim_time advances once per frame in Cockpit.\n");
-    }
-    else
-    {
-        printf("Cockpit Data Sources: unified DataCenter unavailable; using legacy/module fallback path.\n");
-        printf("Cockpit Data Sources: PFD=%s; ND=%s%s%s%s; EICAS=%s; FMC=%s.\n",
-               pfd_data != NULL && pfd_data->using_file_data ? "assets/pfd.dat" : "mock fallback",
-               nd_data != NULL && nd_data->data_file_loaded ? "assets/nd.dat" : "mock flight fallback",
-               nd_data != NULL && nd_data->earth_fix_loaded ? " + earth_fix.dat" : "",
-               nd_data != NULL && nd_data->earth_nav_loaded ? " + earth_nav.dat" : "",
-               nd_data != NULL && nd_data->apt_loaded ? " + apt.dat" : "",
-               eicas_data_loaded ? "assets/eicas1.dat/assets/eicas2.dat" : "mock fallback",
-               fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : "default mock route");
-        printf("Cockpit Data Sync: fallback mode keeps legacy module clocks/playback state.\n");
-    }
-    fflush(stdout);
-}
-
-static void print_cockpit_sync_check(
-    Uint32 current_ticks,
-    Uint32 *last_log_ticks,
-    int use_unified_data,
-    const SimSnapshot *snapshot,
-    const PFD_Data *pfd_data,
-    const ND_Data *nd_data,
-    const AircraftSystems_Data *systems_data,
-    const FMC_Data *fmc_data)
-{
-    if (last_log_ticks == NULL)
-    {
-        return;
-    }
-
-    if (*last_log_ticks != 0 && current_ticks - *last_log_ticks < COCKPIT_SYNC_CHECK_LOG_MS)
-    {
-        return;
-    }
-    *last_log_ticks = current_ticks;
-
-    printf("[Cockpit Sync Check]\n");
-    printf("mode=%s\n", use_unified_data ? "unified SimDataCenter" : "legacy fallback");
-    if (use_unified_data && snapshot != NULL)
-    {
-        printf("sim_time=%.2f\n", snapshot->sim_time);
-        printf("snapshot: alt=%.1f, spd=%.1f, hdg=%.1f, lat=%.6f, lon=%.6f, n1=%.1f/%.1f, egt=%.1f/%.1f\n",
-               snapshot->altitude,
-               snapshot->airspeed,
-               snapshot->heading,
-               snapshot->latitude,
-               snapshot->longitude,
-               snapshot->n1_left,
-               snapshot->n1_right,
-               snapshot->egt_left,
-               snapshot->egt_right);
-    }
-    else
-    {
-        printf("sim_time=not unified (pfd=%.2f, nd=%.2f, eicas=%.2f)\n",
-               pfd_data != NULL ? pfd_data->simulation_time : -1.0f,
-               nd_data != NULL ? nd_data->simulation_time : -1.0f,
-               systems_data != NULL ? systems_data->simulation_time : -1.0f);
-        printf("snapshot: unavailable (Cockpit is using legacy fallback)\n");
-    }
-    printf("pfd: alt=%.1f, spd=%.1f, hdg=%.1f, source=%s, frame=%d\n",
-           pfd_data != NULL ? pfd_data->altitude : 0.0f,
-           pfd_data != NULL ? pfd_data->airspeed_current : 0.0f,
-           pfd_data != NULL ? pfd_data->heading : 0.0f,
-           use_unified_data ? "SimSnapshot" : (pfd_data != NULL && pfd_data->using_file_data ? "pfd.dat/legacy" : "mock"),
-           pfd_data != NULL ? pfd_data->file_sample_index : -1);
-    printf("nd: lat=%.6f, lon=%.6f, hdg=%.1f, gs=%.1f, source=%s, frame=%d\n",
-           nd_data != NULL ? nd_data->latitude : 0.0,
-           nd_data != NULL ? nd_data->longitude : 0.0,
-           nd_data != NULL ? nd_data->heading : 0.0f,
-           nd_data != NULL ? nd_data->ground_speed : 0.0f,
-           use_unified_data ? "SimSnapshot" : (nd_data != NULL && nd_data->data_file_loaded ? "nd.dat/legacy" : "mock"),
-           nd_data != NULL ? nd_data->data_frame_index : -1);
-    printf("eicas: n1=%.1f/%.1f, egt=%.1f/%.1f, source=%s\n",
-           systems_data != NULL ? systems_data->engine_left.n1 : 0.0f,
-           systems_data != NULL ? systems_data->engine_right.n1 : 0.0f,
-           systems_data != NULL ? systems_data->engine_left.egt : 0.0f,
-           systems_data != NULL ? systems_data->engine_right.egt : 0.0f,
-           use_unified_data ? "SimSnapshot" : "legacy eicas/mock");
-    printf("fmc: route_points=%d, route_source=%s\n",
-           fmc_data != NULL ? fmc_data->route_count : 0,
-           fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : (use_unified_data ? "no unified route, existing FMC state" : "independent/default"));
+    printf("Cockpit Data Sources: EICAS and alarm use the unified SimDataCenter snapshot when available.\n");
+    printf("Cockpit Data Sources: PFD=%s; ND=%s%s%s%s; EICAS=%s; FMC=%s.\n",
+           pfd_data != NULL && pfd_data->using_file_data ? "assets/pfd.dat" : "mock fallback",
+           nd_data != NULL && nd_data->data_file_loaded ? "assets/nd.dat" : "mock flight fallback",
+           nd_data != NULL && nd_data->earth_fix_loaded ? " + earth_fix.dat" : "",
+           nd_data != NULL && nd_data->earth_nav_loaded ? " + earth_nav.dat" : "",
+           nd_data != NULL && nd_data->apt_loaded ? " + apt.dat" : "",
+           eicas_data_loaded ? "assets/eicas1.dat/assets/eicas2.dat" : "mock fallback",
+           fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : "default mock route");
+    printf("Cockpit Data Sync: PFD/ND/FMC/Cabin still have separate clocks or playback state.\n");
     fflush(stdout);
 }
 
@@ -760,22 +799,47 @@ static void render_window(
 
 int cockpit_main_run(void)
 {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
-    {
-        printf("SDL_Init failed: %s\n", SDL_GetError());
-        return -1;
-    }
+    const Uint32 cockpit_sdl_flags = SDL_INIT_VIDEO | SDL_INIT_TIMER;
+    const int cockpit_owns_sdl = SDL_WasInit(0) == 0;
+    const int cockpit_owns_ttf = TTF_WasInit() == 0;
+    int cockpit_initialized_sdl = 0;
 
-    if (TTF_Init() != 0)
+    cockpit_startup_log(1, "Cockpit startup: entered (owns_sdl=%d, owns_ttf=%d).", cockpit_owns_sdl, cockpit_owns_ttf);
+
+    if ((SDL_WasInit(cockpit_sdl_flags) & cockpit_sdl_flags) != cockpit_sdl_flags)
+    {
+        if (SDL_InitSubSystem(cockpit_sdl_flags) != 0)
+        {
+            printf("SDL_InitSubSystem failed: %s\n", SDL_GetError());
+            cockpit_startup_log(0, "FAILED: SDL_InitSubSystem: %s", SDL_GetError());
+            cockpit_show_startup_error("SDL initialization", SDL_GetError());
+            return -1;
+        }
+        cockpit_initialized_sdl = 1;
+    }
+    cockpit_startup_log(0, "SDL video/timer ready.");
+
+    if (cockpit_owns_ttf && TTF_Init() != 0)
     {
         printf("TTF_Init failed: %s\n", TTF_GetError());
-        SDL_Quit();
+        cockpit_startup_log(0, "FAILED: TTF_Init: %s", TTF_GetError());
+        cockpit_show_startup_error("font subsystem initialization", TTF_GetError());
+        if (cockpit_owns_sdl)
+        {
+            SDL_Quit();
+        }
+        else if (cockpit_initialized_sdl)
+        {
+            SDL_QuitSubSystem(cockpit_sdl_flags);
+        }
         return -1;
     }
+    cockpit_startup_log(0, "SDL_ttf ready.");
 
     if ((IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) == 0)
     {
         printf("IMG_Init PNG failed: %s\n", IMG_GetError());
+        cockpit_startup_log(0, "WARNING: IMG_Init PNG: %s", IMG_GetError());
     }
 
     SDL_Window *window = SDL_CreateWindow(
@@ -788,11 +852,24 @@ int cockpit_main_run(void)
     if (window == NULL)
     {
         printf("SDL_CreateWindow failed: %s\n", SDL_GetError());
+        cockpit_startup_log(0, "FAILED: SDL_CreateWindow: %s", SDL_GetError());
+        cockpit_show_startup_error("window creation", SDL_GetError());
         IMG_Quit();
-        TTF_Quit();
-        SDL_Quit();
+        if (cockpit_owns_ttf)
+        {
+            TTF_Quit();
+        }
+        if (cockpit_owns_sdl)
+        {
+            SDL_Quit();
+        }
+        else if (cockpit_initialized_sdl)
+        {
+            SDL_QuitSubSystem(cockpit_sdl_flags);
+        }
         return -1;
     }
+    cockpit_startup_log(0, "Cockpit window created.");
 
     SDL_Renderer *renderer = SDL_CreateRenderer(
         window,
@@ -806,24 +883,50 @@ int cockpit_main_run(void)
     if (renderer == NULL)
     {
         printf("SDL_CreateRenderer failed: %s\n", SDL_GetError());
+        cockpit_startup_log(0, "FAILED: SDL_CreateRenderer: %s", SDL_GetError());
+        cockpit_show_startup_error("renderer creation", SDL_GetError());
         SDL_DestroyWindow(window);
         IMG_Quit();
-        TTF_Quit();
-        SDL_Quit();
+        if (cockpit_owns_ttf)
+        {
+            TTF_Quit();
+        }
+        if (cockpit_owns_sdl)
+        {
+            SDL_Quit();
+        }
+        else if (cockpit_initialized_sdl)
+        {
+            SDL_QuitSubSystem(cockpit_sdl_flags);
+        }
         return -1;
     }
+    cockpit_startup_log(0, "Cockpit renderer created.");
 
     TTF_Font *font = open_cockpit_font();
     if (font == NULL)
     {
         printf("TTF_OpenFont failed: %s\n", TTF_GetError());
+        cockpit_startup_log(0, "FAILED: TTF_OpenFont: %s", TTF_GetError());
+        cockpit_show_startup_error("font loading", TTF_GetError());
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         IMG_Quit();
-        TTF_Quit();
-        SDL_Quit();
+        if (cockpit_owns_ttf)
+        {
+            TTF_Quit();
+        }
+        if (cockpit_owns_sdl)
+        {
+            SDL_Quit();
+        }
+        else if (cockpit_initialized_sdl)
+        {
+            SDL_QuitSubSystem(cockpit_sdl_flags);
+        }
         return -1;
     }
+    cockpit_startup_log(0, "Cockpit font loaded.");
 
     int world_width = 8026;
     int world_height = 3136;
@@ -835,6 +938,8 @@ int cockpit_main_run(void)
     if (!create_render_targets(renderer, &targets, layout.world_width, layout.world_height))
     {
         printf("SDL_CreateTexture target failed: %s\n", SDL_GetError());
+        cockpit_startup_log(0, "FAILED: create_render_targets: %s", SDL_GetError());
+        cockpit_show_startup_error("render-target creation", SDL_GetError());
         destroy_render_targets(&targets);
         if (background_texture != NULL)
         {
@@ -848,26 +953,77 @@ int cockpit_main_run(void)
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         IMG_Quit();
-        TTF_Quit();
-        SDL_Quit();
+        if (cockpit_owns_ttf)
+        {
+            TTF_Quit();
+        }
+        if (cockpit_owns_sdl)
+        {
+            SDL_Quit();
+        }
+        else if (cockpit_initialized_sdl)
+        {
+            SDL_QuitSubSystem(cockpit_sdl_flags);
+        }
         return -1;
     }
+    cockpit_startup_log(0, "Render targets created (%d x %d).", layout.world_width, layout.world_height);
 
     PFD_Data pfd_data;
     ND_Data nd_data;
     AircraftSystems_Data systems_data;
     EICAS_Data eicas_data;
     FMC_Data fmc_data;
+    SimDataCenter *sim_data_center = (SimDataCenter *)malloc(sizeof(*sim_data_center));
+    if (sim_data_center == NULL)
+    {
+        printf("SimDataCenter allocation failed.\n");
+        cockpit_startup_log(0, "FAILED: SimDataCenter allocation (%zu bytes).", sizeof(*sim_data_center));
+        cockpit_show_startup_error("simulation data allocation", "Unable to allocate the unified simulation data store.");
+        destroy_render_targets(&targets);
+        if (background_texture != NULL)
+        {
+            SDL_DestroyTexture(background_texture);
+        }
+        if (fmc_background_texture != NULL)
+        {
+            SDL_DestroyTexture(fmc_background_texture);
+        }
+        TTF_CloseFont(font);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        IMG_Quit();
+        if (cockpit_owns_ttf)
+        {
+            TTF_Quit();
+        }
+        if (cockpit_owns_sdl)
+        {
+            SDL_Quit();
+        }
+        else if (cockpit_initialized_sdl)
+        {
+            SDL_QuitSubSystem(cockpit_sdl_flags);
+        }
+        return -1;
+    }
+    int eicas_data_loaded = 0;
+    const int sim_data_ready = sim_data_center_init(sim_data_center);
+    const SimSnapshot *sim_snapshot = sim_data_center_snapshot(sim_data_center);
     pfd_data_init(&pfd_data);
     nd_data_init(&nd_data);
     aircraft_systems_data_init(&systems_data);
     eicas_data_init(&eicas_data);
-    fmc_data_init(&fmc_data);
-
-    static SimDataCenter sim_data_center;
-    const int use_unified_data = sim_data_center_init(&sim_data_center);
-    int eicas_data_loaded = 0;
-    if (use_unified_data)
+    if (sim_snapshot != NULL)
+    {
+        eicas_data_loaded = sim_data_center_has_eicas_data(sim_data_center);
+        apply_sim_snapshot_to_aircraft_systems(&systems_data, sim_snapshot);
+    }
+    else
+    {
+        eicas_data_loaded = eicas_data_load_files(&eicas_data, "assets/eicas1.dat", "assets/eicas2.dat");
+    }
+    if (!sim_data_ready && eicas_data_loaded)
     {
         const SimSnapshot *snapshot = sim_data_center_snapshot(&sim_data_center);
         apply_sim_snapshot_to_cockpit_modules(snapshot, &pfd_data, &nd_data, &systems_data);
@@ -881,7 +1037,7 @@ int cockpit_main_run(void)
         printf("Cockpit FMC: no unified route is exposed by SimDataCenter yet; keeping existing FMC state.\n");
         fflush(stdout);
     }
-    else
+    else if (!sim_data_ready)
     {
         printf("Cockpit: unified SimDataCenter initialization failed; falling back to legacy/module data path.\n");
         eicas_data_loaded = eicas_data_load_files(&eicas_data, "assets/eicas1.dat", "assets/eicas2.dat");
@@ -895,13 +1051,18 @@ int cockpit_main_run(void)
             fflush(stdout);
         }
     }
-    print_data_source_summary(use_unified_data, &sim_data_center, &pfd_data, &nd_data, eicas_data_loaded, &fmc_data);
+    fmc_data_init(&fmc_data);
+    print_data_source_summary(sim_data_ready, sim_data_center, &pfd_data, &nd_data, eicas_data_loaded, &fmc_data);
+    cockpit_startup_log(0, "Data initialized (sim_data_ready=%d, eicas_data_loaded=%d).", sim_data_ready, eicas_data_loaded);
 
     FMC_Display_Assets fmc_display_assets;
     fmc_display_assets_load(renderer, &fmc_display_assets);
 
     FMC_Event_State fmc_event_state;
     fmc_event_state_init(&fmc_event_state);
+
+    Cockpit_MainState cockpit_state;
+    cockpit_alarm_init(&cockpit_state.alarm);
 
     int window_width = COCKPIT_WINDOW_WIDTH;
     int window_height = COCKPIT_WINDOW_HEIGHT;
@@ -919,6 +1080,7 @@ int cockpit_main_run(void)
     SDL_StartTextInput();
 
     int running = 1;
+    cockpit_startup_log(0, "Entering cockpit event loop.");
     SDL_Event event;
     Uint32 last_ticks = SDL_GetTicks();
     Uint32 last_pfd_render_ticks = 0;
@@ -948,7 +1110,14 @@ int cockpit_main_run(void)
             }
             else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
             {
-                if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
+                float alarm_world_x = 0.0f;
+                float alarm_world_y = 0.0f;
+                screen_to_world(event.button.x, event.button.y, &camera, &alarm_world_x, &alarm_world_y);
+                if (view_mode == COCKPIT_VIEW_MAIN && cockpit_alarm_handle_click(&cockpit_state.alarm, alarm_world_x, alarm_world_y, &layout))
+                {
+                    dragging = 0;
+                }
+                else if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
                 {
                     SDL_Rect zoom_rect = cockpit_ui_fmc_zoom_rect(window_width, window_height);
                     if (!point_in_rect(event.button.x, event.button.y, &zoom_rect))
@@ -1106,12 +1275,19 @@ int cockpit_main_run(void)
             delta_time = 0.1f;
         }
 
-        const SimSnapshot *snapshot = NULL;
-        if (use_unified_data)
+        pfd_data_update_mock(&pfd_data, delta_time);
+        nd_data_update_mock(&nd_data, delta_time);
+        if (sim_data_ready)
+        {
+            sim_data_center_update(sim_data_center, delta_time);
+            sim_snapshot = sim_data_center_snapshot(sim_data_center);
+            apply_sim_snapshot_to_aircraft_systems(&systems_data, sim_snapshot);
+        }
+        else if (eicas_data_loaded)
         {
             sim_data_center_update(&sim_data_center, delta_time);
-            snapshot = sim_data_center_snapshot(&sim_data_center);
-            apply_sim_snapshot_to_cockpit_modules(snapshot, &pfd_data, &nd_data, &systems_data);
+            sim_snapshot = sim_data_center_snapshot(&sim_data_center);
+            apply_sim_snapshot_to_cockpit_modules(sim_snapshot, &pfd_data, &nd_data, &systems_data);
         }
         else
         {
@@ -1128,7 +1304,8 @@ int cockpit_main_run(void)
             }
             fmc_data_update_mock(&fmc_data, delta_time);
         }
-        print_cockpit_sync_check(current_ticks, &last_sync_check_log_ticks, use_unified_data, snapshot, &pfd_data, &nd_data, &systems_data, &fmc_data);
+        fmc_data_update_mock(&fmc_data, delta_time);
+        cockpit_alarm_update(&cockpit_state.alarm, sim_snapshot);
 
         const int refresh_pfd = last_pfd_render_ticks == 0 ||
                                 current_ticks - last_pfd_render_ticks >= COCKPIT_PFD_TARGET_FRAME_MS;
@@ -1138,7 +1315,7 @@ int cockpit_main_run(void)
         }
 
         update_module_textures(renderer, font, &targets, refresh_pfd, &pfd_data, &nd_data, &systems_data, &fmc_display_assets, &fmc_event_state, &fmc_data);
-        update_scene_texture(renderer, font, &targets, &layout, background_texture);
+        update_scene_texture(renderer, font, &targets, &layout, background_texture, &cockpit_state.alarm, current_ticks);
         render_window(renderer, font, &targets, &layout, &camera, view_mode, selected_fmc, fmc_background_texture, show_fmc_debug, window_width, window_height);
 
         const Uint32 frame_time = SDL_GetTicks() - frame_start;
@@ -1149,6 +1326,10 @@ int cockpit_main_run(void)
     }
 
     SDL_StopTextInput();
+    cockpit_startup_log(0, "Cockpit event loop ended normally.");
+    cockpit_alarm_destroy(&cockpit_state.alarm);
+    sim_data_center_destroy(sim_data_center);
+    free(sim_data_center);
     fmc_data_destroy(&fmc_data);
     sim_data_center_destroy(&sim_data_center);
     fmc_display_assets_destroy(&fmc_display_assets);
@@ -1166,8 +1347,18 @@ int cockpit_main_run(void)
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     IMG_Quit();
-    TTF_Quit();
-    SDL_Quit();
+    if (cockpit_owns_ttf)
+    {
+        TTF_Quit();
+    }
+    if (cockpit_owns_sdl)
+    {
+        SDL_Quit();
+    }
+    else if (cockpit_initialized_sdl)
+    {
+        SDL_QuitSubSystem(cockpit_sdl_flags);
+    }
 
     return 0;
 }

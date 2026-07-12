@@ -5,7 +5,7 @@
 
 #define FMC_TEXT_LEN 32
 #define FMC_MAX_ROUTE_POINTS 64
-#define FMC_RTE_PAGE_SIZE 6
+#define FMC_RTE_PAGE_SIZE 5
 
 typedef enum FMC_Page
 {
