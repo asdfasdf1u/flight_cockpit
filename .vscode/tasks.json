@@ -1,7 +1,7 @@
 {
     "version": "2.0.0",
     "tasks": [
-        {
+        {                                                                               
             "type": "shell",
             "label": "build test",
             "command": "gcc.exe",
@@ -18,6 +18,8 @@
                 "${workspaceFolder}/src/Cabin/cabin_api.c",
                 "${workspaceFolder}/src/FMC/fmc_main.c",
                 "${workspaceFolder}/src/FMC/fmc_data.c",
+                "${workspaceFolder}/src/Util/xplaneConnect.c",
+                "${workspaceFolder}/src/Util/xplane_live_data.c",
                 "${workspaceFolder}/src/FMC/fmc_ui_adapter.c",
                 "${workspaceFolder}/src/FMC/fmc_display.c",
                 "${workspaceFolder}/src/FMC/fmc_event.c",

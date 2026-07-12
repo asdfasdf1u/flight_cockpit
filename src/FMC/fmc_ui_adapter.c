@@ -37,7 +37,9 @@ static void sync_library_route_fields(const FMC_Data *data)
 static int route_ready_to_exec(const FMC_Data *data)
 {
     return data != NULL &&
-           data->origin[0] != '\0';
+           data->origin[0] != '\0' &&
+           data->destination[0] != '\0' &&
+           data->flight_no[0] != '\0';
 }
 
 static void update_exec_ready(FMC_Data *data)
@@ -149,7 +151,7 @@ static int add_viato_route_point(FMC_Data *data, const char *ident)
         }
     }
     via_to_list_count++;
-    data->origin_exec_pending = 1;
+    update_exec_ready(data);
     fmc_data_clear_scratchpad(data);
     return 1;
 }
@@ -342,17 +344,23 @@ static int set_airport_field(FMC_Data *data, char *dest_field, int dest_size, co
 
     set_text(airport_code, sizeof(airport_code), data->scratchpad);
     airport = fmc_query_airport_by_icao(data->scratchpad);
-    set_text(dest_field, dest_size, airport != NULL ? airport->icao_code : airport_code);
+    if (airport == NULL)
+    {
+        fmc_data_clear_scratchpad(data);
+        set_text(data->message, sizeof(data->message), "NOT IN DATABASE");
+        return 0;
+    }
+
+    set_text(dest_field, dest_size, airport->icao_code);
     fmc_data_clear_scratchpad(data);
     sync_library_route_fields(data);
     update_exec_ready(data);
     update_auto_route(data);
-    data->origin_exec_pending = 1;
     if (data->origin[0] != '\0' && data->destination[0] != '\0' && data->route_count > 0)
     {
         return 1;
     }
-    snprintf(data->message, sizeof(data->message), "%s SET%s", label, airport != NULL ? "" : " NO COORD");
+    snprintf(data->message, sizeof(data->message), "%s SET", label);
     return 1;
 }
 
@@ -400,7 +408,11 @@ void fmc_data_init(FMC_Data *data)
     set_text(data->climb_transition_alt_text, sizeof(data->climb_transition_alt_text), "18000");
     set_text(data->legs_sequence, sizeof(data->legs_sequence), "AUTO/INHIBIT");
     sync_library_route_fields(data);
+    show_ariport[0] = '\0';
+    dep_arr_index = 1;
+    dep_arr_type = 0;
     initVIATO();
+    init_airport_data();
     load_airport_data();
     load_waypoint_data();
 }
@@ -408,6 +420,7 @@ void fmc_data_init(FMC_Data *data)
 void fmc_data_destroy(FMC_Data *data)
 {
     (void)data;
+    destroy_airport_data();
 }
 
 void fmc_data_update_mock(FMC_Data *data, float delta_time)
@@ -435,6 +448,11 @@ void fmc_data_set_page(FMC_Data *data, FMC_Page page)
     {
         rte_index = 1;
         data->configured_route_page = 0;
+    }
+    if (page == FMC_PAGE_DEP_ARR)
+    {
+        show_ariport[0] = '\0';
+        dep_arr_index = 1;
     }
     data->message[0] = '\0';
 }
@@ -513,9 +531,11 @@ int fmc_data_route_next_page(FMC_Data *data)
     {
         rte_index++;
         data->configured_route_page = rte_index - 1;
+        data->message[0] = '\0';
         return 1;
     }
     data->configured_route_page = rte_index - 1;
+    set_text(data->message, sizeof(data->message), "LAST RTE PAGE");
     return 0;
 }
 
@@ -529,9 +549,11 @@ int fmc_data_route_prev_page(FMC_Data *data)
     {
         rte_index--;
         data->configured_route_page = rte_index - 1;
+        data->message[0] = '\0';
         return 1;
     }
     data->configured_route_page = rte_index - 1;
+    set_text(data->message, sizeof(data->message), "FIRST RTE PAGE");
     return 0;
 }
 
@@ -575,6 +597,47 @@ int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field)
     }
 }
 
+static void format_tgt_speed_text(const TgtSpeed *speed, char *dest, int dest_size)
+{
+    if (speed == NULL || dest == NULL || dest_size <= 0)
+    {
+        return;
+    }
+    snprintf(dest, (size_t)dest_size, "%d/.%02d", speed->speed1, speed->speed2);
+}
+
+static int set_phase_invalid(FMC_Data *data)
+{
+    set_text(data->message, sizeof(data->message), "INVALID ENTRY");
+    fmc_data_clear_scratchpad(data);
+    set_text(data->message, sizeof(data->message), "INVALID ENTRY");
+    return 0;
+}
+
+static int set_phase_target_speed(FMC_Data *data, TgtSpeed *target, char *display_text, int display_text_size)
+{
+    if (setTgtSpeed(data->scratchpad, target) <= 0)
+    {
+        return set_phase_invalid(data);
+    }
+    format_tgt_speed_text(target, display_text, display_text_size);
+    fmc_data_clear_scratchpad(data);
+    data->origin_exec_pending = 1;
+    return 1;
+}
+
+static int set_phase_spd_alt_limit(FMC_Data *data, SpdAltLimit *target, char *display_text, int display_text_size)
+{
+    if (setSpdAltLimit(data->scratchpad, target) < 0)
+    {
+        return set_phase_invalid(data);
+    }
+    snprintf(display_text, (size_t)display_text_size, "%d/%d", target->spd_limit, target->alt_limit);
+    fmc_data_clear_scratchpad(data);
+    data->origin_exec_pending = 1;
+    return 1;
+}
+
 int fmc_data_set_phase_parameter(FMC_Data *data, int field_index)
 {
     if (data == NULL)
@@ -582,17 +645,85 @@ int fmc_data_set_phase_parameter(FMC_Data *data, int field_index)
         return 0;
     }
 
-    if (field_index == 1)
+    if (data->scratchpad_len <= 0)
     {
-        return set_scratchpad_text(data, data->climb_target_speed_text, sizeof(data->climb_target_speed_text), "SPEED");
+        set_text(data->message, sizeof(data->message), "ENTER VALUE");
+        return 0;
     }
-    if (field_index == 2)
+
+    if (data->current_page == FMC_PAGE_CLIMB)
     {
-        return set_scratchpad_text(data, data->climb_spd_alt_limit_text, sizeof(data->climb_spd_alt_limit_text), "SPD/ALT");
+        if (field_index == 1)
+        {
+            return set_phase_target_speed(data, &tgt_speed1, data->climb_target_speed_text, sizeof(data->climb_target_speed_text));
+        }
+        if (field_index == 2)
+        {
+            return set_phase_spd_alt_limit(data, &spd_alt_limit1, data->climb_spd_alt_limit_text, sizeof(data->climb_spd_alt_limit_text));
+        }
+        if (field_index == 3)
+        {
+            if (!is_string_in_range(data->scratchpad, 100, 99000, &trans_alt))
+            {
+                return set_phase_invalid(data);
+            }
+            snprintf(data->climb_transition_alt_text, sizeof(data->climb_transition_alt_text), "%d", trans_alt);
+            fmc_data_clear_scratchpad(data);
+            data->origin_exec_pending = 1;
+            return 1;
+        }
     }
-    if (field_index == 3)
+
+    if (data->current_page == FMC_PAGE_CRUISE)
     {
-        return set_scratchpad_text(data, data->climb_transition_alt_text, sizeof(data->climb_transition_alt_text), "TRANS ALT");
+        if (field_index == 1)
+        {
+            return set_phase_target_speed(data, &tgt_speed2, data->climb_target_speed_text, sizeof(data->climb_target_speed_text));
+        }
+        if (field_index == 4)
+        {
+            if (!is_string_in_range(data->scratchpad, 100, 99000, &crz_alt))
+            {
+                return set_phase_invalid(data);
+            }
+            data->cruise_altitude = crz_alt;
+            fmc_data_clear_scratchpad(data);
+            data->origin_exec_pending = 1;
+            return 1;
+        }
+    }
+
+    if (data->current_page == FMC_PAGE_DESCENT)
+    {
+        if (field_index == 1)
+        {
+            return set_phase_target_speed(data, &tgt_speed3, data->climb_target_speed_text, sizeof(data->climb_target_speed_text));
+        }
+        if (field_index == 2)
+        {
+            return set_phase_spd_alt_limit(data, &spd_alt_limit1, data->climb_spd_alt_limit_text, sizeof(data->climb_spd_alt_limit_text));
+        }
+        if (field_index == 5)
+        {
+            if (!is_string_in_range(data->scratchpad, 1, 999, &trans_fl))
+            {
+                return set_phase_invalid(data);
+            }
+            data->descent_transition_level = trans_fl * 100;
+            fmc_data_clear_scratchpad(data);
+            data->origin_exec_pending = 1;
+            return 1;
+        }
+        if (field_index == 6)
+        {
+            if (!is_string_in_range_f(data->scratchpad, 0.0f, 90.0f, &vpa))
+            {
+                return set_phase_invalid(data);
+            }
+            fmc_data_clear_scratchpad(data);
+            data->origin_exec_pending = 1;
+            return 1;
+        }
     }
 
     set_text(data->message, sizeof(data->message), "NO PHASE FIELD");
@@ -621,6 +752,176 @@ int fmc_data_set_dep_arr_parameter(FMC_Data *data, int arrival_side, int field_i
     }
 
     return set_scratchpad_text(data, target, FMC_TEXT_LEN, label);
+}
+
+static void reset_dep_arr_selection(SelectDepArr *sda)
+{
+    if (sda == NULL)
+    {
+        return;
+    }
+    sda->select_proc[0] = '\0';
+    sda->select_proc_trans[0] = '\0';
+    sda->select_runway[0] = '\0';
+    sda->select_runway_trans[0] = '\0';
+}
+
+static void open_dep_arr_airport(const char *airport, int type)
+{
+    set_text(show_ariport, sizeof(show_ariport), airport);
+    dep_arr_index = 1;
+    dep_arr_type = type;
+    query_runway_proc_by_airport(show_ariport);
+}
+
+static void click_dep_arr_left(FMC_Data *data, int index)
+{
+    SelectDepArr *sda = &select_dep_arr[dep_arr_type];
+
+    if (strlen(sda->select_proc) > 0 && index != 1)
+    {
+        if (proc_trans_count == 0)
+        {
+            return;
+        }
+        int start_index = 2;
+        int end_index = 1 + proc_trans_count;
+        if (index >= start_index && index <= end_index)
+        {
+            set_text(sda->select_proc_trans, sizeof(sda->select_proc_trans), proc_trans[index - 2]);
+        }
+    }
+    else if (strlen(sda->select_proc) > 0 && index == 1)
+    {
+        reset_dep_arr_selection(sda);
+        query_runway_proc_by_airport(show_ariport);
+    }
+    else
+    {
+        int truely_selected = (dep_arr_index - 1) * 5 + index - 1;
+        if (truely_selected < proc_count)
+        {
+            set_text(sda->select_proc, sizeof(sda->select_proc), proc[truely_selected]);
+            query_trans_by_proc(show_ariport, sda->select_proc);
+            query_runway_by_proc(show_ariport, sda->select_proc);
+        }
+    }
+
+    data->origin_exec_pending = 1;
+    sda->select_flag = 0;
+}
+
+static void click_dep_arr_right(FMC_Data *data, int index)
+{
+    SelectDepArr *sda = &select_dep_arr[dep_arr_type];
+
+    if (strlen(sda->select_runway) > 0 && index != 1)
+    {
+        if (runway_trans_count == 0)
+        {
+            return;
+        }
+        int start_index = 2;
+        int end_index = 1 + runway_trans_count;
+        if (index >= start_index && index <= end_index)
+        {
+            set_text(sda->select_runway_trans, sizeof(sda->select_runway_trans), runway_trans[index - 2]);
+        }
+    }
+    else if (strlen(sda->select_runway) > 0 && index == 1)
+    {
+        reset_dep_arr_selection(sda);
+        query_runway_proc_by_airport(show_ariport);
+    }
+    else
+    {
+        int truely_selected = (dep_arr_index - 1) * 5 + index - 1;
+        if (truely_selected < runway_count)
+        {
+            set_text(sda->select_runway, sizeof(sda->select_runway), runway[truely_selected]);
+            query_trans_by_runway(show_ariport, sda->select_runway);
+            query_proc_by_runway(show_ariport, sda->select_runway);
+        }
+    }
+
+    data->origin_exec_pending = 1;
+    sda->select_flag = 0;
+}
+
+int fmc_data_handle_dep_arr_lsk(FMC_Data *data, int right_side, int index)
+{
+    if (data == NULL || index < 1 || index > 5)
+    {
+        return 0;
+    }
+
+    if (show_ariport[0] == '\0')
+    {
+        if (!right_side && index == 1 && data->origin[0] != '\0')
+        {
+            open_dep_arr_airport(data->origin, 0);
+            return 1;
+        }
+        if (right_side && index == 1 && data->origin[0] != '\0')
+        {
+            open_dep_arr_airport(data->origin, 1);
+            return 1;
+        }
+        if (right_side && index == 2 && data->destination[0] != '\0')
+        {
+            open_dep_arr_airport(data->destination, 2);
+            return 1;
+        }
+        return 0;
+    }
+
+    if (right_side)
+    {
+        click_dep_arr_right(data, index);
+    }
+    else
+    {
+        click_dep_arr_left(data, index);
+    }
+    return 1;
+}
+
+int fmc_data_dep_arr_next_page(FMC_Data *data)
+{
+    (void)data;
+    if (show_ariport[0] == '\0')
+    {
+        return 0;
+    }
+    int total_count = (runway_count > proc_count ? (runway_count + 1) / 5 : (proc_count + 1) / 5) + 1;
+    if (dep_arr_index < total_count)
+    {
+        dep_arr_index++;
+        return 1;
+    }
+    return 0;
+}
+
+int fmc_data_dep_arr_prev_page(FMC_Data *data)
+{
+    (void)data;
+    if (show_ariport[0] == '\0')
+    {
+        return 0;
+    }
+    if (dep_arr_index > 1)
+    {
+        dep_arr_index--;
+        return 1;
+    }
+    return 0;
+}
+
+void fmc_data_dep_arr_back_to_index(FMC_Data *data)
+{
+    (void)data;
+    show_ariport[0] = '\0';
+    dep_arr_index = 1;
 }
 
 int fmc_data_set_legs_parameter(FMC_Data *data, int field_index)
@@ -810,29 +1111,27 @@ int fmc_data_exec_route_selection(FMC_Data *data)
 
     update_exec_ready(data);
 
-    if (!data->origin_exec_pending)
+    if (data->origin[0] == '\0')
     {
         set_text(data->message, sizeof(data->message), "ENTER ORIGIN");
         return 0;
     }
+    if (data->destination[0] == '\0')
+    {
+        set_text(data->message, sizeof(data->message), "ENTER DEST");
+        return 0;
+    }
+    if (data->flight_no[0] == '\0')
+    {
+        set_text(data->message, sizeof(data->message), "ENTER FLT NO");
+        return 0;
+    }
 
     setOrigin(data->origin);
-    if (data->destination[0] != '\0')
-    {
-        setDestination(data->destination);
-    }
-    if (data->flight_no[0] != '\0')
-    {
-        setFlt_no(data->flight_no);
-    }
+    setDestination(data->destination);
+    setFlt_no(data->flight_no);
+    setExec();
     data->origin_exec_pending = 0;
-    if (data->destination[0] != '\0')
-    {
-        snprintf(data->message, sizeof(data->message), "RTE %s-%s SENT", data->origin, data->destination);
-    }
-    else
-    {
-        snprintf(data->message, sizeof(data->message), "ORIGIN %s SENT", data->origin);
-    }
+    snprintf(data->message, sizeof(data->message), "RTE %s-%s SENT", data->origin, data->destination);
     return 1;
 }

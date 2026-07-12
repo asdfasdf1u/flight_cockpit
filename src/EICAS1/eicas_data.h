@@ -108,6 +108,7 @@ int eicas_data_load_upper_file(EICAS_Data *data, const char *path);
 int eicas_data_load_lower_file(EICAS_Data *data, const char *path);
 int eicas_data_load_files(EICAS_Data *data, const char *upper_path, const char *lower_path);
 void eicas_data_update(EICAS_Data *data, float delta_time);
+void eicas_data_refresh_warnings(EICAS_Data *data);
 
 const EICAS1_DataFrame *eicas_data_current_upper_frame(const EICAS_Data *data);
 const EICAS2_DataFrame *eicas_data_current_lower_frame(const EICAS_Data *data);

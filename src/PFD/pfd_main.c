@@ -58,6 +58,9 @@ static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapsho
 
 int pfd_main_run(void)
 {
+    // 使用最近邻缩放，避免纹理缩放时产生模糊
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
     {
         printf("SDL_Init failed: %s\n", SDL_GetError());

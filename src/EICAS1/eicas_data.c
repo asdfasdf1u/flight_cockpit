@@ -616,6 +616,11 @@ void eicas_data_update(EICAS_Data *data, float delta_time)
     }
 }
 
+void eicas_data_refresh_warnings(EICAS_Data *data)
+{
+    update_warnings(data);
+}
+
 const EICAS1_DataFrame *eicas_data_current_upper_frame(const EICAS_Data *data)
 {
     if (data == NULL || data->upper_frame_count <= 0)

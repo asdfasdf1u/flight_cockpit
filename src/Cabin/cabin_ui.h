@@ -14,6 +14,7 @@ typedef struct Cabin_Assets
     SDL_Texture *add_texture;
     SDL_Texture *sub_texture;
     TTF_Font *title_font;
+    TTF_Font *emergency_font;
     TTF_Font *font;
     TTF_Font *small_font;
 } Cabin_Assets;

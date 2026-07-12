@@ -23,11 +23,14 @@ static const FMC_Button FMC_BUTTONS[] = {
     RECT_BUTTON(FMC_BUTTON_CLB, 236, 477, 72, 51, "CLB", '\0', FMC_PAGE_CLIMB, FMC_LSK_NONE, action_page),
     RECT_BUTTON(FMC_BUTTON_CRZ, 319, 477, 72, 51, "CRZ", '\0', FMC_PAGE_CRUISE, FMC_LSK_NONE, action_page),
     RECT_BUTTON(FMC_BUTTON_DES, 401, 477, 72, 51, "DES", '\0', FMC_PAGE_DESCENT, FMC_LSK_NONE, action_page),
+    RECT_BUTTON(FMC_BUTTON_DIR_INTC, 69, 536, 72, 51, "DIR INTC", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, NULL),
     RECT_BUTTON(FMC_BUTTON_DEP_ARR, 236, 536, 72, 51, "DEP ARR", '\0', FMC_PAGE_DEP_ARR, FMC_LSK_NONE, action_page),
     RECT_BUTTON(FMC_BUTTON_LEGS, 153, 536, 72, 51, "LEGS", '\0', FMC_PAGE_LEGS, FMC_LSK_NONE, action_page),
     RECT_BUTTON(FMC_BUTTON_HOLD, 319, 536, 72, 51, "HOLD", '\0', FMC_PAGE_HOLD, FMC_LSK_NONE, action_page),
     RECT_BUTTON(FMC_BUTTON_STATUS, 401, 536, 72, 51, "PROG", '\0', FMC_PAGE_STATUS, FMC_LSK_NONE, action_page),
     RECT_BUTTON(FMC_BUTTON_EXEC, 500, 536, 72, 51, "EXEC", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, action_exec),
+    RECT_BUTTON(FMC_BUTTON_FIX, 69, 596, 72, 51, "FIX", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, NULL),
+    RECT_BUTTON(FMC_BUTTON_NAV_RAD, 153, 596, 72, 51, "NAV RAD", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, NULL),
     RECT_BUTTON(FMC_BUTTON_PREV_PAGE, 69, 655, 72, 51, "PREV PAGE", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, action_prev_page),
     RECT_BUTTON(FMC_BUTTON_NEXT_PAGE, 153, 655, 72, 51, "NEXT PAGE", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, action_next_page),
 
@@ -129,26 +132,59 @@ static void action_lsk(FMC_Data *data, const FMC_Button *button)
         }
     }
 
-    if (data->current_page == FMC_PAGE_CRUISE ||
-        data->current_page == FMC_PAGE_DESCENT)
+    if (data->current_page == FMC_PAGE_CRUISE)
     {
-        if (button->line_select >= FMC_LSK_L1 && button->line_select <= FMC_LSK_L3)
+        if (button->line_select == FMC_LSK_L1)
         {
-            fmc_data_set_phase_parameter(data, button->line_select - FMC_LSK_L1 + 1);
+            fmc_data_set_phase_parameter(data, 1);
+            return;
+        }
+        if (button->line_select == FMC_LSK_R1)
+        {
+            fmc_data_set_phase_parameter(data, 4);
+            return;
+        }
+    }
+
+    if (data->current_page == FMC_PAGE_DESCENT)
+    {
+        if (button->line_select == FMC_LSK_L1)
+        {
+            fmc_data_set_phase_parameter(data, 1);
+            return;
+        }
+        if (button->line_select == FMC_LSK_L2)
+        {
+            fmc_data_set_phase_parameter(data, 2);
+            return;
+        }
+        if (button->line_select == FMC_LSK_R1)
+        {
+            fmc_data_set_phase_parameter(data, 5);
+            return;
+        }
+        if (button->line_select == FMC_LSK_R3)
+        {
+            fmc_data_set_phase_parameter(data, 6);
             return;
         }
     }
 
     if (data->current_page == FMC_PAGE_DEP_ARR)
     {
-        if (button->line_select >= FMC_LSK_L1 && button->line_select <= FMC_LSK_L3)
+        if (button->line_select >= FMC_LSK_L1 && button->line_select <= FMC_LSK_L5)
         {
-            fmc_data_set_dep_arr_parameter(data, 0, button->line_select - FMC_LSK_L1 + 1);
+            fmc_data_handle_dep_arr_lsk(data, 0, button->line_select - FMC_LSK_L1 + 1);
             return;
         }
-        if (button->line_select >= FMC_LSK_R1 && button->line_select <= FMC_LSK_R3)
+        if (button->line_select >= FMC_LSK_R1 && button->line_select <= FMC_LSK_R5)
         {
-            fmc_data_set_dep_arr_parameter(data, 1, button->line_select - FMC_LSK_R1 + 1);
+            fmc_data_handle_dep_arr_lsk(data, 1, button->line_select - FMC_LSK_R1 + 1);
+            return;
+        }
+        if (button->line_select == FMC_LSK_L6)
+        {
+            fmc_data_dep_arr_back_to_index(data);
             return;
         }
     }
@@ -211,6 +247,14 @@ static void action_lsk(FMC_Data *data, const FMC_Button *button)
         if (button->line_select == FMC_LSK_R3)
         {
             fmc_data_set_route_field(data, FMC_ROUTE_FIELD_FLIGHT_NO);
+            return;
+        }
+        if (button->line_select == FMC_LSK_R4)
+        {
+            if (rte_index == 1 && fmc_data_route_page_count(data) > 1)
+            {
+                fmc_data_route_next_page(data);
+            }
             return;
         }
         if (button->line_select == FMC_LSK_L5)
@@ -326,6 +370,10 @@ static void action_prev_page(FMC_Data *data, const FMC_Button *button)
     {
         fmc_data_route_prev_page(data);
     }
+    else if (data != NULL && data->current_page == FMC_PAGE_DEP_ARR)
+    {
+        fmc_data_dep_arr_prev_page(data);
+    }
 }
 
 static void action_next_page(FMC_Data *data, const FMC_Button *button)
@@ -335,6 +383,10 @@ static void action_next_page(FMC_Data *data, const FMC_Button *button)
     if (data != NULL && data->current_page == FMC_PAGE_ROUTE)
     {
         fmc_data_route_next_page(data);
+    }
+    else if (data != NULL && data->current_page == FMC_PAGE_DEP_ARR)
+    {
+        fmc_data_dep_arr_next_page(data);
     }
 }
 
