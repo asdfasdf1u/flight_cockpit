@@ -647,6 +647,37 @@ static void handle_fmc_keydown(FMC_Data *data, SDL_Keycode key)
     }
 }
 
+static int handle_nd_map_keydown(ND_Data *data, SDL_Keycode key)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    switch (key)
+    {
+    case SDLK_1:
+    case SDLK_KP_1:
+        nd_data_toggle_map_layer_visible(data, ND_MAP_LAYER_WPT);
+        return 1;
+    case SDLK_2:
+    case SDLK_KP_2:
+        nd_data_toggle_map_layer_visible(data, ND_MAP_LAYER_ARPT);
+        return 1;
+    case SDLK_3:
+    case SDLK_KP_3:
+        nd_data_toggle_map_layer_visible(data, ND_MAP_LAYER_STA);
+        return 1;
+    case SDLK_l:
+        nd_data_toggle_map_labels_visible(data);
+        return 1;
+    default:
+        break;
+    }
+
+    return 0;
+}
+
 static void map_zoom_click_to_fmc(int screen_x, int screen_y, SDL_Rect zoom_rect, int *fmc_x, int *fmc_y)
 {
     if (fmc_x == NULL || fmc_y == NULL)
@@ -1250,6 +1281,11 @@ int cockpit_main_run(void)
                 {
                     show_fmc_debug = !show_fmc_debug;
                     suppress_debug_text_input = view_mode == COCKPIT_VIEW_FMC_ZOOM;
+                }
+                else if (event.key.repeat == 0 &&
+                         view_mode == COCKPIT_VIEW_ND_ZOOM &&
+                         handle_nd_map_keydown(&nd_data, event.key.keysym.sym))
+                {
                 }
                 else if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
                 {

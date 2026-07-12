@@ -26,6 +26,7 @@
 #define CABIN_AMAP_KEY_PLACEHOLDER ""
 #define CABIN_HTTP_RESPONSE_MAX 65536
 #define CABIN_WEATHER_CACHE_MAX 6
+#define CABIN_API_KEY_MAX 256
 
 typedef struct Cabin_Weather_Cache
 {
@@ -41,6 +42,37 @@ typedef struct Cabin_Weather_Cache
 } Cabin_Weather_Cache;
 
 static Cabin_Weather_Cache g_weather_cache[CABIN_WEATHER_CACHE_MAX];
+static char g_user_api_key[CABIN_API_KEY_MAX] = "";
+static int g_user_api_key_remember = 0;
+
+void cabin_api_set_key(const char *key, int remember)
+{
+    g_user_api_key[0] = '\0';
+    g_user_api_key_remember = remember ? 1 : 0;
+    memset(g_weather_cache, 0, sizeof(g_weather_cache));
+
+    if (key == NULL || key[0] == '\0')
+    {
+        return;
+    }
+
+    snprintf(g_user_api_key, sizeof(g_user_api_key), "%s", key);
+}
+
+int cabin_api_has_key(void)
+{
+    return g_user_api_key[0] != '\0';
+}
+
+const char *cabin_api_get_key_source(void)
+{
+    if (g_user_api_key[0] != '\0')
+    {
+        return "dialog input";
+    }
+
+    return "dialog empty";
+}
 
 static void copy_text(char *dest, size_t dest_size, const char *src)
 {
@@ -54,29 +86,18 @@ static void copy_text(char *dest, size_t dest_size, const char *src)
 
 static const char *get_api_key(const char **source)
 {
-    const char *key = getenv("AMAP_API_KEY");
-    if (key != NULL && key[0] != '\0')
+    if (g_user_api_key[0] != '\0')
     {
         if (source != NULL)
         {
-            *source = "AMAP_API_KEY";
+            *source = "dialog input";
         }
-        return key;
-    }
-
-    key = getenv("GAODE_API_KEY");
-    if (key != NULL && key[0] != '\0')
-    {
-        if (source != NULL)
-        {
-            *source = "GAODE_API_KEY";
-        }
-        return key;
+        return g_user_api_key;
     }
 
     if (source != NULL)
     {
-        *source = "built-in placeholder";
+        *source = "dialog empty";
     }
     return CABIN_AMAP_KEY_PLACEHOLDER;
 }
@@ -559,22 +580,22 @@ int cabin_api_update_weather_for_city(Cabin_Data *data, const char *city_name, c
         return 0;
     }
 
+    const char *api_key_source = "";
+    const char *api_key = get_api_key(&api_key_source);
+    if (!is_safe_api_key(api_key))
+    {
+        printf("Cabin API: no API key entered in dialog, fallback to mock weather.\n");
+        printf("Cabin API: current key source=%s, key status=missing or placeholder.\n", api_key_source);
+        set_mock_weather_for_city(data, safe_city, safe_adcode, "Amap Web Service API Key missing");
+        return 0;
+    }
+
     Cabin_Weather_Cache *cache = find_weather_cache(safe_adcode);
     if (cache != NULL)
     {
         printf("Cabin Weather: using cached weather for city=%s adcode=%s source=API.\n", cache->city, cache->adcode);
         apply_cached_weather(data, cache);
         return 1;
-    }
-
-    const char *api_key_source = "";
-    const char *api_key = get_api_key(&api_key_source);
-    if (!is_safe_api_key(api_key))
-    {
-        printf("Cabin API: need Amap Web Service API Key. Set environment variable AMAP_API_KEY or GAODE_API_KEY.\n");
-        printf("Cabin API: current key source=%s, key status=missing or placeholder, fallback to mock weather.\n", api_key_source);
-        set_mock_weather_for_city(data, safe_city, safe_adcode, "Amap Web Service API Key missing");
-        return 0;
     }
 
     printf("Cabin API: Amap Web Service API key detected from %s, length=%u.\n",

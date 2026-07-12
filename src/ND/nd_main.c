@@ -12,6 +12,30 @@
 #define ND_WINDOW_HEIGHT 752
 #define ND_TARGET_FRAME_MS 16
 
+static void handle_nd_layer_key(ND_Data *data, SDL_Keycode key)
+{
+    switch (key)
+    {
+    case SDLK_1:
+    case SDLK_KP_1:
+        nd_data_toggle_map_layer_visible(data, ND_MAP_LAYER_WPT);
+        break;
+    case SDLK_2:
+    case SDLK_KP_2:
+        nd_data_toggle_map_layer_visible(data, ND_MAP_LAYER_ARPT);
+        break;
+    case SDLK_3:
+    case SDLK_KP_3:
+        nd_data_toggle_map_layer_visible(data, ND_MAP_LAYER_STA);
+        break;
+    case SDLK_l:
+        nd_data_toggle_map_labels_visible(data);
+        break;
+    default:
+        break;
+    }
+}
+
 static TTF_Font *open_nd_font(void)
 {
     TTF_Font *font = TTF_OpenFont("assets/ALIBABAPUHUITI-2-45-LIGHT.TTF", 18);
@@ -139,6 +163,10 @@ int nd_main_run(void)
             else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
             {
                 running = 0;
+            }
+            else if (event.type == SDL_KEYDOWN && event.key.repeat == 0)
+            {
+                handle_nd_layer_key(&data, event.key.keysym.sym);
             }
         }
 

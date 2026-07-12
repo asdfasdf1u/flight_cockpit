@@ -1546,6 +1546,71 @@ void nd_data_set_range(ND_Data *data, float range_nm)
     data->range_nm = range_nm;
 }
 
+static int map_layer_is_valid(ND_MapLayer layer)
+{
+    return layer >= 0 && layer < ND_MAP_LAYER_COUNT;
+}
+
+int nd_data_get_map_layer_visible(const ND_Data *data, ND_MapLayer layer)
+{
+    if (data == NULL || !map_layer_is_valid(layer))
+    {
+        return 0;
+    }
+
+    return data->map_layer_visible[layer] != 0;
+}
+
+void nd_data_set_map_layer_visible(ND_Data *data, ND_MapLayer layer, int visible)
+{
+    if (data == NULL || !map_layer_is_valid(layer))
+    {
+        return;
+    }
+
+    data->map_layer_visible[layer] = visible != 0;
+}
+
+void nd_data_toggle_map_layer_visible(ND_Data *data, ND_MapLayer layer)
+{
+    if (data == NULL || !map_layer_is_valid(layer))
+    {
+        return;
+    }
+
+    data->map_layer_visible[layer] = !data->map_layer_visible[layer];
+}
+
+int nd_data_get_map_labels_visible(const ND_Data *data)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    return data->map_labels_visible != 0;
+}
+
+void nd_data_set_map_labels_visible(ND_Data *data, int visible)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->map_labels_visible = visible != 0;
+}
+
+void nd_data_toggle_map_labels_visible(ND_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->map_labels_visible = !data->map_labels_visible;
+}
+
 static void apply_data_frame(ND_Data *data, const ND_DataFrame *frame, float delta_time)
 {
     if (data == NULL || frame == NULL)
@@ -1664,11 +1729,15 @@ void nd_data_init(ND_Data *data)
     data->track = 3.0f;
     data->ground_speed = 262.0f;
     data->true_air_speed = 262.0f;
-    data->range_nm = 60.0f;
+    data->range_nm = 80.0f;
     data->nav_point_count = 8;
     data->active_point_index = 0;
     data->simulation_time = 0.0f;
     data->data_frame_step_sec = ND_DATA_DEFAULT_STEP_SEC;
+    nd_data_set_map_layer_visible(data, ND_MAP_LAYER_WPT, 1);
+    nd_data_set_map_layer_visible(data, ND_MAP_LAYER_ARPT, 1);
+    nd_data_set_map_layer_visible(data, ND_MAP_LAYER_STA, 1);
+    nd_data_set_map_labels_visible(data, 0);
 
     set_nav_point(&data->nav_points[0], "WPT01", ND_POINT_WAYPOINT, 40.664200, 116.427400, 1);
     set_nav_point(&data->nav_points[1], "WPT02", ND_POINT_WAYPOINT, 40.524200, 116.667400, 0);

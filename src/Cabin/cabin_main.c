@@ -284,10 +284,58 @@ int cabin_main_run(void)
         return -1;
     }
 
+    /* Load fonts early so the API key dialog can render text. */
+    TTF_Font *title_font = open_font(24);
+    TTF_Font *font = open_font(20);
+    TTF_Font *small_font = open_font(17);
+    if (title_font == NULL || font == NULL || small_font == NULL)
+    {
+        printf("Cabin: font load failed, text rendering will be skipped where font is missing: %s\n", TTF_GetError());
+    }
+
     Cabin_Data data;
     cabin_data_init(&data);
     printf("Cabin Route: using Beijing-Chengdu mock route; FMC route integration disabled for now.\n");
     fflush(stdout);
+
+    Cabin_Assets assets;
+    assets.map_texture = load_cabin_map_texture(renderer, &data);
+    assets.plane_texture = load_texture(renderer, CABIN_PLANE_PATH, "plane icon");
+    assets.fullscreen_texture = load_texture(renderer, CABIN_FULLSCREEN_PATH, "fullscreen control");
+    assets.add_texture = load_texture(renderer, CABIN_ADD_PATH, "zoom plus");
+    assets.sub_texture = load_texture(renderer, CABIN_SUB_PATH, "zoom minus");
+    assets.title_font = title_font;
+    assets.font = font;
+    assets.small_font = small_font;
+
+    if (cabin_api_has_key())
+    {
+        printf("Cabin: existing API key found for this run, skip API key dialog.\n");
+    }
+    else
+    {
+        cabin_ui_render(renderer, &assets, &data);
+        SDL_RenderPresent(renderer);
+
+        Cabin_ApiKeyDialogResult dialog_result;
+        cabin_ui_run_apikey_dialog(window, renderer, &assets, &data, title_font, font, small_font, &dialog_result);
+        if (dialog_result.confirmed && dialog_result.api_key[0] != '\0')
+        {
+            cabin_api_set_key(dialog_result.api_key, dialog_result.remember);
+            printf("Cabin: API key entered via dialog, remember=%d.\n", dialog_result.remember);
+            if (assets.map_texture != NULL)
+            {
+                SDL_DestroyTexture(assets.map_texture);
+                assets.map_texture = NULL;
+            }
+            assets.map_texture = load_cabin_map_texture(renderer, &data);
+        }
+        else
+        {
+            cabin_api_set_key(NULL, 0);
+            printf("Cabin: API key dialog cancelled, using mock data.\n");
+        }
+    }
 
     char last_weather_city[CABIN_TEXT_LEN] = "";
     char last_weather_adcode[CABIN_TEXT_LEN] = "";
@@ -296,21 +344,6 @@ int cabin_main_run(void)
                                    sizeof(last_weather_city),
                                    last_weather_adcode,
                                    sizeof(last_weather_adcode));
-
-    Cabin_Assets assets;
-    assets.map_texture = load_cabin_map_texture(renderer, &data);
-    assets.plane_texture = load_texture(renderer, CABIN_PLANE_PATH, "plane icon");
-    assets.fullscreen_texture = load_texture(renderer, CABIN_FULLSCREEN_PATH, "fullscreen control");
-    assets.add_texture = load_texture(renderer, CABIN_ADD_PATH, "zoom plus");
-    assets.sub_texture = load_texture(renderer, CABIN_SUB_PATH, "zoom minus");
-    assets.title_font = open_font(24);
-    assets.font = open_font(20);
-    assets.small_font = open_font(17);
-
-    if (assets.title_font == NULL || assets.font == NULL || assets.small_font == NULL)
-    {
-        printf("Cabin: font load failed, text rendering will be skipped where font is missing: %s\n", TTF_GetError());
-    }
 
     int running = 1;
     SDL_Event event;
@@ -367,4 +400,3 @@ int cabin_main_run(void)
 
     return 0;
 }
-

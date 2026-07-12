@@ -25,6 +25,14 @@ typedef enum ND_PointType
     ND_POINT_ILS
 } ND_PointType;
 
+typedef enum ND_MapLayer
+{
+    ND_MAP_LAYER_WPT,
+    ND_MAP_LAYER_ARPT,
+    ND_MAP_LAYER_STA,
+    ND_MAP_LAYER_COUNT
+} ND_MapLayer;
+
 typedef struct ND_NavPoint
 {
     char ident[ND_NAME_LEN];
@@ -138,6 +146,9 @@ typedef struct ND_Data
     int apt_loaded;
     int apt_airport_count;
     int apt_tower_count;
+
+    int map_layer_visible[ND_MAP_LAYER_COUNT];
+    int map_labels_visible;
 } ND_Data;
 
 extern int waypoint_total_count;
@@ -154,5 +165,11 @@ void nd_data_init(ND_Data *data);
 void nd_data_update_mock(ND_Data *data, float delta_time);
 void nd_data_recalculate_nav_points(ND_Data *data);
 void nd_data_set_range(ND_Data *data, float range_nm);
+int nd_data_get_map_layer_visible(const ND_Data *data, ND_MapLayer layer);
+void nd_data_set_map_layer_visible(ND_Data *data, ND_MapLayer layer, int visible);
+void nd_data_toggle_map_layer_visible(ND_Data *data, ND_MapLayer layer);
+int nd_data_get_map_labels_visible(const ND_Data *data);
+void nd_data_set_map_labels_visible(ND_Data *data, int visible);
+void nd_data_toggle_map_labels_visible(ND_Data *data);
 
 #endif
