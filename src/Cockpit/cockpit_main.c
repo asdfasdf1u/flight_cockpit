@@ -1,5 +1,13 @@
 #include "cockpit_main.h"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <windows.h>
+#endif
+
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
@@ -7,7 +15,6 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
-#include <windows.h>
 
 #include "cockpit_layout.h"
 #include "cockpit_ui.h"
@@ -501,17 +508,13 @@ static void print_data_source_summary(
     const FMC_Data *fmc_data,
     int fmc_uses_unified_route)
 {
-<<<<<<< HEAD
-<<<<<<< HEAD
+    const SimPlannedRoute *route = sim_data_center_route(sim_data_center);
+
     printf("Cockpit Data Sources: X-Plane live bridge enabled at %s:%u; local loaders remain as fallback.\n",
            XPLANE_LIVE_DEFAULT_IP,
            XPLANE_LIVE_DEFAULT_PORT);
-=======
-=======
-    const SimPlannedRoute *route = sim_data_center_route(sim_data_center);
->>>>>>> 00de817e9c02c5220fb293bd7b6847a900a5dca3
-    printf("Cockpit Data Sources: EICAS and alarm use the unified SimDataCenter snapshot when available.\n");
->>>>>>> aa0a184b7273aecbbd40efc09a43d1050ee9fee7
+    printf("Cockpit Data Sources: unified SimDataCenter is %s.\n",
+           use_unified_data ? "active" : "not available");
     printf("Cockpit Data Sources: PFD=%s; ND=%s%s%s%s; EICAS=%s; FMC=%s.\n",
            pfd_data != NULL && pfd_data->using_file_data ? "assets/pfd.dat" : "mock fallback",
            nd_data != NULL && nd_data->data_file_loaded ? "assets/nd.dat" : "mock flight fallback",
@@ -519,14 +522,6 @@ static void print_data_source_summary(
            nd_data != NULL && nd_data->earth_nav_loaded ? " + earth_nav.dat" : "",
            nd_data != NULL && nd_data->apt_loaded ? " + apt.dat" : "",
            eicas_data_loaded ? "assets/eicas1.dat/assets/eicas2.dat" : "mock fallback",
-<<<<<<< HEAD
-           fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : "default mock route");
-<<<<<<< HEAD
-    printf("Cockpit Data Sync: PFD/ND/EICAS use X-Plane live data when available; FMC/Cabin keep local state.\n");
-=======
-    printf("Cockpit Data Sync: PFD/ND/FMC/Cabin still have separate clocks or playback state.\n");
->>>>>>> aa0a184b7273aecbbd40efc09a43d1050ee9fee7
-=======
            fmc_uses_unified_route ? "UnifiedRoute" : (fmc_data != NULL && fmc_data->route_loaded_from_file ? fmc_data->fms_plan_path : "default mock route"));
     if (route != NULL)
     {
@@ -543,7 +538,7 @@ static void print_data_source_summary(
     {
         printf("Cockpit Route: unified route unavailable; FMC keeps fallback route.\n");
     }
-    printf("Cockpit Data Sync: PFD/ND/EICAS use SimSnapshot when unified data is available; FMC route uses UnifiedRoute when available.\n");
+    printf("Cockpit Data Sync: X-Plane live data has priority; SimSnapshot/local data are fallback; FMC route uses UnifiedRoute when available.\n");
     fflush(stdout);
 }
 
@@ -571,7 +566,6 @@ static void print_cockpit_sync_check(
         printf("route: unavailable\n");
     }
     printf("fmc: source=%s\n", fmc_uses_unified_route ? "UnifiedRoute" : "FMCFallback");
->>>>>>> 00de817e9c02c5220fb293bd7b6847a900a5dca3
     fflush(stdout);
 }
 
@@ -802,21 +796,13 @@ static void render_window(
 
 int cockpit_main_run(void)
 {
-<<<<<<< HEAD
     // 使用最近邻缩放，避免纹理缩放时产生模糊
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
-    {
-        printf("SDL_Init failed: %s\n", SDL_GetError());
-        return -1;
-    }
-=======
     const Uint32 cockpit_sdl_flags = SDL_INIT_VIDEO | SDL_INIT_TIMER;
     const int cockpit_owns_sdl = SDL_WasInit(0) == 0;
     const int cockpit_owns_ttf = TTF_WasInit() == 0;
     int cockpit_initialized_sdl = 0;
->>>>>>> aa0a184b7273aecbbd40efc09a43d1050ee9fee7
 
     cockpit_startup_log(1, "Cockpit startup: entered (owns_sdl=%d, owns_ttf=%d).", cockpit_owns_sdl, cockpit_owns_ttf);
 
@@ -1029,19 +1015,11 @@ int cockpit_main_run(void)
     nd_data_init(&nd_data);
     aircraft_systems_data_init(&systems_data);
     eicas_data_init(&eicas_data);
-<<<<<<< HEAD
-<<<<<<< HEAD
     xplane_live_data_init(&xplane_live_data, XPLANE_LIVE_DEFAULT_IP, XPLANE_LIVE_DEFAULT_PORT);
-    const int eicas_data_loaded = eicas_data_load_files(&eicas_data, "assets/eicas1.dat", "assets/eicas2.dat");
-    if (eicas_data_loaded)
-=======
-    if (sim_snapshot != NULL)
-=======
     if (sim_data_ready && sim_snapshot != NULL)
->>>>>>> 00de817e9c02c5220fb293bd7b6847a900a5dca3
     {
         eicas_data_loaded = sim_data_center_has_eicas_data(sim_data_center);
-        apply_sim_snapshot_to_aircraft_systems(&systems_data, sim_snapshot);
+        apply_sim_snapshot_to_cockpit_modules(sim_snapshot, &pfd_data, &nd_data, &systems_data);
         printf("Cockpit: unified SimDataCenter initialized; embedded displays will use one SimSnapshot.\n");
         if (!sim_data_center_has_pfd_data(sim_data_center) ||
             !sim_data_center_has_nd_data(sim_data_center) ||
@@ -1055,18 +1033,6 @@ int cockpit_main_run(void)
     {
         printf("Cockpit: unified SimDataCenter initialization failed; falling back to legacy/module data path.\n");
         eicas_data_loaded = eicas_data_load_files(&eicas_data, "assets/eicas1.dat", "assets/eicas2.dat");
-<<<<<<< HEAD
-    }
-    if (!sim_data_ready && eicas_data_loaded)
->>>>>>> aa0a184b7273aecbbd40efc09a43d1050ee9fee7
-    {
-        eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
-    }
-    else if (!sim_data_ready)
-    {
-        printf("Cockpit EICAS: using mock fallback data.\n");
-        fflush(stdout);
-=======
         if (eicas_data_loaded)
         {
             eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
@@ -1076,7 +1042,6 @@ int cockpit_main_run(void)
             printf("Cockpit EICAS: using mock fallback data.\n");
             fflush(stdout);
         }
->>>>>>> 00de817e9c02c5220fb293bd7b6847a900a5dca3
     }
     fmc_data_init(&fmc_data);
     int fmc_uses_unified_route = 0;
@@ -1320,36 +1285,30 @@ int cockpit_main_run(void)
             delta_time = 0.1f;
         }
 
-<<<<<<< HEAD
-        xplane_live_data_update(&xplane_live_data, &pfd_data, &nd_data, &eicas_data, &systems_data, delta_time);
-
-        if (!xplane_live_data_pfd_active(&xplane_live_data))
-        {
-            pfd_data_update_mock(&pfd_data, delta_time);
-        }
-        if (!xplane_live_data_nd_active(&xplane_live_data))
-        {
-            nd_data_update_mock(&nd_data, delta_time);
-        }
-        if (!xplane_live_data_eicas_active(&xplane_live_data) && eicas_data_loaded)
-=======
-        pfd_data_update_mock(&pfd_data, delta_time);
-        nd_data_update_mock(&nd_data, delta_time);
+        const int live_data_active = xplane_live_data_update(&xplane_live_data, &pfd_data, &nd_data, &eicas_data, &systems_data, delta_time);
         if (sim_data_ready)
         {
             sim_data_center_update(sim_data_center, delta_time);
             sim_snapshot = sim_data_center_snapshot(sim_data_center);
-            apply_sim_snapshot_to_aircraft_systems(&systems_data, sim_snapshot);
         }
-        else if (eicas_data_loaded)
->>>>>>> aa0a184b7273aecbbd40efc09a43d1050ee9fee7
+
+        if (!live_data_active && sim_data_ready && sim_snapshot != NULL)
         {
-            eicas_data_update(&eicas_data, delta_time);
-            eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
+            apply_sim_snapshot_to_cockpit_modules(sim_snapshot, &pfd_data, &nd_data, &systems_data);
         }
-        else if (!xplane_live_data_eicas_active(&xplane_live_data))
+        else if (!live_data_active)
         {
-            aircraft_systems_data_update_mock(&systems_data, delta_time);
+            pfd_data_update_mock(&pfd_data, delta_time);
+            nd_data_update_mock(&nd_data, delta_time);
+            if (eicas_data_loaded)
+            {
+                eicas_data_update(&eicas_data, delta_time);
+                eicas_data_apply_to_aircraft_systems(&eicas_data, &systems_data);
+            }
+            else
+            {
+                aircraft_systems_data_update_mock(&systems_data, delta_time);
+            }
         }
         fmc_data_update_mock(&fmc_data, delta_time);
         cockpit_alarm_update(&cockpit_state.alarm, sim_snapshot);
@@ -1379,14 +1338,11 @@ int cockpit_main_run(void)
     }
 
     SDL_StopTextInput();
-<<<<<<< HEAD
     xplane_live_data_shutdown(&xplane_live_data);
-=======
     cockpit_startup_log(0, "Cockpit event loop ended normally.");
     cockpit_alarm_destroy(&cockpit_state.alarm);
     sim_data_center_destroy(sim_data_center);
     free(sim_data_center);
->>>>>>> aa0a184b7273aecbbd40efc09a43d1050ee9fee7
     fmc_data_destroy(&fmc_data);
     fmc_display_assets_destroy(&fmc_display_assets);
     pfd_ui_clear_text_cache(renderer);

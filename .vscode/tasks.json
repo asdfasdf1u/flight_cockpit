@@ -18,19 +18,13 @@
                 "${workspaceFolder}/src/Cabin/cabin_api.c",
                 "${workspaceFolder}/src/FMC/fmc_main.c",
                 "${workspaceFolder}/src/FMC/fmc_data.c",
-<<<<<<< HEAD
-                "${workspaceFolder}/src/FMC/fmc_airport.c",
-                "${workspaceFolder}/src/FMC/fmc_waypoint.c",
-                "${workspaceFolder}/src/FMC/fmc_xpc.c",
                 "${workspaceFolder}/src/Util/xplaneConnect.c",
                 "${workspaceFolder}/src/Util/xplane_live_data.c",
-=======
                 "${workspaceFolder}/src/FMC/fmc_ui_adapter.c",
                 "${workspaceFolder}/src/FMC/fmc_display.c",
                 "${workspaceFolder}/src/FMC/fmc_event.c",
                 "${workspaceFolder}/src/FMC/fmc_key.c",
                 "${workspaceFolder}/src/FMC/fmc_connect.c",
->>>>>>> aa0a184b7273aecbbd40efc09a43d1050ee9fee7
                 "${workspaceFolder}/src/Util/eicas_ui_common.c",
                 "${workspaceFolder}/src/Systems/aircraft_systems_data.c",
                 "${workspaceFolder}/src/EICAS1/eicas_data.c",

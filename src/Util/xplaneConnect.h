@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 //Copyright (c) 2013-2018 United States Government as represented by the Administrator of the
 //National Aeronautics and Space Administration. All Rights Reserved.
 //
@@ -29,10 +28,15 @@
 extern "C" {
 #endif
 
-#include "stdlib.h"
+#include <stdlib.h>
 #ifdef _WIN32 /* WIN32 SYSTEM */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef _WINSOCKAPI_
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#endif
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
 #elif (__APPLE__ || __linux)
 #include <sys/socket.h>
@@ -323,18 +327,4 @@ int sendCOMM(XPCSocket sock, const char* comm);
 #ifdef __cplusplus
     }
 #endif
-=======
-#ifndef XPLANE_CONNECT_H
-#define XPLANE_CONNECT_H
-
-typedef void *XPCSocket;
-
-static inline int sendCOMM(XPCSocket socket, const char *command)
-{
-    (void)socket;
-    (void)command;
-    return 0;
-}
-
->>>>>>> aa0a184b7273aecbbd40efc09a43d1050ee9fee7
 #endif
