@@ -1287,9 +1287,6 @@ static void draw_aircraft_symbol(SDL_Renderer *renderer, const ND_Layout *layout
     SDL_RenderDrawLine(renderer, cx, center_y, cx - base_half_width, base_y);
     SDL_RenderDrawLine(renderer, cx, center_y, cx + base_half_width, base_y);
     SDL_RenderDrawLine(renderer, cx - base_half_width, base_y, cx + base_half_width, base_y);
-    SDL_RenderDrawLine(renderer, cx, center_y + 28, cx - 18, base_y - 6);
-    SDL_RenderDrawLine(renderer, cx - 18, base_y - 6, cx + 18, base_y - 6);
-    SDL_RenderDrawLine(renderer, cx + 18, base_y - 6, cx, center_y + 28);
 
     draw_circle_dot(renderer, cx, center_y, circle_radius, 0.0f, 5);
     draw_circle_dot(renderer, cx, center_y, circle_radius, 90.0f, 5);
