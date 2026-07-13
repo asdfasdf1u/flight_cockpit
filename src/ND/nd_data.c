@@ -312,7 +312,38 @@ static void nd_clear_route_cache(ND_Data *data)
     memset(data->route_points, 0, sizeof(data->route_points));
     data->route_point_count = 0;
     data->route_segment_count = 0;
+    data->route_active_index = -1;
     data->route_valid = 0;
+}
+
+static void nd_route_distance_bearing(
+    const ND_Data *data,
+    double latitude,
+    double longitude,
+    float *distance_nm,
+    float *bearing_deg)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    const float aircraft_lat_rad = (float)data->latitude * ND_DEG_TO_RAD;
+    const float lon_scale = cosf(aircraft_lat_rad);
+    const double delta_lat = latitude - data->latitude;
+    const double delta_lon = longitude - data->longitude;
+    const float north_nm = (float)(delta_lat * 60.0);
+    const float east_nm = (float)(delta_lon * 60.0 * (double)lon_scale);
+    const float bearing = atan2f(east_nm, north_nm) * ND_RAD_TO_DEG;
+
+    if (distance_nm != NULL)
+    {
+        *distance_nm = sqrtf(north_nm * north_nm + east_nm * east_nm);
+    }
+    if (bearing_deg != NULL)
+    {
+        *bearing_deg = normalize_degrees(bearing);
+    }
 }
 
 static int add_nav_point(
@@ -1430,20 +1461,29 @@ static void update_active_waypoint_info(ND_Data *data)
     data->active_waypoint_bearing_deg = 0.0f;
     data->active_waypoint_eta_min = 0.0f;
 
-    if (data->active_point_index < 0 || data->active_point_index >= data->nav_point_count)
+    snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "----");
+
+    if (data->route_valid &&
+        data->route_active_index >= 0 &&
+        data->route_active_index < data->route_point_count)
     {
-        snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "----");
+        const ND_RoutePoint *active_route_point = &data->route_points[data->route_active_index];
+        if (!active_route_point->has_position)
+        {
+            return;
+        }
+
+        snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "%s", active_route_point->ident);
+        nd_route_distance_bearing(data,
+                                  active_route_point->latitude,
+                                  active_route_point->longitude,
+                                  &data->active_waypoint_distance_nm,
+                                  &data->active_waypoint_bearing_deg);
+        if (data->ground_speed > 1.0f)
+        {
+            data->active_waypoint_eta_min = data->active_waypoint_distance_nm / data->ground_speed * 60.0f;
+        }
         return;
-    }
-
-    const ND_NavPoint *active = &data->nav_points[data->active_point_index];
-    snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "%s", active->ident);
-    data->active_waypoint_distance_nm = active->distance_nm;
-    data->active_waypoint_bearing_deg = active->bearing_deg;
-
-    if (data->ground_speed > 1.0f)
-    {
-        data->active_waypoint_eta_min = active->distance_nm / data->ground_speed * 60.0f;
     }
 }
 
@@ -1591,6 +1631,10 @@ int nd_data_sync_planned_route(ND_Data *data, const SimPlannedRoute *route, int 
                                    nd_valid_route_position(source->latitude, source->longitude);
             target->latitude = target->has_position ? source->latitude : 0.0;
             target->longitude = target->has_position ? source->longitude : 0.0;
+            if (i == route->active_waypoint_index)
+            {
+                data->route_active_index = data->route_point_count - 1;
+            }
         }
     }
 
@@ -1609,6 +1653,7 @@ int nd_data_sync_planned_route(ND_Data *data, const SimPlannedRoute *route, int 
            previous_revision,
            data->route_point_count,
            data->route_segment_count);
+    update_active_waypoint_info(data);
     return previous_revision != route_revision;
 }
 
@@ -1742,14 +1787,6 @@ static void apply_data_frame(ND_Data *data, const ND_DataFrame *frame, float del
 
     nd_data_recalculate_nav_points(data);
 
-    if (frame->fields & ND_FRAME_ACTIVE_DISTANCE)
-    {
-        data->active_waypoint_distance_nm = frame->active_waypoint_distance_nm;
-    }
-    if (frame->fields & ND_FRAME_ACTIVE_ETA)
-    {
-        data->active_waypoint_eta_min = frame->active_waypoint_eta_min;
-    }
 }
 
 static void update_from_data_file(ND_Data *data, float delta_time)
@@ -1816,6 +1853,7 @@ void nd_data_init(ND_Data *data)
     data->simulation_time = 0.0f;
     data->data_frame_step_sec = ND_DATA_DEFAULT_STEP_SEC;
     data->route_cached_revision = -1;
+    data->route_active_index = -1;
     nd_data_set_map_layer_visible(data, ND_MAP_LAYER_WPT, 1);
     nd_data_set_map_layer_visible(data, ND_MAP_LAYER_ARPT, 1);
     nd_data_set_map_layer_visible(data, ND_MAP_LAYER_STA, 1);

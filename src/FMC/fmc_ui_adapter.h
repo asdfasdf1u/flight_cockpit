@@ -42,6 +42,14 @@ typedef enum FMC_RouteField
     FMC_ROUTE_FIELD_TO_FIX
 } FMC_RouteField;
 
+typedef enum FMC_CoordinateSource
+{
+    FMC_COORD_SOURCE_INVALID = 0,
+    FMC_COORD_SOURCE_ROUTE,
+    FMC_COORD_SOURCE_OVERRIDE,
+    FMC_COORD_SOURCE_APT_DAT
+} FMC_CoordinateSource;
+
 typedef struct FMC_Data
 {
     FMC_Page current_page;
@@ -58,9 +66,11 @@ typedef struct FMC_Data
     double origin_latitude;
     double origin_longitude;
     int origin_has_position;
+    FMC_CoordinateSource origin_coordinate_source;
     double route_latitudes[FMC_MAX_ROUTE_POINTS];
     double route_longitudes[FMC_MAX_ROUTE_POINTS];
     int route_has_position[FMC_MAX_ROUTE_POINTS];
+    FMC_CoordinateSource route_coordinate_sources[FMC_MAX_ROUTE_POINTS];
     int route_count;
     int configured_route_page;
     int route_loaded_from_file;

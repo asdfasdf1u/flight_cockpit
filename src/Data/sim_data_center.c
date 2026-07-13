@@ -9,6 +9,7 @@
 #define SIM_EICAS_LOWER_FF_SCALE 350.0f
 #define SIM_FUEL_CENTER_DISPLAY_SCALE 60.9f
 #define SIM_FUEL_SIDE_DISPLAY_SCALE 48.7f
+#define SIM_EARTH_RADIUS_NM 3440.065
 
 static float clamp_float(float value, float min_value, float max_value)
 {
@@ -43,6 +44,99 @@ static void copy_text(char *dest, int dest_size, const char *src)
         return;
     }
     snprintf(dest, (size_t)dest_size, "%s", src != NULL ? src : "");
+}
+
+static int sim_valid_route_position(double latitude, double longitude)
+{
+    return latitude >= -90.0 && latitude <= 90.0 &&
+           longitude >= -180.0 && longitude <= 180.0 &&
+           (latitude != 0.0 || longitude != 0.0);
+}
+
+static double sim_route_distance_nm(double lat1, double lon1, double lat2, double lon2)
+{
+    const double dlat = (lat2 - lat1) * (double)SIM_DEG_TO_RAD;
+    const double dlon = (lon2 - lon1) * (double)SIM_DEG_TO_RAD;
+    const double lat1_rad = lat1 * (double)SIM_DEG_TO_RAD;
+    const double lat2_rad = lat2 * (double)SIM_DEG_TO_RAD;
+    const double sin_dlat = sin(dlat * 0.5);
+    const double sin_dlon = sin(dlon * 0.5);
+    const double a = sin_dlat * sin_dlat + cos(lat1_rad) * cos(lat2_rad) * sin_dlon * sin_dlon;
+    const double c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+    return SIM_EARTH_RADIUS_NM * c;
+}
+
+static const SimRoutePoint *sim_find_route_point(const SimPlannedRoute *route, const char *ident)
+{
+    if (route == NULL || ident == NULL || ident[0] == '\0')
+    {
+        return NULL;
+    }
+
+    for (int i = 0; i < route->point_count; ++i)
+    {
+        if (strcmp(route->points[i].ident, ident) == 0)
+        {
+            return &route->points[i];
+        }
+    }
+
+    return NULL;
+}
+
+static void sim_data_center_log_route_diagnostics(const SimDataCenter *center)
+{
+    if (center == NULL || !center->planned_route.valid)
+    {
+        return;
+    }
+
+    const SimPlannedRoute *route = &center->planned_route;
+    const SimRoutePoint *zbbb = sim_find_route_point(route, "ZBBB");
+    const SimRoutePoint *zuuu = sim_find_route_point(route, "ZUUU");
+    const char *zbbb_source = (zbbb != NULL && zbbb->coordinate_source[0] != '\0')
+                                  ? zbbb->coordinate_source
+                                  : "INVALID";
+    const char *zuuu_source = (zuuu != NULL && zuuu->coordinate_source[0] != '\0')
+                                  ? zuuu->coordinate_source
+                                  : "INVALID";
+
+    printf("FMC Route Diagnostic: aircraft lat=%.6f lon=%.6f.\n",
+           center->nd_latitude,
+           center->nd_longitude);
+
+    if (zbbb != NULL && zbbb->has_position && sim_valid_route_position(zbbb->latitude, zbbb->longitude))
+    {
+        printf("FMC Route Diagnostic: ZBBB lat=%.6f lon=%.6f source=%s aircraft_distance=%.1fNM.\n",
+               zbbb->latitude,
+               zbbb->longitude,
+               zbbb_source,
+               sim_route_distance_nm(center->nd_latitude, center->nd_longitude, zbbb->latitude, zbbb->longitude));
+    }
+    else
+    {
+        printf("FMC Route Diagnostic: ZBBB lat=INVALID lon=INVALID source=%s aircraft_distance=INVALID.\n",
+               zbbb_source);
+    }
+
+    if (zuuu != NULL && zuuu->has_position && sim_valid_route_position(zuuu->latitude, zuuu->longitude))
+    {
+        printf("FMC Route Diagnostic: ZUUU lat=%.6f lon=%.6f source=%s.\n",
+               zuuu->latitude,
+               zuuu->longitude,
+               zuuu_source);
+    }
+    else
+    {
+        printf("FMC Route Diagnostic: ZUUU lat=INVALID lon=INVALID source=%s.\n",
+               zuuu_source);
+    }
+
+    printf("FMC Route Diagnostic: planned_route origin=%s destination=%s point_count=%d revision=%d.\n",
+           route->origin[0] != '\0' ? route->origin : "----",
+           route->destination[0] != '\0' ? route->destination : "----",
+           route->point_count,
+           center->route_revision);
 }
 
 static int sample_index_from_time(float sim_time, int count)
@@ -249,6 +343,7 @@ static void set_route_point(SimRoutePoint *point, const char *ident, const char 
     memset(point, 0, sizeof(*point));
     copy_text(point->ident, sizeof(point->ident), ident);
     copy_text(point->type, sizeof(point->type), type);
+    copy_text(point->coordinate_source, sizeof(point->coordinate_source), "ROUTE");
     point->latitude = latitude;
     point->longitude = longitude;
     point->altitude = 0.0;
@@ -596,6 +691,7 @@ void sim_data_center_set_route(SimDataCenter *center, const SimPlannedRoute *rou
            center->planned_route.origin,
            center->planned_route.destination,
            center->planned_route.point_count);
+    sim_data_center_log_route_diagnostics(center);
 }
 
 void sim_data_center_clear_route(SimDataCenter *center)

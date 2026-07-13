@@ -537,6 +537,7 @@ int sim_data_loader_load_fms_route(SimPlannedRoute *route, const char *path)
         SimRoutePoint *point = &route->points[route->point_count++];
         snprintf(point->ident, sizeof(point->ident), "%s", ident);
         snprintf(point->type, sizeof(point->type), "%s", sim_fms_point_type_name(type));
+        snprintf(point->coordinate_source, sizeof(point->coordinate_source), "%s", "ROUTE");
         point->altitude = altitude;
         point->latitude = latitude;
         point->longitude = longitude;

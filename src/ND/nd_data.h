@@ -163,6 +163,7 @@ typedef struct ND_Data
     ND_RoutePoint route_points[ND_MAX_ROUTE_POINTS];
     int route_point_count;
     int route_segment_count;
+    int route_active_index;
     int route_cached_revision;
     int route_valid;
 } ND_Data;

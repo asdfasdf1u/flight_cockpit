@@ -23,6 +23,152 @@ static void set_text(char *dest, int dest_size, const char *text)
 
 static int fmc_valid_position(double latitude, double longitude);
 
+typedef struct FMC_ResolvedCoordinate
+{
+    double latitude;
+    double longitude;
+    int has_position;
+    FMC_CoordinateSource source;
+} FMC_ResolvedCoordinate;
+
+typedef struct FMC_AirportCoordinateOverride
+{
+    const char *ident;
+    double latitude;
+    double longitude;
+} FMC_AirportCoordinateOverride;
+
+static const FMC_AirportCoordinateOverride FMC_AIRPORT_COORDINATE_OVERRIDES[] = {
+    {"ZBBB", 40.080111, 116.584556},
+};
+
+static const char *fmc_coordinate_source_name(FMC_CoordinateSource source)
+{
+    switch (source)
+    {
+    case FMC_COORD_SOURCE_ROUTE:
+        return "ROUTE";
+    case FMC_COORD_SOURCE_OVERRIDE:
+        return "OVERRIDE";
+    case FMC_COORD_SOURCE_APT_DAT:
+        return "APT_DAT";
+    case FMC_COORD_SOURCE_INVALID:
+    default:
+        return "INVALID";
+    }
+}
+
+static int fmc_ident_equals(const char *a, const char *b)
+{
+    if (a == NULL || b == NULL)
+    {
+        return 0;
+    }
+
+    while (*a != '\0' && *b != '\0')
+    {
+        if (toupper((unsigned char)*a) != toupper((unsigned char)*b))
+        {
+            return 0;
+        }
+        ++a;
+        ++b;
+    }
+
+    return *a == '\0' && *b == '\0';
+}
+
+static int fmc_find_airport_coordinate_override(const char *ident, double *latitude, double *longitude)
+{
+    if (ident == NULL)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < (int)(sizeof(FMC_AIRPORT_COORDINATE_OVERRIDES) / sizeof(FMC_AIRPORT_COORDINATE_OVERRIDES[0])); ++i)
+    {
+        const FMC_AirportCoordinateOverride *item = &FMC_AIRPORT_COORDINATE_OVERRIDES[i];
+        if (fmc_ident_equals(ident, item->ident) &&
+            fmc_valid_position(item->latitude, item->longitude))
+        {
+            if (latitude != NULL)
+            {
+                *latitude = item->latitude;
+            }
+            if (longitude != NULL)
+            {
+                *longitude = item->longitude;
+            }
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static FMC_ResolvedCoordinate fmc_invalid_coordinate(void)
+{
+    FMC_ResolvedCoordinate result;
+    result.latitude = 0.0;
+    result.longitude = 0.0;
+    result.has_position = 0;
+    result.source = FMC_COORD_SOURCE_INVALID;
+    return result;
+}
+
+static FMC_ResolvedCoordinate fmc_resolve_airport_coordinate(
+    const char *ident,
+    int has_existing,
+    double existing_latitude,
+    double existing_longitude,
+    FMC_CoordinateSource existing_source)
+{
+    double override_latitude = 0.0;
+    double override_longitude = 0.0;
+    const int has_override = fmc_find_airport_coordinate_override(ident, &override_latitude, &override_longitude);
+
+    if (has_existing && fmc_valid_position(existing_latitude, existing_longitude))
+    {
+        if (existing_source == FMC_COORD_SOURCE_ROUTE ||
+            existing_source == FMC_COORD_SOURCE_OVERRIDE ||
+            (existing_source == FMC_COORD_SOURCE_INVALID && !has_override) ||
+            (existing_source == FMC_COORD_SOURCE_APT_DAT && !has_override))
+        {
+            FMC_ResolvedCoordinate result;
+            result.latitude = existing_latitude;
+            result.longitude = existing_longitude;
+            result.has_position = 1;
+            result.source = existing_source != FMC_COORD_SOURCE_INVALID
+                                ? existing_source
+                                : FMC_COORD_SOURCE_ROUTE;
+            return result;
+        }
+    }
+
+    if (has_override)
+    {
+        FMC_ResolvedCoordinate result;
+        result.latitude = override_latitude;
+        result.longitude = override_longitude;
+        result.has_position = 1;
+        result.source = FMC_COORD_SOURCE_OVERRIDE;
+        return result;
+    }
+
+    Airport *airport = fmc_query_airport_by_icao(ident);
+    if (airport != NULL && fmc_valid_position(airport->datum_lat, airport->datum_lon))
+    {
+        FMC_ResolvedCoordinate result;
+        result.latitude = airport->datum_lat;
+        result.longitude = airport->datum_lon;
+        result.has_position = 1;
+        result.source = FMC_COORD_SOURCE_APT_DAT;
+        return result;
+    }
+
+    return fmc_invalid_coordinate();
+}
+
 static void sync_library_route_fields(const FMC_Data *data)
 {
     if (data == NULL)
@@ -90,6 +236,7 @@ static void clear_auto_route(FMC_Data *data)
         data->route_latitudes[i] = 0.0;
         data->route_longitudes[i] = 0.0;
         data->route_has_position[i] = 0;
+        data->route_coordinate_sources[i] = FMC_COORD_SOURCE_INVALID;
     }
     if (via_to_list != NULL)
     {
@@ -98,7 +245,7 @@ static void clear_auto_route(FMC_Data *data)
     rte_index = 1;
 }
 
-static void set_origin_position(FMC_Data *data, double latitude, double longitude, int has_position)
+static void set_origin_position_source(FMC_Data *data, double latitude, double longitude, int has_position, FMC_CoordinateSource source)
 {
     if (data == NULL)
     {
@@ -108,9 +255,19 @@ static void set_origin_position(FMC_Data *data, double latitude, double longitud
     data->origin_latitude = latitude;
     data->origin_longitude = longitude;
     data->origin_has_position = has_position;
+    data->origin_coordinate_source = has_position ? source : FMC_COORD_SOURCE_INVALID;
 }
 
-static int add_route_point_geo(FMC_Data *data, const char *ident, double latitude, double longitude, int has_position)
+static void set_origin_position(FMC_Data *data, double latitude, double longitude, int has_position)
+{
+    set_origin_position_source(data,
+                               latitude,
+                               longitude,
+                               has_position,
+                               has_position ? FMC_COORD_SOURCE_ROUTE : FMC_COORD_SOURCE_INVALID);
+}
+
+static int add_route_point_geo_source(FMC_Data *data, const char *ident, double latitude, double longitude, int has_position, FMC_CoordinateSource source)
 {
     if (data == NULL || ident == NULL || ident[0] == '\0' || data->route_count >= FMC_MAX_ROUTE_POINTS)
     {
@@ -122,8 +279,19 @@ static int add_route_point_geo(FMC_Data *data, const char *ident, double latitud
     data->route_latitudes[index] = latitude;
     data->route_longitudes[index] = longitude;
     data->route_has_position[index] = has_position;
+    data->route_coordinate_sources[index] = has_position ? source : FMC_COORD_SOURCE_INVALID;
     data->route_count++;
     return 1;
+}
+
+static int add_route_point_geo(FMC_Data *data, const char *ident, double latitude, double longitude, int has_position)
+{
+    return add_route_point_geo_source(data,
+                                      ident,
+                                      latitude,
+                                      longitude,
+                                      has_position,
+                                      has_position ? FMC_COORD_SOURCE_ROUTE : FMC_COORD_SOURCE_INVALID);
 }
 
 static int add_route_point(FMC_Data *data, const char *ident)
@@ -172,11 +340,12 @@ static int add_viato_route_point(FMC_Data *data, const char *ident)
     {
         if (wpt != NULL)
         {
-            add_route_point_geo(data, to, wpt->lat, wpt->lon, 1);
+            add_route_point_geo_source(data, to, wpt->lat, wpt->lon, 1, FMC_COORD_SOURCE_ROUTE);
         }
         else if (arp != NULL)
         {
-            add_route_point_geo(data, to, arp->datum_lat, arp->datum_lon, 1);
+            FMC_ResolvedCoordinate coord = fmc_resolve_airport_coordinate(to, 0, 0.0, 0.0, FMC_COORD_SOURCE_INVALID);
+            add_route_point_geo_source(data, to, coord.latitude, coord.longitude, coord.has_position, coord.source);
         }
         else
         {
@@ -231,12 +400,16 @@ static int load_fms_route_file(FMC_Data *data, const char *path)
             if (strcmp(ident, data->origin) == 0)
             {
                 seen_origin = 1;
-                set_origin_position(data, latitude, longitude, fmc_valid_position(latitude, longitude));
+                set_origin_position_source(data,
+                                           latitude,
+                                           longitude,
+                                           fmc_valid_position(latitude, longitude),
+                                           FMC_COORD_SOURCE_ROUTE);
             }
             continue;
         }
 
-        add_route_point_geo(data, ident, latitude, longitude, 1);
+        add_route_point_geo_source(data, ident, latitude, longitude, 1, FMC_COORD_SOURCE_ROUTE);
         if (via_to_list != NULL && via_to_list_count < MAX_VIATO_NUM)
         {
             set_text(via_to_list[via_to_list_count].VIA, sizeof(via_to_list[via_to_list_count].VIA), "DIRECT");
@@ -296,15 +469,8 @@ static void build_direct_route(FMC_Data *data)
     clear_auto_route(data);
     if (data != NULL && data->destination[0] != '\0')
     {
-        Airport *arp = fmc_query_airport_by_icao(data->destination);
-        if (arp != NULL)
-        {
-            add_route_point_geo(data, data->destination, arp->datum_lat, arp->datum_lon, 1);
-        }
-        else
-        {
-            add_route_point(data, data->destination);
-        }
+        FMC_ResolvedCoordinate coord = fmc_resolve_airport_coordinate(data->destination, 0, 0.0, 0.0, FMC_COORD_SOURCE_INVALID);
+        add_route_point_geo_source(data, data->destination, coord.latitude, coord.longitude, coord.has_position, coord.source);
         if (via_to_list == NULL)
         {
             initVIATO();
@@ -380,20 +546,22 @@ static int set_airport_field(FMC_Data *data, char *dest_field, int dest_size, co
 
     set_text(airport_code, sizeof(airport_code), data->scratchpad);
     airport = fmc_query_airport_by_icao(data->scratchpad);
-    if (airport == NULL)
+    FMC_ResolvedCoordinate coord = fmc_resolve_airport_coordinate(data->scratchpad, 0, 0.0, 0.0, FMC_COORD_SOURCE_INVALID);
+    if (airport == NULL && !coord.has_position)
     {
         fmc_data_clear_scratchpad(data);
         set_text(data->message, sizeof(data->message), "NOT IN DATABASE");
         return 0;
     }
 
-    set_text(dest_field, dest_size, airport->icao_code);
+    set_text(dest_field, dest_size, airport != NULL ? airport->icao_code : airport_code);
     if (dest_field == data->origin)
     {
-        set_origin_position(data,
-                            airport->datum_lat,
-                            airport->datum_lon,
-                            fmc_valid_position(airport->datum_lat, airport->datum_lon));
+        set_origin_position_source(data,
+                                   coord.latitude,
+                                   coord.longitude,
+                                   coord.has_position,
+                                   coord.source);
     }
     fmc_data_clear_scratchpad(data);
     sync_library_route_fields(data);
@@ -473,6 +641,7 @@ static int delete_last_route_point(FMC_Data *data)
     data->route_latitudes[data->route_count] = 0.0;
     data->route_longitudes[data->route_count] = 0.0;
     data->route_has_position[data->route_count] = 0;
+    data->route_coordinate_sources[data->route_count] = FMC_COORD_SOURCE_INVALID;
     if (via_to_list != NULL && via_to_list_count > 0)
     {
         --via_to_list_count;
@@ -1112,7 +1281,35 @@ static int fmc_valid_position(double latitude, double longitude)
            !(latitude == 0.0 && longitude == 0.0);
 }
 
-static void set_sim_route_point(SimRoutePoint *point, const char *ident, const char *type, double latitude, double longitude, int has_position)
+static FMC_CoordinateSource fmc_coordinate_source_from_name(const char *source)
+{
+    if (source == NULL || source[0] == '\0')
+    {
+        return FMC_COORD_SOURCE_INVALID;
+    }
+    if (strcmp(source, "ROUTE") == 0)
+    {
+        return FMC_COORD_SOURCE_ROUTE;
+    }
+    if (strcmp(source, "OVERRIDE") == 0)
+    {
+        return FMC_COORD_SOURCE_OVERRIDE;
+    }
+    if (strcmp(source, "APT_DAT") == 0)
+    {
+        return FMC_COORD_SOURCE_APT_DAT;
+    }
+    return FMC_COORD_SOURCE_INVALID;
+}
+
+static void set_sim_route_point(
+    SimRoutePoint *point,
+    const char *ident,
+    const char *type,
+    double latitude,
+    double longitude,
+    int has_position,
+    FMC_CoordinateSource source)
 {
     if (point == NULL)
     {
@@ -1122,6 +1319,7 @@ static void set_sim_route_point(SimRoutePoint *point, const char *ident, const c
     memset(point, 0, sizeof(*point));
     set_text(point->ident, sizeof(point->ident), ident);
     set_text(point->type, sizeof(point->type), type);
+    set_text(point->coordinate_source, sizeof(point->coordinate_source), fmc_coordinate_source_name(source));
     point->latitude = latitude;
     point->longitude = longitude;
     point->altitude = 0.0;
@@ -1141,10 +1339,16 @@ int fmc_data_apply_planned_route(FMC_Data *data, const SimPlannedRoute *route)
     if (route->point_count > 0)
     {
         const SimRoutePoint *origin_point = &route->points[0];
-        set_origin_position(data,
-                            origin_point->latitude,
-                            origin_point->longitude,
-                            origin_point->has_position);
+        FMC_CoordinateSource source = fmc_coordinate_source_from_name(origin_point->coordinate_source);
+        if (source == FMC_COORD_SOURCE_INVALID && origin_point->has_position)
+        {
+            source = FMC_COORD_SOURCE_ROUTE;
+        }
+        set_origin_position_source(data,
+                                   origin_point->latitude,
+                                   origin_point->longitude,
+                                   origin_point->has_position,
+                                   source);
     }
     set_text(data->fms_plan_path, sizeof(data->fms_plan_path), route->source_path);
     data->route_loaded_from_file = route->source == SIM_ROUTE_SOURCE_FMC_FMS_FILE;
@@ -1163,7 +1367,12 @@ int fmc_data_apply_planned_route(FMC_Data *data, const SimPlannedRoute *route)
     for (int i = 1; i < route->point_count && data->route_count < FMC_MAX_ROUTE_POINTS; ++i)
     {
         const SimRoutePoint *point = &route->points[i];
-        add_route_point_geo(data, point->ident, point->latitude, point->longitude, point->has_position);
+        FMC_CoordinateSource source = fmc_coordinate_source_from_name(point->coordinate_source);
+        if (source == FMC_COORD_SOURCE_INVALID && point->has_position)
+        {
+            source = FMC_COORD_SOURCE_ROUTE;
+        }
+        add_route_point_geo_source(data, point->ident, point->latitude, point->longitude, point->has_position, source);
         if (via_to_list != NULL && via_to_list_count < MAX_VIATO_NUM)
         {
             set_text(via_to_list[via_to_list_count].VIA, sizeof(via_to_list[via_to_list_count].VIA), "DIRECT");
@@ -1205,18 +1414,19 @@ int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route)
     int coordinate_count = 0;
     if (route->point_count < SIM_ROUTE_MAX_POINTS && data->origin[0] != '\0')
     {
-        Airport *origin_airport = fmc_query_airport_by_icao(data->origin);
-        const int has_draft_origin = data->origin_has_position &&
-                                     fmc_valid_position(data->origin_latitude, data->origin_longitude);
-        const int has_position = has_draft_origin ||
-                                 (origin_airport != NULL && fmc_valid_position(origin_airport->datum_lat, origin_airport->datum_lon));
+        const FMC_ResolvedCoordinate coord = fmc_resolve_airport_coordinate(data->origin,
+                                                                            data->origin_has_position,
+                                                                            data->origin_latitude,
+                                                                            data->origin_longitude,
+                                                                            data->origin_coordinate_source);
         set_sim_route_point(&route->points[route->point_count++],
                             data->origin,
                             "AIRPORT",
-                            has_draft_origin ? data->origin_latitude : (has_position ? origin_airport->datum_lat : 0.0),
-                            has_draft_origin ? data->origin_longitude : (has_position ? origin_airport->datum_lon : 0.0),
-                            has_position);
-        if (has_position)
+                            coord.has_position ? coord.latitude : 0.0,
+                            coord.has_position ? coord.longitude : 0.0,
+                            coord.has_position,
+                            coord.source);
+        if (coord.has_position)
         {
             coordinate_count++;
         }
@@ -1224,15 +1434,36 @@ int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route)
 
     for (int i = 0; i < data->route_count && route->point_count < SIM_ROUTE_MAX_POINTS; ++i)
     {
-        const int has_position = data->route_has_position[i] &&
+        const int is_destination_airport = strcmp(data->route_points[i], data->destination) == 0;
+        FMC_ResolvedCoordinate coord;
+        if (is_destination_airport)
+        {
+            coord = fmc_resolve_airport_coordinate(data->route_points[i],
+                                                   data->route_has_position[i],
+                                                   data->route_latitudes[i],
+                                                   data->route_longitudes[i],
+                                                   data->route_coordinate_sources[i]);
+        }
+        else
+        {
+            coord.latitude = data->route_latitudes[i];
+            coord.longitude = data->route_longitudes[i];
+            coord.has_position = data->route_has_position[i] &&
                                  fmc_valid_position(data->route_latitudes[i], data->route_longitudes[i]);
+            coord.source = coord.has_position ? data->route_coordinate_sources[i] : FMC_COORD_SOURCE_INVALID;
+            if (coord.source == FMC_COORD_SOURCE_INVALID && coord.has_position)
+            {
+                coord.source = FMC_COORD_SOURCE_ROUTE;
+            }
+        }
         set_sim_route_point(&route->points[route->point_count++],
                             data->route_points[i],
-                            strcmp(data->route_points[i], data->destination) == 0 ? "AIRPORT" : "FIX",
-                            has_position ? data->route_latitudes[i] : 0.0,
-                            has_position ? data->route_longitudes[i] : 0.0,
-                            has_position);
-        if (has_position)
+                            is_destination_airport ? "AIRPORT" : "FIX",
+                            coord.has_position ? coord.latitude : 0.0,
+                            coord.has_position ? coord.longitude : 0.0,
+                            coord.has_position,
+                            coord.source);
+        if (coord.has_position)
         {
             coordinate_count++;
         }

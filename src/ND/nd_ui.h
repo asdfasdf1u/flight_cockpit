@@ -21,6 +21,8 @@ typedef struct ND_UIRenderStats
     int filtered_bounds;
     int filtered_symbol_overlap;
     int labels_hidden_conflict;
+    int route_points_drawn;
+    int route_segments_drawn;
 } ND_UIRenderStats;
 
 void nd_ui_render(SDL_Renderer *renderer, TTF_Font *font, const ND_Data *data);

@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 #define ND_DEG_TO_RAD 0.01745329251994329577f
 #define ND_MAX_RENDER_TARGETS 192
@@ -11,6 +12,11 @@
 #define ND_LABEL_SCALE 0.62f
 #define ND_SYMBOL_MARGIN 9
 #define ND_SYMBOL_DEDUP_PIXELS 14
+#define ND_ROUTE_CLIP_STEPS 384
+#define ND_ROUTE_EDGE_REFINE_STEPS 10
+#define ND_ROUTE_ARC_INSET_PIXELS 30.0f
+#define ND_ROUTE_NOSE_GAP_PIXELS 6.0f
+#define ND_ROUTE_MIN_CONTEXT_PIXELS 32.0f
 
 typedef struct ND_Layout
 {
@@ -32,6 +38,15 @@ typedef struct ND_RenderTarget
     int priority;
     float distance_nm;
 } ND_RenderTarget;
+
+typedef struct ND_RouteScreenPoint
+{
+    float x;
+    float y;
+    float distance_nm;
+    float relative_bearing_deg;
+    int valid;
+} ND_RouteScreenPoint;
 
 static const SDL_Color COLOR_BLACK = {0, 0, 0, 255};
 static const SDL_Color COLOR_WHITE = {236, 238, 232, 255};
@@ -219,7 +234,14 @@ static void draw_nd_background(SDL_Renderer *renderer, const ND_Layout *layout)
 static void draw_active_waypoint_info(SDL_Renderer *renderer, TTF_Font *font, const ND_Layout *layout, const ND_Data *data)
 {
     char distance_text[32];
-    snprintf(distance_text, sizeof(distance_text), "%04.1fNM", data->active_waypoint_distance_nm);
+    if (data->active_waypoint_name[0] == '\0' || strcmp(data->active_waypoint_name, "----") == 0)
+    {
+        snprintf(distance_text, sizeof(distance_text), "----NM");
+    }
+    else
+    {
+        snprintf(distance_text, sizeof(distance_text), "%04.1fNM", data->active_waypoint_distance_nm);
+    }
 
     const SDL_Rect name_rect = {layout->width - 180, 16, 150, 24};
     const SDL_Rect min_rect = {layout->width - 180, 42, 150, 22};
@@ -327,6 +349,37 @@ static float nd_map_range_nm(const ND_Data *data)
     return range_nm;
 }
 
+static float nd_map_projection_radius(const ND_Layout *layout)
+{
+    return layout != NULL ? (float)layout->arc_radius * 0.92f : 1.0f;
+}
+
+static float nd_route_arc_clip_radius(const ND_Layout *layout)
+{
+    if (layout == NULL)
+    {
+        return 1.0f;
+    }
+
+    float radius = (float)layout->arc_radius - ND_ROUTE_ARC_INSET_PIXELS;
+    if (radius < 1.0f)
+    {
+        radius = 1.0f;
+    }
+    return radius;
+}
+
+static void nd_aircraft_nose_point(const ND_Layout *layout, float *x, float *y)
+{
+    if (layout == NULL || x == NULL || y == NULL)
+    {
+        return;
+    }
+
+    *x = (float)layout->center_x;
+    *y = (float)(layout->aircraft_y - 34);
+}
+
 static SDL_Rect nd_map_clip_rect(const ND_Layout *layout)
 {
     const int margin = 10;
@@ -345,6 +398,122 @@ static int rect_contains_point_margin(const SDL_Rect *rect, int x, int y, int ma
            x < rect->x + rect->w - margin &&
            y >= rect->y + margin &&
            y < rect->y + rect->h - margin;
+}
+
+static int rect_contains_pointf(const SDL_Rect *rect, float x, float y)
+{
+    return rect != NULL &&
+           x >= (float)rect->x &&
+           x < (float)(rect->x + rect->w) &&
+           y >= (float)rect->y &&
+           y < (float)(rect->y + rect->h);
+}
+
+static SDL_Rect nd_route_safe_rect(const ND_Layout *layout)
+{
+    const SDL_Rect map_clip = nd_map_clip_rect(layout);
+    const int inset = 18;
+    const int bottom_reserved = 72;
+    SDL_Rect safe = {
+        map_clip.x + inset,
+        map_clip.y + inset,
+        map_clip.w - inset * 2,
+        map_clip.h - inset * 2 - bottom_reserved};
+
+    if (safe.w < 1)
+    {
+        safe.w = 1;
+    }
+    if (safe.h < 1)
+    {
+        safe.h = 1;
+    }
+
+    return safe;
+}
+
+static int nd_route_over_fixed_info(const ND_Layout *layout, float x, float y)
+{
+    const SDL_Rect status_rect = {0, layout->height - 236, 128, 102};
+    return rect_contains_pointf(&status_rect, x, y);
+}
+
+static int nd_route_screen_point_in_display_area(const ND_Layout *layout, float x, float y)
+{
+    if (layout == NULL)
+    {
+        return 0;
+    }
+
+    const SDL_Rect safe_rect = nd_route_safe_rect(layout);
+    if (!rect_contains_pointf(&safe_rect, x, y))
+    {
+        return 0;
+    }
+
+    if (nd_route_over_fixed_info(layout, x, y))
+    {
+        return 0;
+    }
+
+    const float aircraft_dx = x - (float)layout->center_x;
+    const float aircraft_dy = (float)layout->aircraft_y - y;
+    const float map_radius = nd_map_projection_radius(layout);
+    if (aircraft_dy < 0.0f || aircraft_dx * aircraft_dx + aircraft_dy * aircraft_dy > map_radius * map_radius)
+    {
+        return 0;
+    }
+
+    const float arc_dx = x - (float)layout->center_x;
+    const float arc_dy = y - (float)layout->arc_center_y;
+    const float arc_radius = nd_route_arc_clip_radius(layout);
+    if (arc_dx * arc_dx + arc_dy * arc_dy > arc_radius * arc_radius)
+    {
+        return 0;
+    }
+
+    const float relative = atan2f(aircraft_dx, aircraft_dy) / ND_DEG_TO_RAD;
+    return relative >= -ND_MAP_FORWARD_SECTOR_DEG && relative <= ND_MAP_FORWARD_SECTOR_DEG;
+}
+
+static int nd_project_latlon_to_route_screen(
+    const ND_Layout *layout,
+    const ND_Data *data,
+    double latitude,
+    double longitude,
+    ND_RouteScreenPoint *out)
+{
+    if (layout == NULL || data == NULL || out == NULL ||
+        !isfinite(latitude) || !isfinite(longitude))
+    {
+        return 0;
+    }
+
+    const float range_nm = nd_map_range_nm(data);
+    if (range_nm <= 0.1f)
+    {
+        return 0;
+    }
+
+    const float aircraft_lat_rad = (float)data->latitude * ND_DEG_TO_RAD;
+    const float lon_scale = cosf(aircraft_lat_rad);
+    const double delta_lat = latitude - data->latitude;
+    const double delta_lon = longitude - data->longitude;
+    const float north_nm = (float)(delta_lat * 60.0);
+    const float east_nm = (float)(delta_lon * 60.0 * (double)lon_scale);
+    const float distance_nm = sqrtf(north_nm * north_nm + east_nm * east_nm);
+    const float bearing = atan2f(east_nm, north_nm) / ND_DEG_TO_RAD;
+    const float relative_bearing = normalize_signed_degrees(bearing - data->track);
+    const float relative_rad = relative_bearing * ND_DEG_TO_RAD;
+    const float distance_ratio = distance_nm / range_nm;
+    const float map_radius = nd_map_projection_radius(layout);
+
+    out->x = (float)layout->center_x + sinf(relative_rad) * distance_ratio * map_radius;
+    out->y = (float)layout->aircraft_y - cosf(relative_rad) * distance_ratio * map_radius;
+    out->distance_nm = distance_nm;
+    out->relative_bearing_deg = relative_bearing;
+    out->valid = 1;
+    return 1;
 }
 
 static int nd_project_point_to_screen(
@@ -368,7 +537,7 @@ static int nd_project_point_to_screen(
     const float relative_bearing = normalize_signed_degrees(point->bearing_deg - data->track);
     const float relative_rad = relative_bearing * ND_DEG_TO_RAD;
     const float distance_ratio = point->distance_nm / range_nm;
-    const float map_radius = (float)layout->arc_radius * 0.92f;
+    const float map_radius = nd_map_projection_radius(layout);
 
     *x = layout->center_x + (int)(sinf(relative_rad) * distance_ratio * map_radius);
     *y = layout->aircraft_y - (int)(cosf(relative_rad) * distance_ratio * map_radius);
@@ -417,7 +586,7 @@ static int nd_project_latlon_to_screen(
 
     const float relative_rad = relative_bearing * ND_DEG_TO_RAD;
     const float distance_ratio = distance_nm / range_nm;
-    const float map_radius = (float)layout->arc_radius * 0.92f;
+    const float map_radius = nd_map_projection_radius(layout);
 
     *x = layout->center_x + (int)(sinf(relative_rad) * distance_ratio * map_radius);
     *y = layout->aircraft_y - (int)(cosf(relative_rad) * distance_ratio * map_radius);
@@ -795,50 +964,253 @@ static void draw_nav_points(SDL_Renderer *renderer, TTF_Font *font, const ND_Lay
     }
 }
 
-static void draw_route_layer(SDL_Renderer *renderer, const ND_Layout *layout, const ND_Data *data)
+static void draw_route_line_segment(SDL_Renderer *renderer, float x1, float y1, float x2, float y2)
+{
+    SDL_RenderDrawLine(renderer, (int)(x1 + 0.5f), (int)(y1 + 0.5f), (int)(x2 + 0.5f), (int)(y2 + 0.5f));
+    SDL_RenderDrawLine(renderer, (int)(x1 + 1.5f), (int)(y1 + 0.5f), (int)(x2 + 1.5f), (int)(y2 + 0.5f));
+}
+
+static float route_line_length(float x1, float y1, float x2, float y2)
+{
+    const float dx = x2 - x1;
+    const float dy = y2 - y1;
+    return sqrtf(dx * dx + dy * dy);
+}
+
+static int route_line_point_inside(const ND_Layout *layout, const ND_RouteScreenPoint *a, const ND_RouteScreenPoint *b, float t)
+{
+    const float x = a->x + (b->x - a->x) * t;
+    const float y = a->y + (b->y - a->y) * t;
+    return nd_route_screen_point_in_display_area(layout, x, y);
+}
+
+static float refine_route_clip_edge(const ND_Layout *layout, const ND_RouteScreenPoint *a, const ND_RouteScreenPoint *b, float low, float high, int low_inside)
+{
+    for (int i = 0; i < ND_ROUTE_EDGE_REFINE_STEPS; ++i)
+    {
+        const float mid = (low + high) * 0.5f;
+        const int mid_inside = route_line_point_inside(layout, a, b, mid);
+        if (mid_inside == low_inside)
+        {
+            low = mid;
+        }
+        else
+        {
+            high = mid;
+        }
+    }
+
+    return (low + high) * 0.5f;
+}
+
+static int draw_clipped_route_segment(
+    SDL_Renderer *renderer,
+    const ND_Layout *layout,
+    const ND_RouteScreenPoint *a,
+    const ND_RouteScreenPoint *b,
+    int is_active_segment,
+    int has_visible_endpoint)
+{
+    if (renderer == NULL || layout == NULL || a == NULL || b == NULL || !a->valid || !b->valid)
+    {
+        return 0;
+    }
+
+    int drawn = 0;
+    int previous_inside = route_line_point_inside(layout, a, b, 0.0f);
+    float previous_t = 0.0f;
+    float visible_start_t = previous_inside ? 0.0f : -1.0f;
+
+    for (int step = 1; step <= ND_ROUTE_CLIP_STEPS; ++step)
+    {
+        const float t = (float)step / (float)ND_ROUTE_CLIP_STEPS;
+        const int inside = route_line_point_inside(layout, a, b, t);
+
+        if (inside != previous_inside)
+        {
+            const float edge_t = refine_route_clip_edge(layout, a, b, previous_t, t, previous_inside);
+            if (inside)
+            {
+                visible_start_t = edge_t;
+            }
+            else if (visible_start_t >= 0.0f)
+            {
+                const float x1 = a->x + (b->x - a->x) * visible_start_t;
+                const float y1 = a->y + (b->y - a->y) * visible_start_t;
+                const float x2 = a->x + (b->x - a->x) * edge_t;
+                const float y2 = a->y + (b->y - a->y) * edge_t;
+                if (is_active_segment || has_visible_endpoint ||
+                    route_line_length(x1, y1, x2, y2) >= ND_ROUTE_MIN_CONTEXT_PIXELS)
+                {
+                    draw_route_line_segment(renderer, x1, y1, x2, y2);
+                    ++drawn;
+                }
+                visible_start_t = -1.0f;
+            }
+        }
+
+        previous_inside = inside;
+        previous_t = t;
+    }
+
+    if (previous_inside && visible_start_t >= 0.0f)
+    {
+        const float x1 = a->x + (b->x - a->x) * visible_start_t;
+        const float y1 = a->y + (b->y - a->y) * visible_start_t;
+        if (is_active_segment || has_visible_endpoint ||
+            route_line_length(x1, y1, b->x, b->y) >= ND_ROUTE_MIN_CONTEXT_PIXELS)
+        {
+            draw_route_line_segment(renderer, x1, y1, b->x, b->y);
+            ++drawn;
+        }
+    }
+
+    return drawn;
+}
+
+static int route_active_index_valid(const ND_Data *data)
+{
+    return data != NULL &&
+           data->route_active_index >= 0 &&
+           data->route_active_index < data->route_point_count;
+}
+
+static int route_point_in_forward_sector(const ND_RouteScreenPoint *point)
+{
+    return point != NULL &&
+           point->valid &&
+           point->relative_bearing_deg >= -ND_MAP_FORWARD_SECTOR_DEG &&
+           point->relative_bearing_deg <= ND_MAP_FORWARD_SECTOR_DEG;
+}
+
+static int build_active_segment_start(const ND_Layout *layout, const ND_RouteScreenPoint *target, ND_RouteScreenPoint *start)
+{
+    if (layout == NULL || target == NULL || start == NULL || !target->valid)
+    {
+        return 0;
+    }
+
+    float nose_x = 0.0f;
+    float nose_y = 0.0f;
+    nd_aircraft_nose_point(layout, &nose_x, &nose_y);
+
+    const float dx = target->x - nose_x;
+    const float dy = target->y - nose_y;
+    const float length = sqrtf(dx * dx + dy * dy);
+    if (length < 1.0f)
+    {
+        return 0;
+    }
+
+    memset(start, 0, sizeof(*start));
+    start->x = nose_x + dx / length * ND_ROUTE_NOSE_GAP_PIXELS;
+    start->y = nose_y + dy / length * ND_ROUTE_NOSE_GAP_PIXELS;
+    start->distance_nm = 0.0f;
+    start->relative_bearing_deg = 0.0f;
+    start->valid = 1;
+    return 1;
+}
+
+static int route_point_visible(const ND_RouteScreenPoint *point, float range_nm)
+{
+    return point != NULL &&
+           point->valid &&
+           point->distance_nm <= range_nm &&
+           point->relative_bearing_deg >= -ND_MAP_FORWARD_SECTOR_DEG &&
+           point->relative_bearing_deg <= ND_MAP_FORWARD_SECTOR_DEG;
+}
+
+static void draw_route_layer(SDL_Renderer *renderer, TTF_Font *font, const ND_Layout *layout, const ND_Data *data)
 {
     if (renderer == NULL || layout == NULL || data == NULL || !data->route_valid)
     {
         return;
     }
 
-    int screen_x[ND_MAX_ROUTE_POINTS];
-    int screen_y[ND_MAX_ROUTE_POINTS];
+    ND_RouteScreenPoint screen_points[ND_MAX_ROUTE_POINTS];
     int visible[ND_MAX_ROUTE_POINTS];
-    memset(screen_x, 0, sizeof(screen_x));
-    memset(screen_y, 0, sizeof(screen_y));
+    memset(screen_points, 0, sizeof(screen_points));
     memset(visible, 0, sizeof(visible));
 
     const int count = data->route_point_count < ND_MAX_ROUTE_POINTS ? data->route_point_count : ND_MAX_ROUTE_POINTS;
+    const float range_nm = nd_map_range_nm(data);
     for (int i = 0; i < count; ++i)
     {
         const ND_RoutePoint *point = &data->route_points[i];
         if (point->has_position)
         {
-            visible[i] = nd_project_latlon_to_screen(layout,
-                                                     data,
-                                                     point->latitude,
-                                                     point->longitude,
-                                                     &screen_x[i],
-                                                     &screen_y[i]);
+            if (nd_project_latlon_to_route_screen(layout, data, point->latitude, point->longitude, &screen_points[i]))
+            {
+                visible[i] = route_point_visible(&screen_points[i], range_nm) &&
+                             nd_route_screen_point_in_display_area(layout, screen_points[i].x, screen_points[i].y);
+            }
         }
     }
 
-    set_color(renderer, COLOR_MAGENTA);
-    for (int i = 1; i < count; ++i)
+    const int has_active_index = route_active_index_valid(data);
+    const int active_index = has_active_index ? data->route_active_index : -1;
+    const int future_start = has_active_index ? active_index + 1 : 1;
+
+    set_color(renderer, COLOR_WHITE);
+    for (int i = future_start; i < count; ++i)
     {
-        if (visible[i - 1] && visible[i])
+        if (data->route_points[i - 1].has_position && data->route_points[i].has_position)
         {
-            SDL_RenderDrawLine(renderer, screen_x[i - 1], screen_y[i - 1], screen_x[i], screen_y[i]);
-            SDL_RenderDrawLine(renderer, screen_x[i - 1] + 1, screen_y[i - 1], screen_x[i] + 1, screen_y[i]);
+            const int has_visible_endpoint = visible[i - 1] || visible[i];
+            g_last_render_stats.route_segments_drawn += draw_clipped_route_segment(
+                renderer,
+                layout,
+                &screen_points[i - 1],
+                &screen_points[i],
+                0,
+                has_visible_endpoint);
+        }
+    }
+
+    if (has_active_index &&
+        data->route_points[active_index].has_position &&
+        screen_points[active_index].valid &&
+        route_point_in_forward_sector(&screen_points[active_index]))
+    {
+        ND_RouteScreenPoint active_start;
+        if (build_active_segment_start(layout, &screen_points[active_index], &active_start))
+        {
+            g_last_render_stats.route_segments_drawn += draw_clipped_route_segment(
+                renderer,
+                layout,
+                &active_start,
+                &screen_points[active_index],
+                1,
+                visible[active_index]);
         }
     }
 
     for (int i = 0; i < count; ++i)
     {
-        if (visible[i])
+        if (visible[i] && (!has_active_index || i >= active_index))
         {
-            draw_hollow_circle(renderer, screen_x[i], screen_y[i], 5, COLOR_MAGENTA);
+            const int x = (int)(screen_points[i].x + 0.5f);
+            const int y = (int)(screen_points[i].y + 0.5f);
+            draw_hollow_circle(renderer, x, y, 5, COLOR_WHITE);
+            ++g_last_render_stats.route_points_drawn;
+
+            if (font != NULL && data->route_points[i].ident[0] != '\0')
+            {
+                int text_w = 0;
+                int text_h = 0;
+                if (TTF_SizeUTF8(font, data->route_points[i].ident, &text_w, &text_h) == 0)
+                {
+                    text_w = (int)((float)text_w * ND_LABEL_SCALE);
+                    text_h = (int)((float)text_h * ND_LABEL_SCALE);
+                    draw_text_scaled(renderer,
+                                     font,
+                                     COLOR_WHITE,
+                                     x - text_w / 2,
+                                     y + 12,
+                                     ND_LABEL_SCALE,
+                                     data->route_points[i].ident);
+                }
+            }
         }
     }
 }
@@ -922,7 +1294,7 @@ void nd_ui_render(SDL_Renderer *renderer, TTF_Font *font, const ND_Data *data)
     draw_heading_arc(renderer, font, &layout, data);
     draw_track_line(renderer, &layout);
     draw_nav_points(renderer, font, &layout, data);
-    draw_route_layer(renderer, &layout, data);
+    draw_route_layer(renderer, font, &layout, data);
     draw_aircraft_symbol(renderer, &layout);
     draw_top_status(renderer, font, &layout, data);
     draw_active_waypoint_info(renderer, font, &layout, data);
