@@ -1021,9 +1021,20 @@ static int draw_clipped_route_segment(
     float previous_t = 0.0f;
     float visible_start_t = previous_inside ? 0.0f : -1.0f;
 
-    for (int step = 1; step <= ND_ROUTE_CLIP_STEPS; ++step)
+    const float line_length = route_line_length(a->x, a->y, b->x, b->y);
+    int clip_steps = (int)ceilf(line_length / 8.0f);
+    if (clip_steps < ND_ROUTE_CLIP_STEPS)
     {
-        const float t = (float)step / (float)ND_ROUTE_CLIP_STEPS;
+        clip_steps = ND_ROUTE_CLIP_STEPS;
+    }
+    if (clip_steps > 4096)
+    {
+        clip_steps = 4096;
+    }
+
+    for (int step = 1; step <= clip_steps; ++step)
+    {
+        const float t = (float)step / (float)clip_steps;
         const int inside = route_line_point_inside(layout, a, b, t);
 
         if (inside != previous_inside)
@@ -1129,8 +1140,10 @@ static void draw_route_layer(SDL_Renderer *renderer, TTF_Font *font, const ND_La
 
     ND_RouteScreenPoint screen_points[ND_MAX_ROUTE_POINTS];
     int visible[ND_MAX_ROUTE_POINTS];
+    int continuous_route_point[ND_MAX_ROUTE_POINTS];
     memset(screen_points, 0, sizeof(screen_points));
     memset(visible, 0, sizeof(visible));
+    memset(continuous_route_point, 0, sizeof(continuous_route_point));
 
     const int count = data->route_point_count < ND_MAX_ROUTE_POINTS ? data->route_point_count : ND_MAX_ROUTE_POINTS;
     const float range_nm = nd_map_range_nm(data);
@@ -1149,45 +1162,66 @@ static void draw_route_layer(SDL_Renderer *renderer, TTF_Font *font, const ND_La
 
     const int has_active_index = route_active_index_valid(data);
     const int active_index = has_active_index ? data->route_active_index : -1;
-    const int future_start = has_active_index ? active_index + 1 : 1;
 
     set_color(renderer, COLOR_WHITE);
-    for (int i = future_start; i < count; ++i)
+    if (!has_active_index ||
+        !data->route_points[active_index].has_position ||
+        !screen_points[active_index].valid ||
+        !route_point_in_forward_sector(&screen_points[active_index]))
     {
-        if (data->route_points[i - 1].has_position && data->route_points[i].has_position)
+        return;
+    }
+
+    ND_RouteScreenPoint active_start;
+    const int active_segment_drawn = build_active_segment_start(layout, &screen_points[active_index], &active_start)
+                                         ? draw_clipped_route_segment(
+                                               renderer,
+                                               layout,
+                                               &active_start,
+                                               &screen_points[active_index],
+                                               1,
+                                               visible[active_index])
+                                         : 0;
+    g_last_render_stats.route_segments_drawn += active_segment_drawn;
+
+    /* A future segment is meaningful only while it extends the visible active chain. */
+    if (active_segment_drawn > 0 && visible[active_index])
+    {
+        continuous_route_point[active_index] = 1;
+        for (int i = active_index + 1; i < count; ++i)
         {
-            const int has_visible_endpoint = visible[i - 1] || visible[i];
-            g_last_render_stats.route_segments_drawn += draw_clipped_route_segment(
+            if (!data->route_points[i - 1].has_position ||
+                !data->route_points[i].has_position ||
+                !continuous_route_point[i - 1])
+            {
+                break;
+            }
+
+            const int segment_drawn = draw_clipped_route_segment(
                 renderer,
                 layout,
                 &screen_points[i - 1],
                 &screen_points[i],
                 0,
-                has_visible_endpoint);
-        }
-    }
+                1);
+            g_last_render_stats.route_segments_drawn += segment_drawn;
+            if (segment_drawn <= 0)
+            {
+                break;
+            }
 
-    if (has_active_index &&
-        data->route_points[active_index].has_position &&
-        screen_points[active_index].valid &&
-        route_point_in_forward_sector(&screen_points[active_index]))
-    {
-        ND_RouteScreenPoint active_start;
-        if (build_active_segment_start(layout, &screen_points[active_index], &active_start))
-        {
-            g_last_render_stats.route_segments_drawn += draw_clipped_route_segment(
-                renderer,
-                layout,
-                &active_start,
-                &screen_points[active_index],
-                1,
-                visible[active_index]);
+            if (!visible[i])
+            {
+                /* The chain has left the display; do not draw a later re-entry in isolation. */
+                break;
+            }
+            continuous_route_point[i] = 1;
         }
     }
 
     for (int i = 0; i < count; ++i)
     {
-        if (visible[i] && (!has_active_index || i >= active_index))
+        if (visible[i] && continuous_route_point[i])
         {
             const int x = (int)(screen_points[i].x + 0.5f);
             const int y = (int)(screen_points[i].y + 0.5f);
@@ -1253,9 +1287,6 @@ static void draw_aircraft_symbol(SDL_Renderer *renderer, const ND_Layout *layout
     SDL_RenderDrawLine(renderer, cx, center_y, cx - base_half_width, base_y);
     SDL_RenderDrawLine(renderer, cx, center_y, cx + base_half_width, base_y);
     SDL_RenderDrawLine(renderer, cx - base_half_width, base_y, cx + base_half_width, base_y);
-    SDL_RenderDrawLine(renderer, cx, center_y + 28, cx - 18, base_y - 6);
-    SDL_RenderDrawLine(renderer, cx - 18, base_y - 6, cx + 18, base_y - 6);
-    SDL_RenderDrawLine(renderer, cx + 18, base_y - 6, cx, center_y + 28);
 
     draw_circle_dot(renderer, cx, center_y, circle_radius, 0.0f, 5);
     draw_circle_dot(renderer, cx, center_y, circle_radius, 90.0f, 5);

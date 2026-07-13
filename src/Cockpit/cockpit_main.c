@@ -678,6 +678,64 @@ static int cockpit_view_shows_nd(Cockpit_ViewMode view_mode)
     return view_mode == COCKPIT_VIEW_MAIN || view_mode == COCKPIT_VIEW_ND_ZOOM;
 }
 
+static void log_fmc_draft_route(const FMC_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    const int draft_point_count = (data->origin[0] != '\0' ? 1 : 0) + data->route_count;
+    printf("FMC Route Diagnostic: draft point_count=%d origin=%s destination=%s pending_mod=%d.\n",
+           draft_point_count,
+           data->origin[0] != '\0' ? data->origin : "----",
+           data->destination[0] != '\0' ? data->destination : "----",
+           fmc_data_route_has_uncommitted_changes(data));
+    if (data->origin[0] != '\0')
+    {
+        printf("FMC Route Diagnostic: draft[0]=%s has_position=%d lat=%.6f lon=%.6f.\n",
+               data->origin,
+               data->origin_has_position,
+               data->origin_latitude,
+               data->origin_longitude);
+    }
+    for (int i = 0; i < data->route_count; ++i)
+    {
+        printf("FMC Route Diagnostic: draft[%d]=%s has_position=%d lat=%.6f lon=%.6f.\n",
+               i + 1,
+               data->route_points[i],
+               data->route_has_position[i],
+               data->route_latitudes[i],
+               data->route_longitudes[i]);
+    }
+}
+
+static void log_planned_route(const SimPlannedRoute *route, const char *stage)
+{
+    if (route == NULL)
+    {
+        printf("FMC Route Diagnostic: %s planned_route unavailable.\n", stage != NULL ? stage : "route");
+        return;
+    }
+
+    printf("FMC Route Diagnostic: %s planned_route point_count=%d active_waypoint_index=%d.\n",
+           stage != NULL ? stage : "route",
+           route->point_count,
+           route->active_waypoint_index);
+    for (int i = 0; i < route->point_count; ++i)
+    {
+        const SimRoutePoint *point = &route->points[i];
+        printf("FMC Route Diagnostic: %s planned[%d]=%s type=%s has_position=%d lat=%.6f lon=%.6f.\n",
+               stage != NULL ? stage : "route",
+               i,
+               point->ident,
+               point->type,
+               point->has_position,
+               point->latitude,
+               point->longitude);
+    }
+}
+
 static int sync_nd_route_from_sim_center(ND_Data *data, const SimDataCenter *sim_data_center, int force_check, const char *reason)
 {
     if (data == NULL || sim_data_center == NULL)
@@ -693,6 +751,7 @@ static int sync_nd_route_from_sim_center(ND_Data *data, const SimDataCenter *sim
                revision,
                data->route_cached_revision,
                reason != NULL ? reason : "activate");
+        log_planned_route(route, "ND activation");
     }
 
     return nd_data_sync_planned_route(data, route, revision, force_check);
@@ -729,6 +788,7 @@ static int submit_fmc_route_to_sim_center(FMC_Data *data, SimDataCenter *sim_dat
     }
 
     const int before_revision = sim_data_center_route_revision(sim_data_center);
+    log_fmc_draft_route(data);
     printf("FMC Route: EXEC submit requested; draft_points=%d pending_mod=%d clear_pending=%d revision_before=%d.\n",
            data->route_count,
            fmc_data_route_has_uncommitted_changes(data),
@@ -773,6 +833,7 @@ static int submit_fmc_route_to_sim_center(FMC_Data *data, SimDataCenter *sim_dat
            route.point_count,
            sim_data_center_route_revision(sim_data_center),
            fmc_data_route_has_uncommitted_changes(data));
+    log_planned_route(sim_data_center_route(sim_data_center), "EXEC committed");
     return 1;
 }
 
