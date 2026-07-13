@@ -3,8 +3,19 @@
 
 #define CABIN_TEXT_LEN 64
 #define CABIN_ERROR_LEN 160
-#define CABIN_PLANNED_ROUTE_MAX_POINTS 12
+#define CABIN_PLANNED_ROUTE_MAX_POINTS 64
 #define CABIN_FLOWN_TRACK_MAX_POINTS 160
+
+#include "../Data/alert_manager.h"
+
+struct SimDataCenter;
+
+enum
+{
+    CABIN_DATA_UPDATE_NONE = 0,
+    CABIN_DATA_UPDATE_ROUTE = 1 << 0,
+    CABIN_DATA_UPDATE_VALIDITY = 1 << 1
+};
 
 typedef struct Cabin_Trajectory_Point
 {
@@ -45,10 +56,27 @@ typedef struct Cabin_Data
     double longitude;
     float altitude;
     float ground_speed;
+    float true_air_speed;
+    float vertical_speed;
     float heading;
     float track;
     int has_heading;
     int using_sim_data;
+    int snapshot_valid;
+    char data_source[CABIN_TEXT_LEN];
+    int snapshot_frame;
+    float snapshot_time;
+    int engine_left_running;
+    int engine_right_running;
+    AlertSnapshot alerts;
+    char flight_phase[CABIN_TEXT_LEN];
+    int route_valid;
+    int route_revision;
+    int route_point_count;
+    int active_waypoint_index;
+    char active_waypoint[CABIN_TEXT_LEN];
+    float distance_to_active_nm;
+    float distance_to_destination_nm;
     int planned_route_from_fmc;
     char planned_route_source[CABIN_TEXT_LEN];
     float progress;
@@ -84,6 +112,6 @@ typedef struct Cabin_Data
 } Cabin_Data;
 
 void cabin_data_init(Cabin_Data *data);
-void cabin_data_update_mock(Cabin_Data *data, float delta_time);
+int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCenter *center, float delta_time);
 
 #endif

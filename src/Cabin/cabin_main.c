@@ -5,11 +5,13 @@
 #include <SDL2/SDL_ttf.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cabin_api.h"
 #include "cabin_data.h"
 #include "cabin_ui.h"
+#include "../Data/sim_data_center.h"
 
 #define CABIN_WINDOW_WIDTH 1600
 #define CABIN_WINDOW_HEIGHT 900
@@ -30,6 +32,7 @@
 #define CABIN_SUB_PATH "assets/sub.png"
 #define CABIN_FONT_PATH "assets/ALIBABAPUHUITI-2-45-LIGHT.TTF"
 
+#if 0 /* Audio effects are outside the current Cabin data integration scope. */
 typedef struct Cabin_Crash_Audio
 {
     SDL_AudioDeviceID device;
@@ -156,6 +159,8 @@ static void cabin_crash_audio_destroy(Cabin_Crash_Audio *audio)
     }
     memset(audio, 0, sizeof(*audio));
 }
+
+#endif
 
 static void resolve_weather_city(const Cabin_Data *data, char *city, size_t city_size, char *adcode, size_t adcode_size)
 {
@@ -369,7 +374,7 @@ static void destroy_assets(Cabin_Assets *assets)
     }
 }
 
-int cabin_main_run(void)
+static int cabin_main_run_internal(const SimDataCenter *sim_data_center, SimDataCenter *updatable_data_center)
 {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
     {
@@ -436,9 +441,8 @@ int cabin_main_run(void)
 
     Cabin_Data data;
     cabin_data_init(&data);
-    Cabin_Crash_Audio crash_audio;
-    cabin_crash_audio_init(&crash_audio);
-    printf("Cabin Route: using Beijing-Chengdu mock route; FMC route integration disabled for now.\n");
+    cabin_data_apply_sim_data_center(&data, sim_data_center, 0.0f);
+    printf("Cabin: using the read-only SimDataCenter view for flight state and planned route.\n");
     fflush(stdout);
 
     Cabin_Assets assets;
@@ -507,27 +511,6 @@ int cabin_main_run(void)
             {
                 running = 0;
             }
-            else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_y)
-            {
-                if (!data.crash_demo_active)
-                {
-                    data.crash_demo_active = 1;
-                    data.crash_demo_started_ticks = SDL_GetTicks();
-                    printf("Cabin CRASH DEMO: triggered by Y.\n");
-                    fflush(stdout);
-                }
-            }
-            else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_r)
-            {
-                if (data.crash_demo_active)
-                {
-                    data.crash_demo_active = 0;
-                    data.crash_demo_started_ticks = 0;
-                    cabin_crash_audio_update(&crash_audio, 0);
-                    printf("Cabin CRASH DEMO: reset by R.\n");
-                    fflush(stdout);
-                }
-            }
             else
             {
                 cabin_ui_handle_event(window, &event);
@@ -537,14 +520,25 @@ int cabin_main_run(void)
         const Uint32 now = SDL_GetTicks();
         float delta_time = (float)(now - last_ticks) / 1000.0f;
         last_ticks = now;
-        cabin_data_update_mock(&data, delta_time);
+        if (updatable_data_center != NULL)
+        {
+            sim_data_center_update(updatable_data_center, delta_time);
+        }
+        const int data_changes = cabin_data_apply_sim_data_center(&data, sim_data_center, delta_time);
+        if ((data_changes & CABIN_DATA_UPDATE_ROUTE) != 0)
+        {
+            if (assets.map_texture != NULL)
+            {
+                SDL_DestroyTexture(assets.map_texture);
+                assets.map_texture = NULL;
+            }
+            assets.map_texture = load_cabin_map_texture(renderer, &data);
+        }
         update_weather_if_city_changed(&data,
                                        last_weather_city,
                                        sizeof(last_weather_city),
                                        last_weather_adcode,
                                        sizeof(last_weather_adcode));
-        cabin_crash_audio_update(&crash_audio, data.crash_demo_active);
-
         SDL_SetRenderDrawColor(renderer, 45, 72, 96, 255);
         SDL_RenderClear(renderer);
         cabin_ui_render(renderer, &assets, &data);
@@ -557,7 +551,6 @@ int cabin_main_run(void)
         }
     }
 
-    cabin_crash_audio_destroy(&crash_audio);
     destroy_assets(&assets);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
@@ -566,4 +559,29 @@ int cabin_main_run(void)
     SDL_Quit();
 
     return 0;
+}
+
+int cabin_main_run(void)
+{
+    SimDataCenter *sim_data_center = (SimDataCenter *)malloc(sizeof(*sim_data_center));
+    if (sim_data_center == NULL)
+    {
+        printf("Cabin: unable to allocate SimDataCenter.\n");
+        return -1;
+    }
+
+    sim_data_center_init(sim_data_center);
+    const int result = cabin_main_run_internal(sim_data_center, sim_data_center);
+    sim_data_center_destroy(sim_data_center);
+    free(sim_data_center);
+    return result;
+}
+
+int cabin_main_run_with_sim_data_center(const SimDataCenter *sim_data_center)
+{
+    if (sim_data_center == NULL)
+    {
+        return -1;
+    }
+    return cabin_main_run_internal(sim_data_center, NULL);
 }

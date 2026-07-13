@@ -13,6 +13,7 @@
 #define COCKPIT_ALARM_AUDIO_CHUNK_MS 180
 #define COCKPIT_ALARM_MAX_AUDIO_SAMPLES (COCKPIT_ALARM_AUDIO_RATE * COCKPIT_ALARM_CAUTION_TONE_MS / 1000)
 
+#if 0 /* AlertManager owns warning text classification. */
 static int text_contains(const char *text, const char *needle)
 {
     return text != NULL && needle != NULL && strstr(text, needle) != NULL;
@@ -42,6 +43,7 @@ static int is_master_caution_warning(const SimWarning *warning)
 
     return !is_master_warning(warning) && !is_stall_warning(warning);
 }
+#endif
 
 static void append_signature(char *signature, size_t signature_size, const char *text)
 {
@@ -342,7 +344,7 @@ void cockpit_alarm_destroy(CockpitAlarmState *state)
     memset(state, 0, sizeof(*state));
 }
 
-void cockpit_alarm_update(CockpitAlarmState *state, const SimSnapshot *snapshot)
+void cockpit_alarm_update(CockpitAlarmState *state, const AlertSnapshot *alerts)
 {
     char warning_signature[sizeof(state->fire_signature)];
     char caution_signature[sizeof(state->caution_signature)];
@@ -353,6 +355,8 @@ void cockpit_alarm_update(CockpitAlarmState *state, const SimSnapshot *snapshot)
     int warning_is_new = 0;
     int caution_is_new = 0;
     int stall_is_new = 0;
+    int warning_acknowledged = 1;
+    int caution_acknowledged = 1;
 
     if (state == NULL)
     {
@@ -363,25 +367,26 @@ void cockpit_alarm_update(CockpitAlarmState *state, const SimSnapshot *snapshot)
     caution_signature[0] = '\0';
     stall_signature[0] = '\0';
 
-    if (snapshot != NULL)
+    if (alerts != NULL)
     {
-        for (int i = 0; i < snapshot->warning_count; ++i)
+        for (int i = 0; i < ALERT_MANAGER_MAX_ALERTS; ++i)
         {
-            const SimWarning *warning = &snapshot->warnings[i];
-            if (is_master_warning(warning))
+            const AlertState *alert = &alerts->alerts[i];
+            if (!alert->active)
+            {
+                continue;
+            }
+            if (alert->level == ALERT_LEVEL_WARNING)
             {
                 warning_active = 1;
-                append_signature(warning_signature, sizeof(warning_signature), warning->text);
+                warning_acknowledged &= alert->acknowledged;
+                append_signature(warning_signature, sizeof(warning_signature), alert->message);
             }
-            else if (is_stall_warning(warning))
-            {
-                stall_active = 1;
-                append_signature(stall_signature, sizeof(stall_signature), warning->text);
-            }
-            else if (is_master_caution_warning(warning))
+            else if (alert->level == ALERT_LEVEL_CAUTION)
             {
                 caution_active = 1;
-                append_signature(caution_signature, sizeof(caution_signature), warning->text);
+                caution_acknowledged &= alert->acknowledged;
+                append_signature(caution_signature, sizeof(caution_signature), alert->message);
             }
         }
     }
@@ -416,6 +421,10 @@ void cockpit_alarm_update(CockpitAlarmState *state, const SimSnapshot *snapshot)
         state->fire_flash_started_ticks = SDL_GetTicks();
         publish_event(state, COCKPIT_ALARM_LEVEL_WARNING, 1, warning_signature);
     }
+    else
+    {
+        state->fire_acknowledged = warning_acknowledged;
+    }
 
     if (!caution_active)
     {
@@ -427,6 +436,10 @@ void cockpit_alarm_update(CockpitAlarmState *state, const SimSnapshot *snapshot)
         state->caution_acknowledged = 0;
         state->caution_tone_played = 0;
         publish_event(state, COCKPIT_ALARM_LEVEL_CAUTION, 1, caution_signature);
+    }
+    else
+    {
+        state->caution_acknowledged = caution_acknowledged;
     }
 
     if (stall_is_new)
@@ -524,7 +537,7 @@ void cockpit_alarm_render(SDL_Renderer *renderer, const Cockpit_Layout *layout, 
         state->caution_active && !state->caution_acknowledged ? 1.0f : 0.0f);
 }
 
-int cockpit_alarm_handle_click(CockpitAlarmState *state, float world_x, float world_y, const Cockpit_Layout *layout)
+int cockpit_alarm_handle_click(CockpitAlarmState *state, AlertManager *manager, float world_x, float world_y, const Cockpit_Layout *layout)
 {
     SDL_Point point = {(int)world_x, (int)world_y};
     int handled = 0;
@@ -536,12 +549,26 @@ int cockpit_alarm_handle_click(CockpitAlarmState *state, float world_x, float wo
 
     if (state->fire_active && SDL_PointInRect(&point, &layout->fire_warn_rect))
     {
+        for (int i = 0; manager != NULL && i < ALERT_MANAGER_MAX_ALERTS; ++i)
+        {
+            if (manager->snapshot.alerts[i].active && manager->snapshot.alerts[i].level == ALERT_LEVEL_WARNING)
+            {
+                alert_manager_acknowledge(manager, manager->snapshot.alerts[i].type);
+            }
+        }
         state->fire_acknowledged = 1;
         clear_audio(state);
         handled = 1;
     }
     if (state->caution_active && SDL_PointInRect(&point, &layout->master_caution_rect))
     {
+        for (int i = 0; manager != NULL && i < ALERT_MANAGER_MAX_ALERTS; ++i)
+        {
+            if (manager->snapshot.alerts[i].active && manager->snapshot.alerts[i].level == ALERT_LEVEL_CAUTION)
+            {
+                alert_manager_acknowledge(manager, manager->snapshot.alerts[i].type);
+            }
+        }
         state->caution_acknowledged = 1;
         state->caution_tone_played = 0;
         if (state->audio_mode == COCKPIT_ALARM_AUDIO_NONE)

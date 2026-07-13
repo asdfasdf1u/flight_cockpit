@@ -10,6 +10,7 @@
 #define SIM_FUEL_CENTER_DISPLAY_SCALE 60.9f
 #define SIM_FUEL_SIDE_DISPLAY_SCALE 48.7f
 #define SIM_EARTH_RADIUS_NM 3440.065
+#define SIM_FLIGHT_PHASE_STABLE_FRAMES 8
 
 static float clamp_float(float value, float min_value, float max_value)
 {
@@ -257,6 +258,93 @@ static void update_warnings(SimSnapshot *snapshot)
     }
 }
 
+static int snapshot_has_warning(const SimSnapshot *snapshot)
+{
+    if (snapshot == NULL)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < snapshot->warning_count; ++i)
+    {
+        if (snapshot->warnings[i].active && snapshot->warnings[i].level == SIM_WARNING_WARNING)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static SimFlightPhase sim_data_center_classify_flight_phase(const SimSnapshot *snapshot)
+{
+    if (snapshot == NULL || !snapshot->data_valid)
+    {
+        return SIM_FLIGHT_PHASE_UNKNOWN;
+    }
+    if (snapshot_has_warning(snapshot))
+    {
+        return SIM_FLIGHT_PHASE_EMERGENCY;
+    }
+    if (snapshot->agl_altitude < 100.0f && snapshot->ground_speed < 40.0f)
+    {
+        return SIM_FLIGHT_PHASE_GROUND;
+    }
+    if (snapshot->agl_altitude < 2000.0f && snapshot->vertical_speed < -300.0f)
+    {
+        return SIM_FLIGHT_PHASE_LANDING;
+    }
+    if (snapshot->agl_altitude < 3000.0f && snapshot->ground_speed >= 80.0f && snapshot->vertical_speed >= 300.0f)
+    {
+        return SIM_FLIGHT_PHASE_TAKEOFF;
+    }
+    if (snapshot->vertical_speed >= 300.0f)
+    {
+        return SIM_FLIGHT_PHASE_CLIMB;
+    }
+    if (snapshot->vertical_speed <= -300.0f)
+    {
+        return SIM_FLIGHT_PHASE_DESCENT;
+    }
+    return SIM_FLIGHT_PHASE_CRUISE;
+}
+
+static void sim_data_center_update_flight_phase(SimDataCenter *center)
+{
+    SimSnapshot *snapshot;
+    SimFlightPhase candidate;
+
+    if (center == NULL)
+    {
+        return;
+    }
+
+    snapshot = &center->snapshot;
+    candidate = sim_data_center_classify_flight_phase(snapshot);
+    if (candidate == SIM_FLIGHT_PHASE_EMERGENCY || candidate == SIM_FLIGHT_PHASE_UNKNOWN)
+    {
+        center->flight_phase = candidate;
+        center->flight_phase_candidate = candidate;
+        center->flight_phase_candidate_frames = 0;
+    }
+    else if (candidate == center->flight_phase)
+    {
+        center->flight_phase_candidate = candidate;
+        center->flight_phase_candidate_frames = 0;
+    }
+    else if (candidate != center->flight_phase_candidate)
+    {
+        center->flight_phase_candidate = candidate;
+        center->flight_phase_candidate_frames = 1;
+    }
+    else if (++center->flight_phase_candidate_frames >= SIM_FLIGHT_PHASE_STABLE_FRAMES)
+    {
+        center->flight_phase = candidate;
+        center->flight_phase_candidate_frames = 0;
+    }
+
+    snapshot->flight_phase = center->flight_phase;
+}
+
 static void init_snapshot_defaults(SimSnapshot *snapshot)
 {
     if (snapshot == NULL)
@@ -266,7 +354,10 @@ static void init_snapshot_defaults(SimSnapshot *snapshot)
 
     memset(snapshot, 0, sizeof(*snapshot));
     snapshot->current_frame = -1;
+    snapshot->updated_frame = -1;
     snapshot->playback_speed = 1.0f;
+    snapshot->source = SIM_SNAPSHOT_SOURCE_NONE;
+    snapshot->flight_phase = SIM_FLIGHT_PHASE_UNKNOWN;
 
     snapshot->pitch = 0.0f;
     snapshot->roll = 0.0f;
@@ -290,6 +381,8 @@ static void init_snapshot_defaults(SimSnapshot *snapshot)
     snapshot->total_air_temperature = 11.9f;
     snapshot->n1_left = 63.0f;
     snapshot->n1_right = 67.0f;
+    snapshot->engine_left_running = 1;
+    snapshot->engine_right_running = 1;
     snapshot->n2_left = 70.5f;
     snapshot->n2_right = 73.0f;
     snapshot->egt_left = 663.0f;
@@ -330,6 +423,36 @@ const char *sim_data_center_route_source_name(SimRouteSource source)
     case SIM_ROUTE_SOURCE_NONE:
     default:
         return "NONE";
+    }
+}
+
+const char *sim_snapshot_source_name(SimSnapshotSource source)
+{
+    switch (source)
+    {
+    case SIM_SNAPSHOT_SOURCE_DATA_FILES:
+        return "DATA_FILES";
+    case SIM_SNAPSHOT_SOURCE_XPLANE:
+        return "XPLANE";
+    case SIM_SNAPSHOT_SOURCE_NONE:
+    default:
+        return "NONE";
+    }
+}
+
+const char *sim_flight_phase_name(SimFlightPhase phase)
+{
+    switch (phase)
+    {
+    case SIM_FLIGHT_PHASE_GROUND: return "GROUND";
+    case SIM_FLIGHT_PHASE_TAKEOFF: return "TAKEOFF";
+    case SIM_FLIGHT_PHASE_CLIMB: return "CLIMB";
+    case SIM_FLIGHT_PHASE_CRUISE: return "CRUISE";
+    case SIM_FLIGHT_PHASE_DESCENT: return "DESCENT";
+    case SIM_FLIGHT_PHASE_LANDING: return "LANDING";
+    case SIM_FLIGHT_PHASE_EMERGENCY: return "EMERGENCY";
+    case SIM_FLIGHT_PHASE_UNKNOWN:
+    default: return "UNKNOWN";
     }
 }
 
@@ -592,6 +715,16 @@ static void rebuild_snapshot(SimDataCenter *center, float delta_time)
     apply_eicas_upper_frame(center);
     apply_eicas_lower_frame(center);
     update_warnings(&center->snapshot);
+    center->snapshot.engine_left_running = center->snapshot.n1_left > 20.0f;
+    center->snapshot.engine_right_running = center->snapshot.n1_right > 20.0f;
+    center->snapshot.source = center->initialized ? SIM_SNAPSHOT_SOURCE_DATA_FILES : SIM_SNAPSHOT_SOURCE_NONE;
+    center->snapshot.data_valid = center->initialized && center->snapshot.has_pfd && center->snapshot.has_nd &&
+                                  isfinite(center->snapshot.altitude) && isfinite(center->snapshot.ground_speed) &&
+                                  isfinite(center->snapshot.latitude) && isfinite(center->snapshot.longitude);
+    center->snapshot.updated_frame = center->snapshot.current_frame;
+    sim_data_center_update_flight_phase(center);
+    alert_manager_update(&center->alert_manager, &center->snapshot);
+    alert_manager_append_sim_warnings(alert_manager_snapshot(&center->alert_manager), &center->snapshot);
 }
 
 int sim_data_center_init(SimDataCenter *center)
@@ -602,6 +735,7 @@ int sim_data_center_init(SimDataCenter *center)
     }
 
     memset(center, 0, sizeof(*center));
+    alert_manager_init(&center->alert_manager);
     center->playback_speed = 1.0f;
     center->nd_latitude = 39.904200;
     center->nd_longitude = 116.407400;
@@ -721,6 +855,11 @@ const SimSnapshot *sim_data_center_snapshot(const SimDataCenter *center)
     return &center->snapshot;
 }
 
+const AlertSnapshot *sim_data_center_alerts(const SimDataCenter *center)
+{
+    return center != NULL ? alert_manager_snapshot(&center->alert_manager) : NULL;
+}
+
 const SimPlannedRoute *sim_data_center_route(const SimDataCenter *center)
 {
     if (center == NULL || !center->route_initialized || !center->planned_route.valid)
@@ -782,4 +921,41 @@ int sim_data_center_has_eicas_lower_data(const SimDataCenter *center)
 int sim_data_center_has_eicas_data(const SimDataCenter *center)
 {
     return sim_data_center_has_eicas_upper_data(center) || sim_data_center_has_eicas_lower_data(center);
+}
+
+void sim_data_center_acknowledge_alert(SimDataCenter *center, AlertType type)
+{
+    if (center != NULL)
+    {
+        alert_manager_acknowledge(&center->alert_manager, type);
+    }
+}
+
+void sim_data_center_set_demo_alert(SimDataCenter *center, AlertType type, int active)
+{
+    const AlertSnapshot *alerts;
+
+    if (center == NULL)
+    {
+        return;
+    }
+    alert_manager_set_demo(&center->alert_manager, type, active);
+    alert_manager_update(&center->alert_manager, &center->snapshot);
+    alerts = alert_manager_snapshot(&center->alert_manager);
+    printf("Alert demo: %s=%d active=%d revision=%d.\n", alert_type_name(type), active != 0,
+           alerts->active_count, alerts->revision);
+}
+
+void sim_data_center_clear_demo_alerts(SimDataCenter *center)
+{
+    const AlertSnapshot *alerts;
+
+    if (center == NULL)
+    {
+        return;
+    }
+    alert_manager_clear_demo(&center->alert_manager);
+    alert_manager_update(&center->alert_manager, &center->snapshot);
+    alerts = alert_manager_snapshot(&center->alert_manager);
+    printf("Alert demo: cleared active=%d revision=%d.\n", alerts->active_count, alerts->revision);
 }

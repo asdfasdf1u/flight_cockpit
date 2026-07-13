@@ -2,7 +2,7 @@
 #define COCKPIT_ALARM_H
 
 #include <SDL2/SDL.h>
-#include "../Data/sim_snapshot.h"
+#include "../Data/alert_manager.h"
 #include "cockpit_layout.h"
 
 typedef enum CockpitAlarmLevel
@@ -57,9 +57,9 @@ typedef CockpitAlarmState Cockpit_AlarmState;
 
 void cockpit_alarm_init(CockpitAlarmState *state);
 void cockpit_alarm_destroy(CockpitAlarmState *state);
-void cockpit_alarm_update(CockpitAlarmState *state, const SimSnapshot *snapshot);
+void cockpit_alarm_update(CockpitAlarmState *state, const AlertSnapshot *alerts);
 void cockpit_alarm_render(SDL_Renderer *renderer, const Cockpit_Layout *layout, const CockpitAlarmState *state, Uint32 ticks);
-int cockpit_alarm_handle_click(CockpitAlarmState *state, float world_x, float world_y, const Cockpit_Layout *layout);
+int cockpit_alarm_handle_click(CockpitAlarmState *state, AlertManager *manager, float world_x, float world_y, const Cockpit_Layout *layout);
 void cockpit_alarm_set_event_sink(CockpitAlarmState *state, CockpitAlarmEventSink sink, void *user_data);
 const CockpitAlarmEvent *cockpit_alarm_last_event(const CockpitAlarmState *state);
 int cockpit_alarm_request_evac(CockpitAlarmState *state, int ground_mode);

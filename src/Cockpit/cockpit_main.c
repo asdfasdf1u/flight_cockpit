@@ -1356,7 +1356,7 @@ int cockpit_main_run(void)
                 float alarm_world_x = 0.0f;
                 float alarm_world_y = 0.0f;
                 screen_to_world(event.button.x, event.button.y, &camera, &alarm_world_x, &alarm_world_y);
-                if (view_mode == COCKPIT_VIEW_MAIN && cockpit_alarm_handle_click(&cockpit_state.alarm, alarm_world_x, alarm_world_y, &layout))
+                if (view_mode == COCKPIT_VIEW_MAIN && cockpit_alarm_handle_click(&cockpit_state.alarm, &sim_data_center->alert_manager, alarm_world_x, alarm_world_y, &layout))
                 {
                     dragging = 0;
                 }
@@ -1508,6 +1508,22 @@ int cockpit_main_run(void)
                     show_fmc_debug = !show_fmc_debug;
                     suppress_debug_text_input = view_mode == COCKPIT_VIEW_FMC_ZOOM;
                 }
+                else if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F5)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 1);
+                }
+                else if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F6)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CABIN_ALTITUDE, 1);
+                }
+                else if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F7)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CRASH, 1);
+                }
+                else if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F8)
+                {
+                    sim_data_center_clear_demo_alerts(sim_data_center);
+                }
                 else if (event.key.repeat == 0 &&
                          view_mode == COCKPIT_VIEW_ND_ZOOM &&
                          handle_nd_map_keydown(&nd_data, event.key.keysym.sym))
@@ -1575,7 +1591,7 @@ int cockpit_main_run(void)
             }
         }
         fmc_data_update_mock(&fmc_data, delta_time);
-        cockpit_alarm_update(&cockpit_state.alarm, sim_snapshot);
+        cockpit_alarm_update(&cockpit_state.alarm, sim_data_center_alerts(sim_data_center));
         if (last_sync_check_log_ticks == 0 ||
             current_ticks - last_sync_check_log_ticks >= COCKPIT_SYNC_CHECK_LOG_MS)
         {

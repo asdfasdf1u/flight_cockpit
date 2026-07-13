@@ -40,6 +40,7 @@
                 "${workspaceFolder}/src/PFD/pfd_data.c",
                 "${workspaceFolder}/src/Util/SDL_Util.c",
                 "${workspaceFolder}/src/Data/sim_data_center.c",
+                "${workspaceFolder}/src/Data/alert_manager.c",
                 "${workspaceFolder}/src/Data/sim_data_loader.c",
                 "-o",
                 "${workspaceFolder}/build/test.exe",

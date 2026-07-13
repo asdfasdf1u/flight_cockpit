@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../Data/sim_data_center.h"
+
 #define CABIN_ROUTE_TOTAL_TIME_MIN 165.0f
 #define CABIN_ROUTE_PROGRESS_RATE 0.012f
 #define CABIN_TRAJECTORY_PROGRESS_THRESHOLD 0.006f
@@ -46,11 +48,6 @@ static float clamp_float(float value, float min_value, float max_value)
         return max_value;
     }
     return value;
-}
-
-static double lerp_double(double start, double end, float t)
-{
-    return start + (end - start) * (double)t;
 }
 
 static int cabin_data_valid_geo(double latitude, double longitude)
@@ -214,6 +211,7 @@ static void cabin_data_build_map_cache_path(Cabin_Data *data)
              route_name);
 }
 
+#if 0 /* Retired helpers for the standalone Cabin mock route. */
 static int cabin_data_point_in_map_bounds(const Cabin_Data *data, double latitude, double longitude)
 {
     return data != NULL &&
@@ -263,6 +261,8 @@ static void cabin_data_init_planned_route(Cabin_Data *data)
     data->destination_lat = data->planned_route[data->planned_route_count - 1].latitude;
     data->destination_lon = data->planned_route[data->planned_route_count - 1].longitude;
 }
+
+#endif
 
 static double cabin_data_route_distance(const Cabin_Trajectory_Point *a, const Cabin_Trajectory_Point *b)
 {
@@ -389,6 +389,7 @@ static void cabin_data_fit_map_bounds_to_route(Cabin_Data *data)
     cabin_data_build_map_cache_path(data);
 }
 
+#if 0 /* Retired helpers for synthetic Cabin position updates. */
 static void cabin_data_interpolate_planned_route(const Cabin_Data *data, float progress, double *latitude, double *longitude)
 {
     if (latitude == NULL || longitude == NULL)
@@ -559,6 +560,8 @@ static void cabin_data_update_location_labels(Cabin_Data *data)
     }
 }
 
+#endif
+
 static void cabin_data_compact_flown_track(Cabin_Data *data)
 {
     if (data == NULL || data->flown_track_count < CABIN_FLOWN_TRACK_MAX_POINTS)
@@ -620,6 +623,7 @@ static void cabin_data_push_flown_track_point(Cabin_Data *data, double latitude,
     data->flown_track_time_since_append = 0.0f;
 }
 
+#if 0 /* The adapted track starts from the latest valid snapshot position. */
 static void cabin_data_reset_flown_track(Cabin_Data *data)
 {
     if (data == NULL)
@@ -633,6 +637,8 @@ static void cabin_data_reset_flown_track(Cabin_Data *data)
     data->flown_track_time_since_append = 0.0f;
     cabin_data_push_flown_track_point(data, data->origin_lat, data->origin_lon);
 }
+
+#endif
 
 static void cabin_data_update_flown_track(Cabin_Data *data, float delta_time, int force_append)
 {
@@ -668,6 +674,30 @@ void cabin_data_init(Cabin_Data *data)
 
     memset(data, 0, sizeof(*data));
 
+    /* Cabin starts in a safe state until the read-only SimDataCenter view is applied. */
+    copy_text(data->flight_no, sizeof(data->flight_no), "----");
+    copy_text(data->origin_city, sizeof(data->origin_city), "----");
+    copy_text(data->origin_airport, sizeof(data->origin_airport), "----");
+    copy_text(data->destination_city, sizeof(data->destination_city), "----");
+    copy_text(data->destination_airport, sizeof(data->destination_airport), "----");
+    copy_text(data->current_city, sizeof(data->current_city), "DATA UNAVAILABLE");
+    copy_text(data->current_district, sizeof(data->current_district), "----");
+    copy_text(data->current_town, sizeof(data->current_town), "----");
+    copy_text(data->data_source, sizeof(data->data_source), "NONE");
+    copy_text(data->flight_phase, sizeof(data->flight_phase), "UNKNOWN");
+    copy_text(data->planned_route_source, sizeof(data->planned_route_source), "NONE");
+    copy_text(data->weather, sizeof(data->weather), "--");
+    copy_text(data->weather_city, sizeof(data->weather_city), "--");
+    copy_text(data->wind_direction, sizeof(data->wind_direction), "--");
+    copy_text(data->wind_power, sizeof(data->wind_power), "--");
+    copy_text(data->weather_source, sizeof(data->weather_source), "NONE");
+    copy_text(data->map_source, sizeof(data->map_source), "LOCAL");
+    data->snapshot_frame = -1;
+    data->route_revision = -1;
+    data->active_waypoint_index = -1;
+    return;
+
+#if 0 /* Retired standalone Cabin mock state. */
     copy_text(data->flight_no, sizeof(data->flight_no), "CA1888");
     copy_text(data->origin_city, sizeof(data->origin_city), "北京");
     copy_text(data->origin_airport, sizeof(data->origin_airport), "北京首都");
@@ -710,42 +740,219 @@ void cabin_data_init(Cabin_Data *data)
     copy_text(data->api_map_error_message, sizeof(data->api_map_error_message), "未请求静态地图");
 }
 
-void cabin_data_update_mock(Cabin_Data *data, float delta_time)
+#endif
+}
+
+static float cabin_data_distance_nm(double latitude_a, double longitude_a, double latitude_b, double longitude_b)
+{
+    const double latitude_a_rad = latitude_a * CABIN_PI / 180.0;
+    const double latitude_b_rad = latitude_b * CABIN_PI / 180.0;
+    const double delta_latitude = latitude_b_rad - latitude_a_rad;
+    const double delta_longitude = (longitude_b - longitude_a) * CABIN_PI / 180.0;
+    const double a = sin(delta_latitude * 0.5) * sin(delta_latitude * 0.5) +
+                     cos(latitude_a_rad) * cos(latitude_b_rad) *
+                         sin(delta_longitude * 0.5) * sin(delta_longitude * 0.5);
+    return (float)(3440.065 * 2.0 * atan2(sqrt(a), sqrt(1.0 - a)));
+}
+
+static void cabin_data_clear_route_view(Cabin_Data *data)
 {
     if (data == NULL)
     {
         return;
     }
 
-    if (delta_time < 0.0f)
+    data->route_valid = 0;
+    data->route_point_count = 0;
+    data->planned_route_count = 0;
+    data->planned_route_from_fmc = 0;
+    data->active_waypoint_index = -1;
+    data->active_waypoint[0] = '\0';
+    data->distance_to_active_nm = 0.0f;
+    data->distance_to_destination_nm = 0.0f;
+    data->origin_lat = 0.0;
+    data->origin_lon = 0.0;
+    data->destination_lat = 0.0;
+    data->destination_lon = 0.0;
+    data->map_top_left_lat = 0.0;
+    data->map_top_left_lon = 0.0;
+    data->map_bottom_right_lat = 0.0;
+    data->map_bottom_right_lon = 0.0;
+    data->map_center_lat = 0.0;
+    data->map_center_lon = 0.0;
+    data->map_zoom = 0;
+    copy_text(data->origin_city, sizeof(data->origin_city), "----");
+    copy_text(data->origin_airport, sizeof(data->origin_airport), "----");
+    copy_text(data->destination_city, sizeof(data->destination_city), "----");
+    copy_text(data->destination_airport, sizeof(data->destination_airport), "----");
+    copy_text(data->planned_route_source, sizeof(data->planned_route_source), "NONE");
+    memset(data->planned_route, 0, sizeof(data->planned_route));
+    data->flown_track_count = 0;
+}
+
+static void cabin_data_apply_route_view(Cabin_Data *data, const SimPlannedRoute *route, int route_revision)
+{
+    int copied_points = 0;
+
+    cabin_data_clear_route_view(data);
+    data->route_revision = route_revision;
+    if (route == NULL || !route->valid)
     {
-        delta_time = 0.0f;
-    }
-    if (delta_time > 0.1f)
-    {
-        delta_time = 0.1f;
+        return;
     }
 
-    const float previous_progress = data->progress;
-    data->progress += delta_time * CABIN_ROUTE_PROGRESS_RATE;
-    if (data->progress > 1.0f)
+    data->route_valid = 1;
+    data->route_point_count = route->point_count;
+    data->active_waypoint_index = route->active_waypoint_index;
+    data->planned_route_from_fmc = 1;
+    copy_text(data->origin_city, sizeof(data->origin_city), route->origin);
+    copy_text(data->origin_airport, sizeof(data->origin_airport), route->origin);
+    copy_text(data->destination_city, sizeof(data->destination_city), route->destination);
+    copy_text(data->destination_airport, sizeof(data->destination_airport), route->destination);
+    copy_text(data->planned_route_source, sizeof(data->planned_route_source), sim_data_center_route_source_name(route->source));
+
+    for (int i = 0; i < route->point_count && copied_points < CABIN_PLANNED_ROUTE_MAX_POINTS; ++i)
     {
-        data->progress = 0.0f;
+        const SimRoutePoint *source_point = &route->points[i];
+        Cabin_Trajectory_Point *target_point;
+        if (!source_point->has_position || !cabin_data_valid_geo(source_point->latitude, source_point->longitude))
+        {
+            continue;
+        }
+
+        target_point = &data->planned_route[copied_points++];
+        copy_text(target_point->ident, sizeof(target_point->ident), source_point->ident);
+        target_point->latitude = source_point->latitude;
+        target_point->longitude = source_point->longitude;
+        target_point->altitude = (float)source_point->altitude;
+        target_point->sequence = (unsigned int)i;
+    }
+    data->planned_route_count = copied_points;
+
+    if (route->active_waypoint_index >= 0 && route->active_waypoint_index < route->point_count)
+    {
+        copy_text(data->active_waypoint, sizeof(data->active_waypoint), route->points[route->active_waypoint_index].ident);
+    }
+    if (copied_points > 0)
+    {
+        data->origin_lat = data->planned_route[0].latitude;
+        data->origin_lon = data->planned_route[0].longitude;
+        data->destination_lat = data->planned_route[copied_points - 1].latitude;
+        data->destination_lon = data->planned_route[copied_points - 1].longitude;
+        cabin_data_fit_map_bounds_to_route(data);
+    }
+}
+
+int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCenter *center, float delta_time)
+{
+    const SimSnapshot *snapshot = sim_data_center_snapshot(center);
+    const SimPlannedRoute *route = sim_data_center_route(center);
+    const AlertSnapshot *alerts = sim_data_center_alerts(center);
+    const int route_revision = sim_data_center_route_revision(center);
+    const int previous_valid = data != NULL ? data->snapshot_valid : 0;
+    const int previous_route_revision = data != NULL ? data->route_revision : -1;
+    char previous_source[CABIN_TEXT_LEN];
+    int changes = CABIN_DATA_UPDATE_NONE;
+
+    if (data == NULL)
+    {
+        return CABIN_DATA_UPDATE_NONE;
     }
 
-    cabin_data_update_progress_fields(data);
-    if (data->progress < previous_progress)
+    copy_text(previous_source, sizeof(previous_source), data->data_source);
+    if (alerts != NULL)
     {
-        cabin_data_reset_flown_track(data);
-        cabin_data_update_flown_track(data, 0.0f, 1);
+        data->alerts = *alerts;
+        const AlertState *crash = alert_snapshot_find(alerts, ALERT_TYPE_CRASH);
+        data->crash_demo_active = crash != NULL && crash->active;
+        data->crash_demo_started_ticks = crash != NULL ? (unsigned int)(crash->start_time * 1000.0f) : 0u;
     }
     else
     {
-        cabin_data_update_flown_track(data, delta_time, 0);
+        memset(&data->alerts, 0, sizeof(data->alerts));
+        data->crash_demo_active = 0;
+        data->crash_demo_started_ticks = 0;
+    }
+    if (previous_route_revision != route_revision || (route == NULL) != !data->route_valid)
+    {
+        cabin_data_apply_route_view(data, route, route_revision);
+        changes |= CABIN_DATA_UPDATE_ROUTE;
     }
 
-    cabin_data_update_location_labels(data);
-    return;
+    data->snapshot_valid = snapshot != NULL && snapshot->data_valid;
+    copy_text(data->data_source, sizeof(data->data_source),
+              snapshot != NULL ? sim_snapshot_source_name(snapshot->source) : "NONE");
+    copy_text(data->flight_phase, sizeof(data->flight_phase),
+              snapshot != NULL ? sim_flight_phase_name(snapshot->flight_phase) : "UNKNOWN");
+    data->snapshot_frame = snapshot != NULL ? snapshot->updated_frame : -1;
+    data->snapshot_time = snapshot != NULL ? snapshot->sim_time : 0.0f;
+
+    if (!data->snapshot_valid)
+    {
+        data->using_sim_data = 0;
+        data->altitude = 0.0f;
+        data->ground_speed = 0.0f;
+        data->true_air_speed = 0.0f;
+        data->vertical_speed = 0.0f;
+        data->heading = 0.0f;
+        data->track = 0.0f;
+        data->has_heading = 0;
+        data->latitude = 0.0;
+        data->longitude = 0.0;
+        data->current_lat = 0.0;
+        data->current_lon = 0.0;
+        data->progress = 0.0f;
+        data->remaining_time_min = 0.0f;
+        data->flown_track_count = 0;
+        copy_text(data->current_city, sizeof(data->current_city), "DATA UNAVAILABLE");
+    }
+    else
+    {
+        data->using_sim_data = 1;
+        data->altitude = snapshot->altitude;
+        data->ground_speed = snapshot->ground_speed;
+        data->true_air_speed = snapshot->true_air_speed;
+        data->vertical_speed = snapshot->vertical_speed;
+        data->heading = snapshot->heading;
+        data->track = snapshot->track;
+        data->has_heading = 1;
+        data->latitude = snapshot->latitude;
+        data->longitude = snapshot->longitude;
+        data->current_lat = snapshot->latitude;
+        data->current_lon = snapshot->longitude;
+        data->engine_left_running = snapshot->engine_left_running;
+        data->engine_right_running = snapshot->engine_right_running;
+        data->progress = cabin_data_progress_for_position(data, data->latitude, data->longitude);
+        data->distance_to_destination_nm = data->planned_route_count > 0
+                                               ? cabin_data_distance_nm(data->latitude, data->longitude, data->destination_lat, data->destination_lon)
+                                               : 0.0f;
+        data->distance_to_active_nm = data->active_waypoint[0] != '\0' && route != NULL &&
+                                              route->active_waypoint_index >= 0 && route->active_waypoint_index < route->point_count &&
+                                              route->points[route->active_waypoint_index].has_position
+                                          ? cabin_data_distance_nm(data->latitude, data->longitude,
+                                                                   route->points[route->active_waypoint_index].latitude,
+                                                                   route->points[route->active_waypoint_index].longitude)
+                                          : 0.0f;
+        data->remaining_time_min = data->ground_speed > 1.0f ? data->distance_to_destination_nm * 60.0f / data->ground_speed : 0.0f;
+        copy_text(data->current_city, sizeof(data->current_city), data->route_valid ? "EN ROUTE" : "POSITION AVAILABLE");
+        copy_text(data->current_district, sizeof(data->current_district), data->flight_phase);
+        copy_text(data->current_town, sizeof(data->current_town), data->active_waypoint[0] != '\0' ? data->active_waypoint : "----");
+        cabin_data_update_flown_track(data, delta_time > 0.0f ? delta_time : 0.0f, 0);
+    }
+
+    if (previous_valid != data->snapshot_valid)
+    {
+        changes |= CABIN_DATA_UPDATE_VALIDITY;
+    }
+    if (changes != CABIN_DATA_UPDATE_NONE || strcmp(previous_source, data->data_source) != 0)
+    {
+        printf("Cabin Data: source=%s valid=%d frame=%d alt=%.0f gs=%.0f tas=%.0f vs=%.0f hdg=%.0f origin=%s destination=%s route_rev=%d phase=%s.\n",
+               data->data_source, data->snapshot_valid, data->snapshot_frame, data->altitude, data->ground_speed,
+               data->true_air_speed, data->vertical_speed, data->heading, data->origin_airport,
+               data->destination_airport, data->route_revision, data->flight_phase);
+        fflush(stdout);
+    }
+    return changes;
 }
 
 #if 0
