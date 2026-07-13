@@ -11,6 +11,10 @@
 #define XPLANE_LIVE_MPS_TO_KNOTS 1.943844492f
 #define XPLANE_LIVE_KG_PER_SEC_TO_LB_PER_HOUR 7936.641438f
 #define XPLANE_LIVE_KG_TO_KLB 0.00220462262f
+#define XPLANE_LIVE_MAX_FUEL_FLOW_LB_PER_HOUR 50000.0f
+#define XPLANE_LIVE_OIL_QUANTITY_FULL_SCALE_QT 20.0f
+#define XPLANE_LIVE_VIBRATION_MAX_HZ 100.0f
+#define XPLANE_LIVE_VIBRATION_DISPLAY_MAX 5.0f
 
 static float clamp_float(float value, float min_value, float max_value)
 {
@@ -48,6 +52,54 @@ static float second_or_default(const float *values, int size, float fallback)
     return values != NULL && size > 1 ? values[1] : fallback;
 }
 
+/*
+ * X-Plane exposes vibration through cockpit2.  Its generic vibration dataref
+ * is zero for the Laminar B738 even while its EICAS shows a non-zero value,
+ * so a non-positive sample must not mask the next available data source.
+ */
+static float engine_value_with_legacy_fallback(
+    const float *primary,
+    int primary_size,
+    const float *legacy,
+    int legacy_size,
+    int engine_index,
+    float fallback)
+{
+    if (primary != NULL && primary_size > engine_index && primary[engine_index] > 0.0f)
+    {
+        return primary[engine_index];
+    }
+
+    if (legacy != NULL && legacy_size > engine_index && legacy[engine_index] > 0.0f)
+    {
+        return legacy[engine_index];
+    }
+
+    return fallback;
+}
+
+static float vibration_hz_to_display(float hz_value)
+{
+    if (hz_value <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    const float normalized = hz_value / XPLANE_LIVE_VIBRATION_MAX_HZ;
+    return clamp_float(normalized * XPLANE_LIVE_VIBRATION_DISPLAY_MAX, 0.0f, XPLANE_LIVE_VIBRATION_DISPLAY_MAX);
+}
+
+static float b738_vibration_display_value(const float *values, int size, float fallback)
+{
+    /* The B738 dataref is already in the same 0.0--5.0 VIB scale as its EICAS. */
+    if (values != NULL && size > 0 && values[0] > 0.0f)
+    {
+        return clamp_float(values[0], 0.0f, XPLANE_LIVE_VIBRATION_DISPLAY_MAX);
+    }
+
+    return fallback;
+}
+
 static float array_average_nonnegative(const float *values, int size, int max_count, float fallback)
 {
     if (values == NULL || size <= 0)
@@ -68,6 +120,16 @@ static float array_average_nonnegative(const float *values, int size, int max_co
     }
 
     return count > 0 ? sum / (float)count : fallback;
+}
+
+static float oil_quantity_display(float value, float fallback)
+{
+    if (value < 0.0f)
+    {
+        return fallback;
+    }
+
+    return value <= 1.5f ? value * XPLANE_LIVE_OIL_QUANTITY_FULL_SCALE_QT : value;
 }
 
 static void set_status(XPlaneLiveData *live, int pfd_active, int nd_active, int eicas_active)
@@ -142,8 +204,16 @@ static int poll_all_data(
         DREF_GROUNDSPEED,
         DREF_TAT,
         DREF_N1,
+        DREF_N2,
         DREF_EGT,
         DREF_FUEL_FLOW,
+        DREF_OIL_PRESSURE,
+        DREF_OIL_TEMPERATURE,
+        DREF_OIL_QUANTITY,
+        DREF_VIBRATION_HZ,
+        DREF_VIBRATION_LEGACY,
+        DREF_B738_VIBRATION_LEFT,
+        DREF_B738_VIBRATION_RIGHT,
         DREF_FUEL_MASS,
         DREF_COUNT
     };
@@ -168,8 +238,16 @@ static int poll_all_data(
         "sim/flightmodel/position/groundspeed",
         "sim/weather/temperature_ambient_c",
         "sim/flightmodel/engine/ENGN_N1_",
+        "sim/flightmodel/engine/ENGN_N2_",
         "sim/flightmodel/engine/ENGN_EGT_c",
         "sim/cockpit2/engine/indicators/fuel_flow_kg_sec",
+        "sim/flightmodel/engine/ENGN_oil_press_psi",
+        "sim/flightmodel/engine/ENGN_oil_temp_c",
+        "sim/flightmodel/engine/ENGN_oil_quan",
+        "sim/cockpit2/engine/indicators/vibration_hz",
+        "sim/flightmodel/engine/ENGN_vib_",
+        "laminar/B738/engine/indicators/engine1_vib",
+        "laminar/B738/engine/indicators/engine2_vib",
         "sim/flightmodel/weight/m_fuel"};
 
     float theta[1] = {0.0f};
@@ -193,8 +271,16 @@ static int poll_all_data(
 
     float tat[1] = {0.0f};
     float n1[8] = {0.0f};
+    float n2[8] = {0.0f};
     float egt[8] = {0.0f};
     float fuel_flow[8] = {0.0f};
+    float oil_pressure[8] = {0.0f};
+    float oil_temperature[8] = {0.0f};
+    float oil_quantity[8] = {0.0f};
+    float vibration_hz[8] = {0.0f};
+    float vibration_legacy[8] = {0.0f};
+    float b738_vibration_left[1] = {0.0f};
+    float b738_vibration_right[1] = {0.0f};
     float fuel_mass[9] = {0.0f};
 
     float *values[DREF_COUNT] = {
@@ -217,14 +303,22 @@ static int poll_all_data(
         groundspeed,
         tat,
         n1,
+        n2,
         egt,
         fuel_flow,
+        oil_pressure,
+        oil_temperature,
+        oil_quantity,
+        vibration_hz,
+        vibration_legacy,
+        b738_vibration_left,
+        b738_vibration_right,
         fuel_mass};
     int sizes[DREF_COUNT] = {
         1, 1, 1, 1, 1, 8,
         1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1,
-        1, 8, 8, 8, 9};
+        1, 8, 8, 8, 8, 8, 8, 8, 8, 8, 1, 1, 9};
 
     if (getDREFs(live->socket, drefs, values, DREF_COUNT, sizes) < 0)
     {
@@ -260,10 +354,40 @@ static int poll_all_data(
     eicas_data->tat = first_or_default(tat, sizes[DREF_TAT], eicas_data->tat);
     eicas_data->engine_left.n1 = clamp_float(first_or_default(n1, sizes[DREF_N1], eicas_data->engine_left.n1), 0.0f, 110.0f);
     eicas_data->engine_right.n1 = clamp_float(second_or_default(n1, sizes[DREF_N1], eicas_data->engine_right.n1), 0.0f, 110.0f);
+    eicas_data->engine_left.n2 = clamp_float(first_or_default(n2, sizes[DREF_N2], eicas_data->engine_left.n2), 0.0f, 110.0f);
+    eicas_data->engine_right.n2 = clamp_float(second_or_default(n2, sizes[DREF_N2], eicas_data->engine_right.n2), 0.0f, 110.0f);
     eicas_data->engine_left.egt = first_or_default(egt, sizes[DREF_EGT], eicas_data->engine_left.egt);
     eicas_data->engine_right.egt = second_or_default(egt, sizes[DREF_EGT], eicas_data->engine_right.egt);
-    eicas_data->engine_left.fuel_flow = clamp_float(first_or_default(fuel_flow, sizes[DREF_FUEL_FLOW], eicas_data->engine_left.fuel_flow / XPLANE_LIVE_KG_PER_SEC_TO_LB_PER_HOUR) * XPLANE_LIVE_KG_PER_SEC_TO_LB_PER_HOUR, 0.0f, 10000.0f);
-    eicas_data->engine_right.fuel_flow = clamp_float(second_or_default(fuel_flow, sizes[DREF_FUEL_FLOW], eicas_data->engine_right.fuel_flow / XPLANE_LIVE_KG_PER_SEC_TO_LB_PER_HOUR) * XPLANE_LIVE_KG_PER_SEC_TO_LB_PER_HOUR, 0.0f, 10000.0f);
+    eicas_data->engine_left.fuel_flow = clamp_float(first_or_default(fuel_flow, sizes[DREF_FUEL_FLOW], eicas_data->engine_left.fuel_flow / XPLANE_LIVE_KG_PER_SEC_TO_LB_PER_HOUR) * XPLANE_LIVE_KG_PER_SEC_TO_LB_PER_HOUR, 0.0f, XPLANE_LIVE_MAX_FUEL_FLOW_LB_PER_HOUR);
+    eicas_data->engine_right.fuel_flow = clamp_float(second_or_default(fuel_flow, sizes[DREF_FUEL_FLOW], eicas_data->engine_right.fuel_flow / XPLANE_LIVE_KG_PER_SEC_TO_LB_PER_HOUR) * XPLANE_LIVE_KG_PER_SEC_TO_LB_PER_HOUR, 0.0f, XPLANE_LIVE_MAX_FUEL_FLOW_LB_PER_HOUR);
+    eicas_data->engine_left.oil_pressure = first_or_default(oil_pressure, sizes[DREF_OIL_PRESSURE], eicas_data->engine_left.oil_pressure);
+    eicas_data->engine_right.oil_pressure = second_or_default(oil_pressure, sizes[DREF_OIL_PRESSURE], eicas_data->engine_right.oil_pressure);
+    eicas_data->engine_left.oil_temperature = first_or_default(oil_temperature, sizes[DREF_OIL_TEMPERATURE], eicas_data->engine_left.oil_temperature);
+    eicas_data->engine_right.oil_temperature = second_or_default(oil_temperature, sizes[DREF_OIL_TEMPERATURE], eicas_data->engine_right.oil_temperature);
+    eicas_data->engine_left.oil_quantity = oil_quantity_display(first_or_default(oil_quantity, sizes[DREF_OIL_QUANTITY], -1.0f), eicas_data->engine_left.oil_quantity);
+    eicas_data->engine_right.oil_quantity = oil_quantity_display(second_or_default(oil_quantity, sizes[DREF_OIL_QUANTITY], -1.0f), eicas_data->engine_right.oil_quantity);
+    const float left_vibration_hz = engine_value_with_legacy_fallback(
+        vibration_hz,
+        sizes[DREF_VIBRATION_HZ],
+        vibration_legacy,
+        sizes[DREF_VIBRATION_LEGACY],
+        0,
+        0.0f);
+    const float right_vibration_hz = engine_value_with_legacy_fallback(
+        vibration_hz,
+        sizes[DREF_VIBRATION_HZ],
+        vibration_legacy,
+        sizes[DREF_VIBRATION_LEGACY],
+        1,
+        0.0f);
+    eicas_data->engine_left.vibration = b738_vibration_display_value(
+        b738_vibration_left,
+        sizes[DREF_B738_VIBRATION_LEFT],
+        left_vibration_hz > 0.0f ? vibration_hz_to_display(left_vibration_hz) : eicas_data->engine_left.vibration);
+    eicas_data->engine_right.vibration = b738_vibration_display_value(
+        b738_vibration_right,
+        sizes[DREF_B738_VIBRATION_RIGHT],
+        right_vibration_hz > 0.0f ? vibration_hz_to_display(right_vibration_hz) : eicas_data->engine_right.vibration);
     eicas_data->engine_left.running = eicas_data->engine_left.n1 > 20.0f;
     eicas_data->engine_right.running = eicas_data->engine_right.n1 > 20.0f;
 
@@ -278,6 +402,14 @@ static int poll_all_data(
 
     eicas_data_refresh_warnings(eicas_data);
     eicas_data_apply_to_aircraft_systems(eicas_data, systems_data);
+    systems_data->engine_left.eicas1_fuel_flow_display = eicas_data->engine_left.fuel_flow / 1000.0f;
+    systems_data->engine_right.eicas1_fuel_flow_display = eicas_data->engine_right.fuel_flow / 1000.0f;
+    systems_data->engine_left.eicas1_fuel_flow_display_valid = 1;
+    systems_data->engine_right.eicas1_fuel_flow_display_valid = 1;
+    systems_data->engine_left.eicas2_fuel_flow_display = eicas_data->engine_left.fuel_flow / 1000.0f;
+    systems_data->engine_right.eicas2_fuel_flow_display = eicas_data->engine_right.fuel_flow / 1000.0f;
+    systems_data->engine_left.eicas2_fuel_flow_display_valid = 1;
+    systems_data->engine_right.eicas2_fuel_flow_display_valid = 1;
 
     return 1;
 }

@@ -3,6 +3,9 @@
 #include <math.h>
 #include <stdio.h>
 
+#define AIRCRAFT_FUEL_CENTER_DISPLAY_SCALE 60.9f
+#define AIRCRAFT_FUEL_SIDE_DISPLAY_SCALE 48.7f
+
 static float clamp_float(float value, float min_value, float max_value)
 {
     if (value < min_value)
@@ -29,6 +32,10 @@ static void init_engine(AircraftSystems_EngineData *engine, float n1, float n2, 
     engine->n2 = n2;
     engine->egt = egt;
     engine->fuel_flow = 2450.0f;
+    engine->eicas1_fuel_flow_display = 0.0f;
+    engine->eicas1_fuel_flow_display_valid = 0;
+    engine->eicas2_fuel_flow_display = 0.0f;
+    engine->eicas2_fuel_flow_display_valid = 0;
     engine->oil_pressure = 40.2f;
     engine->oil_temp = 90.2f;
     engine->oil_quantity = 12.0f;
@@ -56,6 +63,8 @@ static void update_engine_mock(AircraftSystems_EngineData *engine, float t, floa
     engine->n2 = clamp_float(n2_base + 1.6f * sinf(t * 0.38f + phase * 0.6f), 0.0f, 110.0f);
     engine->egt = clamp_float(egt_base + 14.0f * sinf(t * 0.32f + phase) + 3.0f * cosf(t * 0.95f), 200.0f, 980.0f);
     engine->fuel_flow = clamp_float(fuel_base + 120.0f * sinf(t * 0.48f + phase) + 35.0f * cosf(t * 1.20f), 0.0f, 6500.0f);
+    engine->eicas1_fuel_flow_display_valid = 0;
+    engine->eicas2_fuel_flow_display_valid = 0;
     engine->oil_pressure = clamp_float(oil_press_base + 1.4f * sinf(t * 0.55f + phase), 0.0f, 100.0f);
     engine->oil_temp = clamp_float(oil_temp_base + 2.4f * sinf(t * 0.25f + phase * 0.8f), 0.0f, 180.0f);
     engine->oil_quantity = clamp_float(12.0f + 0.2f * sinf(t * 0.18f + phase * 0.7f), 0.0f, 25.0f);
@@ -148,6 +157,11 @@ void aircraft_systems_data_init(AircraftSystems_Data *data)
 
     data->total_air_temperature = 11.9f;
     data->fuel_quantity = 82.0f;
+    data->fuel_left_quantity = data->fuel_quantity * AIRCRAFT_FUEL_SIDE_DISPLAY_SCALE;
+    data->fuel_center_quantity = data->fuel_quantity * AIRCRAFT_FUEL_CENTER_DISPLAY_SCALE;
+    data->fuel_right_quantity = data->fuel_quantity * AIRCRAFT_FUEL_SIDE_DISPLAY_SCALE;
+    data->fuel_total_quantity = data->fuel_left_quantity + data->fuel_center_quantity + data->fuel_right_quantity;
+    data->fuel_tank_quantities_valid = 1;
     data->hydraulic_pressure = 3050.0f;
     data->cabin_pressure = 8.2f;
     data->battery_voltage = 27.8f;
@@ -180,6 +194,11 @@ void aircraft_systems_data_update_mock(AircraftSystems_Data *data, float delta_t
 
     data->total_air_temperature = 11.9f + 0.2f * sinf(t * 0.25f);
     data->fuel_quantity = clamp_float(data->fuel_quantity - 0.010f * delta_time, 0.0f, 100.0f);
+    data->fuel_left_quantity = data->fuel_quantity * AIRCRAFT_FUEL_SIDE_DISPLAY_SCALE;
+    data->fuel_center_quantity = data->fuel_quantity * AIRCRAFT_FUEL_CENTER_DISPLAY_SCALE;
+    data->fuel_right_quantity = data->fuel_quantity * AIRCRAFT_FUEL_SIDE_DISPLAY_SCALE;
+    data->fuel_total_quantity = data->fuel_left_quantity + data->fuel_center_quantity + data->fuel_right_quantity;
+    data->fuel_tank_quantities_valid = 1;
     data->hydraulic_pressure = clamp_float(3020.0f + 90.0f * sinf(t * 0.40f), 0.0f, 3500.0f);
     data->cabin_pressure = clamp_float(8.1f + 0.3f * sinf(t * 0.18f), 0.0f, 12.0f);
     data->battery_voltage = clamp_float(27.6f + 0.5f * sinf(t * 0.50f), 0.0f, 32.0f);

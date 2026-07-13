@@ -67,6 +67,20 @@ static void copy_warnings_to_aircraft_systems(const EICAS_Data *data, AircraftSy
     }
 }
 
+static void copy_fuel_quantities_to_aircraft_systems(const EICAS_Data *data, AircraftSystems_Data *systems)
+{
+    if (data == NULL || systems == NULL)
+    {
+        return;
+    }
+
+    systems->fuel_left_quantity = data->fuel_left_quantity;
+    systems->fuel_center_quantity = data->fuel_center_quantity;
+    systems->fuel_right_quantity = data->fuel_right_quantity;
+    systems->fuel_total_quantity = data->fuel_total_quantity;
+    systems->fuel_tank_quantities_valid = 1;
+}
+
 static void init_engine(EICAS_EngineData *engine, float n1, float n2, float egt)
 {
     if (engine == NULL)
@@ -654,10 +668,15 @@ void eicas_data_apply_upper_to_aircraft_systems(const EICAS_Data *data, Aircraft
     systems->engine_right.egt = data->engine_right.egt;
     systems->engine_left.fuel_flow = data->engine_left.fuel_flow;
     systems->engine_right.fuel_flow = data->engine_right.fuel_flow;
+    systems->engine_left.eicas1_fuel_flow_display_valid = 0;
+    systems->engine_right.eicas1_fuel_flow_display_valid = 0;
+    systems->engine_left.eicas2_fuel_flow_display_valid = 0;
+    systems->engine_right.eicas2_fuel_flow_display_valid = 0;
     systems->engine_left.running = data->engine_left.running;
     systems->engine_right.running = data->engine_right.running;
     systems->total_air_temperature = data->tat;
     systems->fuel_quantity = data->fuel_quantity;
+    copy_fuel_quantities_to_aircraft_systems(data, systems);
     copy_warnings_to_aircraft_systems(data, systems);
 }
 
@@ -681,6 +700,8 @@ void eicas_data_apply_lower_to_aircraft_systems(const EICAS_Data *data, Aircraft
         systems->engine_left.fuel_flow = data->engine_left.fuel_flow;
         systems->engine_right.fuel_flow = data->engine_right.fuel_flow;
     }
+    systems->engine_left.eicas2_fuel_flow_display_valid = 0;
+    systems->engine_right.eicas2_fuel_flow_display_valid = 0;
     systems->engine_left.oil_pressure = data->engine_left.oil_pressure;
     systems->engine_right.oil_pressure = data->engine_right.oil_pressure;
     systems->engine_left.oil_temp = data->engine_left.oil_temperature;
@@ -705,6 +726,8 @@ void eicas_data_apply_to_aircraft_systems(const EICAS_Data *data, AircraftSystem
     systems->engine_left.n2 = data->engine_left.n2;
     systems->engine_left.egt = data->engine_left.egt;
     systems->engine_left.fuel_flow = data->engine_left.fuel_flow;
+    systems->engine_left.eicas1_fuel_flow_display_valid = 0;
+    systems->engine_left.eicas2_fuel_flow_display_valid = 0;
     systems->engine_left.oil_pressure = data->engine_left.oil_pressure;
     systems->engine_left.oil_temp = data->engine_left.oil_temperature;
     systems->engine_left.oil_quantity = data->engine_left.oil_quantity;
@@ -715,6 +738,8 @@ void eicas_data_apply_to_aircraft_systems(const EICAS_Data *data, AircraftSystem
     systems->engine_right.n2 = data->engine_right.n2;
     systems->engine_right.egt = data->engine_right.egt;
     systems->engine_right.fuel_flow = data->engine_right.fuel_flow;
+    systems->engine_right.eicas1_fuel_flow_display_valid = 0;
+    systems->engine_right.eicas2_fuel_flow_display_valid = 0;
     systems->engine_right.oil_pressure = data->engine_right.oil_pressure;
     systems->engine_right.oil_temp = data->engine_right.oil_temperature;
     systems->engine_right.oil_quantity = data->engine_right.oil_quantity;
@@ -723,6 +748,7 @@ void eicas_data_apply_to_aircraft_systems(const EICAS_Data *data, AircraftSystem
 
     systems->total_air_temperature = data->tat;
     systems->fuel_quantity = data->fuel_quantity;
+    copy_fuel_quantities_to_aircraft_systems(data, systems);
     systems->hydraulic_pressure = data->hydraulic_pressure;
     systems->cabin_pressure = data->cabin_pressure;
     systems->battery_voltage = data->battery_voltage;

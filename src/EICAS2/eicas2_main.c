@@ -57,6 +57,7 @@ static void apply_sim_snapshot_to_aircraft_systems(AircraftSystems_Data *data, c
     data->engine_left.n2 = snapshot->n2_left;
     data->engine_left.egt = snapshot->egt_left;
     data->engine_left.fuel_flow = snapshot->lower_fuel_flow_left;
+    data->engine_left.eicas2_fuel_flow_display_valid = 0;
     data->engine_left.oil_pressure = snapshot->oil_pressure_left;
     data->engine_left.oil_temp = snapshot->oil_temperature_left;
     data->engine_left.oil_quantity = snapshot->oil_quantity_left;
@@ -67,6 +68,7 @@ static void apply_sim_snapshot_to_aircraft_systems(AircraftSystems_Data *data, c
     data->engine_right.n2 = snapshot->n2_right;
     data->engine_right.egt = snapshot->egt_right;
     data->engine_right.fuel_flow = snapshot->lower_fuel_flow_right;
+    data->engine_right.eicas2_fuel_flow_display_valid = 0;
     data->engine_right.oil_pressure = snapshot->oil_pressure_right;
     data->engine_right.oil_temp = snapshot->oil_temperature_right;
     data->engine_right.oil_quantity = snapshot->oil_quantity_right;
