@@ -756,8 +756,12 @@ static void draw_descent_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_
 
 static void draw_legs_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
 {
-    (void)data;
-    draw_fmc_header(renderer, font, layout, "ACT LEGS", "ROUTE SEGMENTS", "1/1");
+    draw_fmc_header(renderer,
+                    font,
+                    layout,
+                    data != NULL && fmc_data_route_has_uncommitted_changes(data) ? "MOD LEGS" : "ACT LEGS",
+                    "ROUTE SEGMENTS",
+                    "1/1");
     draw_text(renderer, font, layout, COLOR_TEXT, 126, 112, "LEG");
     draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 112, "TO");
 
@@ -777,6 +781,16 @@ static void draw_legs_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Lay
         draw_text(renderer, font, layout, COLOR_DIM, 126, row_y + i * row_spacing, "%02d %s", i + 1, via_to_list[i].VIA);
         draw_right_text(renderer, font, layout, COLOR_WHITE, 510, row_y + i * row_spacing, "%s", via_to_list[i].TO);
     }
+
+    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 364, "MOVE FIX/AFTER");
+    draw_right_text(renderer,
+                    font,
+                    layout,
+                    COLOR_DIM,
+                    510,
+                    384,
+                    "%s",
+                    data != NULL && data->legs_sequence[0] != '\0' ? data->legs_sequence : "----");
 
     draw_fmc_softkeys(renderer, font, layout, "<RTE", "");
 }

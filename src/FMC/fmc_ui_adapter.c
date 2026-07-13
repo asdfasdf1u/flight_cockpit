@@ -294,6 +294,75 @@ static int add_route_point_geo(FMC_Data *data, const char *ident, double latitud
                                       has_position ? FMC_COORD_SOURCE_ROUTE : FMC_COORD_SOURCE_INVALID);
 }
 
+static int route_has_terminal_destination(const FMC_Data *data)
+{
+    return data != NULL &&
+           data->route_count > 0 &&
+           data->destination[0] != '\0' &&
+           fmc_ident_equals(data->route_points[data->route_count - 1], data->destination);
+}
+
+static void sync_viato_list_from_route(const FMC_Data *data)
+{
+    if (via_to_list == NULL)
+    {
+        initVIATO();
+    }
+    if (via_to_list == NULL)
+    {
+        return;
+    }
+
+    via_to_list_count = 0;
+    if (data == NULL)
+    {
+        return;
+    }
+
+    for (int i = 0; i < data->route_count && via_to_list_count < MAX_VIATO_NUM; ++i)
+    {
+        set_text(via_to_list[via_to_list_count].VIA,
+                 sizeof(via_to_list[via_to_list_count].VIA),
+                 "DIRECT");
+        set_text(via_to_list[via_to_list_count].TO,
+                 sizeof(via_to_list[via_to_list_count].TO),
+                 data->route_points[i]);
+        ++via_to_list_count;
+    }
+}
+
+static int insert_route_point_before_destination(
+    FMC_Data *data,
+    const char *ident,
+    double latitude,
+    double longitude,
+    int has_position,
+    FMC_CoordinateSource source)
+{
+    if (data == NULL || ident == NULL || ident[0] == '\0' || data->route_count >= FMC_MAX_ROUTE_POINTS)
+    {
+        return 0;
+    }
+
+    const int insert_index = route_has_terminal_destination(data) ? data->route_count - 1 : data->route_count;
+    for (int i = data->route_count; i > insert_index; --i)
+    {
+        memcpy(data->route_points[i], data->route_points[i - 1], sizeof(data->route_points[i]));
+        data->route_latitudes[i] = data->route_latitudes[i - 1];
+        data->route_longitudes[i] = data->route_longitudes[i - 1];
+        data->route_has_position[i] = data->route_has_position[i - 1];
+        data->route_coordinate_sources[i] = data->route_coordinate_sources[i - 1];
+    }
+
+    set_text(data->route_points[insert_index], sizeof(data->route_points[insert_index]), ident);
+    data->route_latitudes[insert_index] = latitude;
+    data->route_longitudes[insert_index] = longitude;
+    data->route_has_position[insert_index] = has_position;
+    data->route_coordinate_sources[insert_index] = has_position ? source : FMC_COORD_SOURCE_INVALID;
+    ++data->route_count;
+    return 1;
+}
+
 static int add_route_point(FMC_Data *data, const char *ident)
 {
     return add_route_point_geo(data, ident, 0.0, 0.0, 0);
@@ -310,16 +379,7 @@ static int add_viato_route_point(FMC_Data *data, const char *ident)
         return 0;
     }
 
-    if (via_to_list == NULL)
-    {
-        initVIATO();
-    }
-    if (via_to_list == NULL)
-    {
-        set_text(data->message, sizeof(data->message), "ROUTE MEMORY ERR");
-        return 0;
-    }
-    if (via_to_list_count >= MAX_VIATO_NUM)
+    if (data->route_count >= FMC_MAX_ROUTE_POINTS)
     {
         set_text(data->message, sizeof(data->message), "ROUTE FULL");
         return 0;
@@ -334,25 +394,23 @@ static int add_viato_route_point(FMC_Data *data, const char *ident)
     }
 
     to = wpt != NULL ? wpt->wp_code : arp->icao_code;
-    set_text(via_to_list[via_to_list_count].VIA, sizeof(via_to_list[via_to_list_count].VIA), "DIRECT");
-    set_text(via_to_list[via_to_list_count].TO, sizeof(via_to_list[via_to_list_count].TO), to);
-    if (data->route_count < FMC_MAX_ROUTE_POINTS)
+    if (fmc_ident_equals(to, data->destination) && route_has_terminal_destination(data))
     {
-        if (wpt != NULL)
-        {
-            add_route_point_geo_source(data, to, wpt->lat, wpt->lon, 1, FMC_COORD_SOURCE_ROUTE);
-        }
-        else if (arp != NULL)
-        {
-            FMC_ResolvedCoordinate coord = fmc_resolve_airport_coordinate(to, 0, 0.0, 0.0, FMC_COORD_SOURCE_INVALID);
-            add_route_point_geo_source(data, to, coord.latitude, coord.longitude, coord.has_position, coord.source);
-        }
-        else
-        {
-            add_route_point(data, to);
-        }
+        fmc_data_clear_scratchpad(data);
+        set_text(data->message, sizeof(data->message), "DEST ALREADY LAST");
+        return 0;
     }
-    via_to_list_count++;
+
+    if (wpt != NULL)
+    {
+        insert_route_point_before_destination(data, to, wpt->lat, wpt->lon, 1, FMC_COORD_SOURCE_ROUTE);
+    }
+    else
+    {
+        FMC_ResolvedCoordinate coord = fmc_resolve_airport_coordinate(to, 0, 0.0, 0.0, FMC_COORD_SOURCE_INVALID);
+        insert_route_point_before_destination(data, to, coord.latitude, coord.longitude, coord.has_position, coord.source);
+    }
+    sync_viato_list_from_route(data);
     update_exec_ready(data);
     fmc_data_clear_scratchpad(data);
     data->route_clear_pending = 0;
@@ -636,16 +694,32 @@ static int delete_last_route_point(FMC_Data *data)
         return 0;
     }
 
+    int delete_index = data->route_count - 1;
+    if (route_has_terminal_destination(data))
+    {
+        if (data->route_count <= 1)
+        {
+            set_text(data->message, sizeof(data->message), "NO INTERMEDIATE WPT");
+            return 0;
+        }
+        delete_index = data->route_count - 2;
+    }
+
+    for (int i = delete_index; i < data->route_count - 1; ++i)
+    {
+        memcpy(data->route_points[i], data->route_points[i + 1], sizeof(data->route_points[i]));
+        data->route_latitudes[i] = data->route_latitudes[i + 1];
+        data->route_longitudes[i] = data->route_longitudes[i + 1];
+        data->route_has_position[i] = data->route_has_position[i + 1];
+        data->route_coordinate_sources[i] = data->route_coordinate_sources[i + 1];
+    }
     --data->route_count;
     data->route_points[data->route_count][0] = '\0';
     data->route_latitudes[data->route_count] = 0.0;
     data->route_longitudes[data->route_count] = 0.0;
     data->route_has_position[data->route_count] = 0;
     data->route_coordinate_sources[data->route_count] = FMC_COORD_SOURCE_INVALID;
-    if (via_to_list != NULL && via_to_list_count > 0)
-    {
-        --via_to_list_count;
-    }
+    sync_viato_list_from_route(data);
     mark_route_modified(data, "delete waypoint");
     set_text(data->message, sizeof(data->message), "WPT DELETE MOD");
     return 1;
@@ -1213,12 +1287,107 @@ void fmc_data_dep_arr_back_to_index(FMC_Data *data)
 
 int fmc_data_set_legs_parameter(FMC_Data *data, int field_index)
 {
-    (void)field_index;
     if (data == NULL)
     {
         return 0;
     }
-    return set_scratchpad_text(data, data->legs_sequence, sizeof(data->legs_sequence), "LEGS");
+    if (field_index != 1)
+    {
+        set_text(data->message, sizeof(data->message), "NO LEGS FIELD");
+        return 0;
+    }
+    if (data->scratchpad_len <= 0)
+    {
+        set_text(data->message, sizeof(data->message), "ENTER FIX/AFTER");
+        return 0;
+    }
+
+    const char *separator = strchr(data->scratchpad, '/');
+    if (separator == NULL)
+    {
+        return set_scratchpad_text(data, data->legs_sequence, sizeof(data->legs_sequence), "LEGS");
+    }
+
+    const size_t move_length = (size_t)(separator - data->scratchpad);
+    const size_t after_length = strlen(separator + 1);
+    if (move_length == 0 || move_length >= FMC_TEXT_LEN || after_length == 0 || after_length >= FMC_TEXT_LEN)
+    {
+        set_text(data->message, sizeof(data->message), "FORMAT FIX/AFTER");
+        return 0;
+    }
+
+    char move_ident[FMC_TEXT_LEN] = {0};
+    char after_ident[FMC_TEXT_LEN] = {0};
+    memcpy(move_ident, data->scratchpad, move_length);
+    memcpy(after_ident, separator + 1, after_length);
+
+    const int intermediate_end = route_has_terminal_destination(data) ? data->route_count - 1 : data->route_count;
+    int move_index = -1;
+    int after_index = -2; /* -1 means insert after origin. */
+    for (int i = 0; i < intermediate_end; ++i)
+    {
+        if (fmc_ident_equals(data->route_points[i], move_ident))
+        {
+            move_index = i;
+        }
+        if (fmc_ident_equals(data->route_points[i], after_ident))
+        {
+            after_index = i;
+        }
+    }
+    if (fmc_ident_equals(after_ident, "ORIGIN"))
+    {
+        after_index = -1;
+    }
+    if (move_index < 0 || after_index == -2 || move_index == after_index)
+    {
+        set_text(data->message, sizeof(data->message), "LEGS FIX NOT FOUND");
+        return 0;
+    }
+
+    char moved_point[FMC_TEXT_LEN];
+    const double moved_latitude = data->route_latitudes[move_index];
+    const double moved_longitude = data->route_longitudes[move_index];
+    const int moved_has_position = data->route_has_position[move_index];
+    const FMC_CoordinateSource moved_source = data->route_coordinate_sources[move_index];
+    memcpy(moved_point, data->route_points[move_index], sizeof(moved_point));
+
+    for (int i = move_index; i < data->route_count - 1; ++i)
+    {
+        memcpy(data->route_points[i], data->route_points[i + 1], sizeof(data->route_points[i]));
+        data->route_latitudes[i] = data->route_latitudes[i + 1];
+        data->route_longitudes[i] = data->route_longitudes[i + 1];
+        data->route_has_position[i] = data->route_has_position[i + 1];
+        data->route_coordinate_sources[i] = data->route_coordinate_sources[i + 1];
+    }
+    --data->route_count;
+    if (after_index > move_index)
+    {
+        --after_index;
+    }
+
+    const int insert_index = after_index + 1;
+    for (int i = data->route_count; i > insert_index; --i)
+    {
+        memcpy(data->route_points[i], data->route_points[i - 1], sizeof(data->route_points[i]));
+        data->route_latitudes[i] = data->route_latitudes[i - 1];
+        data->route_longitudes[i] = data->route_longitudes[i - 1];
+        data->route_has_position[i] = data->route_has_position[i - 1];
+        data->route_coordinate_sources[i] = data->route_coordinate_sources[i - 1];
+    }
+    memcpy(data->route_points[insert_index], moved_point, sizeof(data->route_points[insert_index]));
+    data->route_latitudes[insert_index] = moved_latitude;
+    data->route_longitudes[insert_index] = moved_longitude;
+    data->route_has_position[insert_index] = moved_has_position;
+    data->route_coordinate_sources[insert_index] = moved_source;
+    ++data->route_count;
+
+    set_text(data->legs_sequence, sizeof(data->legs_sequence), data->scratchpad);
+    sync_viato_list_from_route(data);
+    fmc_data_clear_scratchpad(data);
+    mark_route_modified(data, "reorder waypoint");
+    set_text(data->message, sizeof(data->message), "LEGS ORDER MOD");
+    return 1;
 }
 
 int fmc_data_set_hold_parameter(FMC_Data *data, int field_index)
@@ -1409,7 +1578,7 @@ int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route)
                         ? data->route_source
                         : (data->route_loaded_from_file ? SIM_ROUTE_SOURCE_FMC_FMS_FILE : SIM_ROUTE_SOURCE_FMC_FALLBACK);
     route->loaded_from_file = data->route_loaded_from_file;
-    route->active_waypoint_index = data->active_waypoint_index + 1;
+    route->active_waypoint_index = -1;
 
     int coordinate_count = 0;
     if (route->point_count < SIM_ROUTE_MAX_POINTS && data->origin[0] != '\0')
@@ -1466,6 +1635,16 @@ int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route)
         if (coord.has_position)
         {
             coordinate_count++;
+        }
+    }
+
+    /* Origin is not a navigation target. Select the first later point that can be drawn. */
+    for (int i = 1; i < route->point_count; ++i)
+    {
+        if (route->points[i].has_position)
+        {
+            route->active_waypoint_index = i;
+            break;
         }
     }
 
