@@ -501,21 +501,12 @@ static void init_planned_route(SimDataCenter *center)
         return;
     }
 
-    if (!sim_data_loader_load_fms_route(&center->planned_route, "assets/KSEAKBFI.fms"))
-    {
-        init_fallback_route(&center->planned_route);
-    }
-    center->route_initialized = center->planned_route.valid;
-    center->route_revision = center->planned_route.valid ? 1 : 0;
+    memset(&center->planned_route, 0, sizeof(center->planned_route));
+    center->planned_route.source = SIM_ROUTE_SOURCE_NONE;
+    center->route_initialized = 0;
+    center->route_revision = 0;
 
-    printf("SimDataCenter route: source=%s origin=%s destination=%s points=%d first=%s last=%s revision=%d.\n",
-           sim_data_center_route_source_name(center->planned_route.source),
-           center->planned_route.origin,
-           center->planned_route.destination,
-           center->planned_route.point_count,
-           center->planned_route.point_count > 0 ? center->planned_route.points[0].ident : "----",
-           center->planned_route.point_count > 0 ? center->planned_route.points[center->planned_route.point_count - 1].ident : "----",
-           center->route_revision);
+    printf("SimDataCenter route: empty at startup; waiting for FMC input.\n");
     fflush(stdout);
 }
 

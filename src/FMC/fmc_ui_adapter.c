@@ -755,11 +755,13 @@ void fmc_data_init(FMC_Data *data)
     init_airport_data();
     load_airport_data();
     load_waypoint_data();
+    fmc_xplane_connect_init(NULL, 0);
 }
 
 void fmc_data_destroy(FMC_Data *data)
 {
     (void)data;
+    fmc_xplane_connect_shutdown();
     destroy_airport_data();
 }
 
@@ -928,13 +930,43 @@ int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field)
     switch (field)
     {
     case FMC_ROUTE_FIELD_ORIGIN:
-        return set_airport_field(data, data->origin, sizeof(data->origin), "ORIGIN");
+        if (!set_airport_field(data, data->origin, sizeof(data->origin), "ORIGIN"))
+        {
+            return 0;
+        }
+        if (setOrigin(data->origin) < 0)
+        {
+            set_text(data->message, sizeof(data->message),
+                     fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
+            return 0;
+        }
+        return 1;
     case FMC_ROUTE_FIELD_DESTINATION:
-        return set_airport_field(data, data->destination, sizeof(data->destination), "DEST");
+        if (!set_airport_field(data, data->destination, sizeof(data->destination), "DEST"))
+        {
+            return 0;
+        }
+        if (setDestination(data->destination) < 0)
+        {
+            set_text(data->message, sizeof(data->message),
+                     fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
+            return 0;
+        }
+        return 1;
     case FMC_ROUTE_FIELD_COMPANY_ROUTE:
         return set_scratchpad_text(data, data->company_route, sizeof(data->company_route), "CO ROUTE");
     case FMC_ROUTE_FIELD_FLIGHT_NO:
-        return set_scratchpad_text(data, data->flight_no, sizeof(data->flight_no), "FLT NO");
+        if (!set_scratchpad_text(data, data->flight_no, sizeof(data->flight_no), "FLT NO"))
+        {
+            return 0;
+        }
+        if (setFlt_no(data->flight_no) < 0)
+        {
+            set_text(data->message, sizeof(data->message),
+                     fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
+            return 0;
+        }
+        return 1;
     case FMC_ROUTE_FIELD_VIA:
         if (rte_index != 1)
         {
@@ -1680,10 +1712,13 @@ int fmc_data_exec_route_selection(FMC_Data *data)
         return 0;
     }
 
-    setOrigin(data->origin);
-    setDestination(data->destination);
-    setFlt_no(data->flight_no);
-    setExec();
+    if (setExec() < 0)
+    {
+        set_text(data->message, sizeof(data->message),
+                 fmc_xplane_connect_is_connected() ? "XPLANE SEND FAIL" : "XPLANE NOT CONNECT");
+        return 0;
+    }
+
     data->origin_exec_pending = 0;
     snprintf(data->message, sizeof(data->message), "RTE %s-%s SENT", data->origin, data->destination);
     return 1;

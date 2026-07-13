@@ -1,3 +1,4 @@
+//在屏幕上的显示模块
 #include "fmc_display.h"
 
 #include "fmc_key.h"
@@ -24,7 +25,7 @@ static const SDL_Color COLOR_DIM = {48, 150, 180, 255};
 static const SDL_Color COLOR_CYAN = {64, 225, 255, 255};
 static const SDL_Color COLOR_WHITE = {235, 244, 232, 255};
 static const SDL_Color COLOR_AMBER = {255, 185, 95, 255};
-static const SDL_Color COLOR_EXEC = {80, 255, 120, 150};
+static const SDL_Color COLOR_EXEC = {40, 150, 255, 235};
 
 static const SDL_Rect FMC_SCREEN_RECT = {104, 74, 435, 345};
 static const SDL_Rect FMC_SCRATCHPAD_RECT = {145, 388, 350, 28};
@@ -915,9 +916,15 @@ static void draw_exec_light(SDL_Renderer *renderer, const FMC_Layout *layout, co
         const FMC_Button *button = fmc_key_button_at(i);
         if (button != NULL && button->id == FMC_BUTTON_EXEC)
         {
+            const SDL_Rect exec_light = {
+                button->rect.x + 8,
+                button->rect.y - 34,
+                button->rect.w - 16,
+                10};
+
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-            draw_scaled_rect(renderer, layout, &button->rect, COLOR_EXEC);
-            draw_button_highlight(renderer, layout, button, COLOR_EXEC);
+            draw_scaled_rect(renderer, layout, &exec_light, COLOR_EXEC);
+            draw_scaled_outline(renderer, layout, &exec_light, COLOR_EXEC);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
             return;
         }
@@ -1011,6 +1018,17 @@ void fmc_display_render_screen_only(SDL_Renderer *renderer, TTF_Font *font, cons
     draw_page_content(renderer, font, &layout, data);
     draw_scratchpad(renderer, font, &layout, data);
     SDL_RenderSetClipRect(renderer, NULL);
+}
+
+void fmc_display_render_exec_light_only(SDL_Renderer *renderer, const FMC_Data *data)
+{
+    if (renderer == NULL || data == NULL)
+    {
+        return;
+    }
+
+    FMC_Layout layout = get_layout(renderer);
+    draw_exec_light(renderer, &layout, data);
 }
 
 void fmc_display_render_hover_only(SDL_Renderer *renderer, const FMC_Event_State *state)
