@@ -37,6 +37,7 @@
 #include "../FMC/fmc_data.h"
 #include "../FMC/fmc_display.h"
 #include "../FMC/fmc_event.h"
+#include "../FMC/fmc_connect.h"
 
 #include "../Util/xplane_live_data.h"
 
@@ -377,6 +378,7 @@ static void render_fmc_to_texture(
     {
         SDL_RenderCopy(renderer, assets->panel_texture, NULL, &(SDL_Rect){0, 0, COCKPIT_FMC_TEXTURE_WIDTH, COCKPIT_FMC_TEXTURE_HEIGHT});
         fmc_display_render_screen_only(renderer, font, data, &COCKPIT_FMC_SCREEN_RECT);
+        fmc_display_render_exec_light_only(renderer, data);
         fmc_display_render_hover_only(renderer, state);
     }
     else
@@ -638,18 +640,27 @@ static void handle_fmc_keydown(FMC_Data *data, SDL_Keycode key)
     if (key == SDLK_BACKSPACE)
     {
         fmc_data_backspace(data);
+        fmc_xplane_send_command("sim/FMS/clear");
+    }
+    else if ((key == SDLK_RETURN || key == SDLK_KP_ENTER) &&
+             data->current_page == FMC_PAGE_ROUTE)
+    {
+        fmc_data_exec_route_selection(data);
     }
     else if (key == SDLK_F1)
     {
         fmc_data_set_page(data, FMC_PAGE_INDEX);
+        fmc_xplane_send_command("sim/FMS/init");
     }
     else if (key == SDLK_F2)
     {
         fmc_data_set_page(data, FMC_PAGE_ROUTE);
+        fmc_xplane_send_command("sim/FMS/fpln");
     }
     else if (key == SDLK_F3)
     {
         fmc_data_set_page(data, FMC_PAGE_DEP_ARR);
+        fmc_xplane_send_command("sim/FMS/dep_arr");
     }
     else if (key == SDLK_F4)
     {
@@ -658,6 +669,7 @@ static void handle_fmc_keydown(FMC_Data *data, SDL_Keycode key)
     else if (key == SDLK_F5)
     {
         fmc_data_set_page(data, FMC_PAGE_LEGS);
+        fmc_xplane_send_command("sim/FMS/legs");
     }
 }
 

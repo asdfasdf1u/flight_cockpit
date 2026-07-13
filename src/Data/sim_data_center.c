@@ -333,44 +333,6 @@ const char *sim_data_center_route_source_name(SimRouteSource source)
     }
 }
 
-static void set_route_point(SimRoutePoint *point, const char *ident, const char *type, double latitude, double longitude)
-{
-    if (point == NULL)
-    {
-        return;
-    }
-
-    memset(point, 0, sizeof(*point));
-    copy_text(point->ident, sizeof(point->ident), ident);
-    copy_text(point->type, sizeof(point->type), type);
-    copy_text(point->coordinate_source, sizeof(point->coordinate_source), "ROUTE");
-    point->latitude = latitude;
-    point->longitude = longitude;
-    point->altitude = 0.0;
-    point->has_position = 1;
-}
-
-static void init_fallback_route(SimPlannedRoute *route)
-{
-    if (route == NULL)
-    {
-        return;
-    }
-
-    memset(route, 0, sizeof(*route));
-    route->valid = 1;
-    route->source = SIM_ROUTE_SOURCE_FMC_FALLBACK;
-    route->loaded_from_file = 0;
-    route->has_coordinates = 1;
-    route->active_waypoint_index = 1;
-    copy_text(route->origin, sizeof(route->origin), "KSEA");
-    copy_text(route->destination, sizeof(route->destination), "KBFI");
-    copy_text(route->source_path, sizeof(route->source_path), "fallback");
-    route->point_count = 2;
-    set_route_point(&route->points[0], "KSEA", "AIRPORT", 47.448900, -122.309400);
-    set_route_point(&route->points[1], "KBFI", "AIRPORT", 47.540100, -122.309400);
-}
-
 static void init_planned_route(SimDataCenter *center)
 {
     if (center == NULL)
@@ -378,21 +340,12 @@ static void init_planned_route(SimDataCenter *center)
         return;
     }
 
-    if (!sim_data_loader_load_fms_route(&center->planned_route, "assets/KSEAKBFI.fms"))
-    {
-        init_fallback_route(&center->planned_route);
-    }
-    center->route_initialized = center->planned_route.valid;
-    center->route_revision = center->planned_route.valid ? 1 : 0;
+    memset(&center->planned_route, 0, sizeof(center->planned_route));
+    center->planned_route.source = SIM_ROUTE_SOURCE_NONE;
+    center->route_initialized = 0;
+    center->route_revision = 0;
 
-    printf("SimDataCenter route: source=%s origin=%s destination=%s points=%d first=%s last=%s revision=%d.\n",
-           sim_data_center_route_source_name(center->planned_route.source),
-           center->planned_route.origin,
-           center->planned_route.destination,
-           center->planned_route.point_count,
-           center->planned_route.point_count > 0 ? center->planned_route.points[0].ident : "----",
-           center->planned_route.point_count > 0 ? center->planned_route.points[center->planned_route.point_count - 1].ident : "----",
-           center->route_revision);
+    printf("SimDataCenter route: empty at startup; waiting for FMC input.\n");
     fflush(stdout);
 }
 

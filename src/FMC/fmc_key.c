@@ -1,5 +1,6 @@
 //检测按的是什么键
 #include "fmc_key.h"
+#include "fmc_connect.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +13,8 @@ static void action_clear(FMC_Data *data, const FMC_Button *button);
 static void action_exec(FMC_Data *data, const FMC_Button *button);
 static void action_prev_page(FMC_Data *data, const FMC_Button *button);
 static void action_next_page(FMC_Data *data, const FMC_Button *button);
+static int send_button_to_xplane(const FMC_Button *button);
+static int button_sync_deferred_until_data_success(const FMC_Data *data, const FMC_Button *button);
 
 #define SCREEN_WIDTH 48
 #define SCREEN_HEIGHT 36
@@ -422,10 +425,119 @@ static void action_exec(FMC_Data *data, const FMC_Button *button)
          data->current_page == FMC_PAGE_DESCENT))
     {
         fmc_data_activate_current_phase(data);
+        setExec();
         return;
     }
 
     fmc_data_exec_route_selection(data);
+}
+
+static const char *xplane_command_for_button(const FMC_Button *button)
+{
+    if (button == NULL)
+    {
+        return NULL;
+    }
+
+    switch (button->id)
+    {
+    case FMC_BUTTON_INIT_REF:
+        return "sim/FMS/init";
+    case FMC_BUTTON_RTE:
+        return "sim/FMS/fpln";
+    case FMC_BUTTON_CLB:
+        return "sim/FMS/clb";
+    case FMC_BUTTON_CRZ:
+        return "sim/FMS/crz";
+    case FMC_BUTTON_DES:
+        return "sim/FMS/des";
+    case FMC_BUTTON_DIR_INTC:
+        return "sim/FMS/dir_intc";
+    case FMC_BUTTON_DEP_ARR:
+        return "sim/FMS/dep_arr";
+    case FMC_BUTTON_LEGS:
+        return "sim/FMS/legs";
+    case FMC_BUTTON_HOLD:
+        return "sim/FMS/hold";
+    case FMC_BUTTON_STATUS:
+        return "sim/FMS/prog";
+    case FMC_BUTTON_FIX:
+        return "sim/FMS/fix";
+    case FMC_BUTTON_NAV_RAD:
+        return "sim/FMS/nav_rad";
+    case FMC_BUTTON_PREV_PAGE:
+        return "sim/FMS/prev";
+    case FMC_BUTTON_NEXT_PAGE:
+        return "sim/FMS/next";
+    case FMC_BUTTON_CLR:
+        return "sim/FMS/clear";
+    case FMC_BUTTON_DEL:
+        return "sim/FMS/delete";
+    case FMC_BUTTON_LSK_L1:
+        return "sim/FMS/ls_1l";
+    case FMC_BUTTON_LSK_L2:
+        return "sim/FMS/ls_2l";
+    case FMC_BUTTON_LSK_L3:
+        return "sim/FMS/ls_3l";
+    case FMC_BUTTON_LSK_L4:
+        return "sim/FMS/ls_4l";
+    case FMC_BUTTON_LSK_L5:
+        return "sim/FMS/ls_5l";
+    case FMC_BUTTON_LSK_L6:
+        return "sim/FMS/ls_6l";
+    case FMC_BUTTON_LSK_R1:
+        return "sim/FMS/ls_1r";
+    case FMC_BUTTON_LSK_R2:
+        return "sim/FMS/ls_2r";
+    case FMC_BUTTON_LSK_R3:
+        return "sim/FMS/ls_3r";
+    case FMC_BUTTON_LSK_R4:
+        return "sim/FMS/ls_4r";
+    case FMC_BUTTON_LSK_R5:
+        return "sim/FMS/ls_5r";
+    case FMC_BUTTON_LSK_R6:
+        return "sim/FMS/ls_6r";
+    case FMC_BUTTON_EXEC:
+    case FMC_BUTTON_TEXT:
+    case FMC_BUTTON_NONE:
+    default:
+        return NULL;
+    }
+}
+
+static int send_button_to_xplane(const FMC_Button *button)
+{
+    const char *command = NULL;
+
+    if (button == NULL)
+    {
+        return 0;
+    }
+
+    if (button->id == FMC_BUTTON_TEXT)
+    {
+        return 0;
+    }
+
+    command = xplane_command_for_button(button);
+    if (command == NULL)
+    {
+        return 0;
+    }
+
+    return fmc_xplane_send_command(command);
+}
+
+static int button_sync_deferred_until_data_success(const FMC_Data *data, const FMC_Button *button)
+{
+    if (data == NULL || button == NULL || data->current_page != FMC_PAGE_ROUTE)
+    {
+        return 0;
+    }
+
+    return button->line_select == FMC_LSK_L1 ||
+           button->line_select == FMC_LSK_R1 ||
+           button->line_select == FMC_LSK_R3;
 }
 
 static void action_prev_page(FMC_Data *data, const FMC_Button *button)
@@ -512,10 +624,19 @@ int fmc_key_is_page_button(const FMC_Button *button)
 
 void fmc_key_activate_button(FMC_Data *data, const FMC_Button *button)
 {
-    if (button == NULL || button->action == NULL)
+    if (button == NULL)
     {
         return;
     }
 
-    button->action(data, button);
+    if (button->id != FMC_BUTTON_EXEC &&
+        !button_sync_deferred_until_data_success(data, button))
+    {
+        send_button_to_xplane(button);
+    }
+
+    if (button->action != NULL)
+    {
+        button->action(data, button);
+    }
 }

@@ -3,13 +3,23 @@
 
 #include "../Util/SDL_Util.h"
 #include "../Util/xplaneConnect.h"
-//初始化xpc
+
+#define FMC_XPLANE_DEFAULT_IP "127.0.0.1"
+#define FMC_XPLANE_DEFAULT_PORT 49009
+
+int fmc_xplane_connect_init(const char *xp_ip, unsigned short xp_port);
+void fmc_xplane_connect_shutdown(void);
+int fmc_xplane_connect_is_ready(void);
+int fmc_xplane_connect_is_connected(void);
+int fmc_xplane_probe_connection(void);
+int fmc_xplane_send_command(const char *command);
+int fmc_xplane_send_input_char(char c);
+
 void initXpc(XPCSocket xpc);
-//设置起降机场
-void setOrigin(char *origin);
-void setDestination(char *destination);
-// 设置航班号
-void setFlt_no(char *flt_no);
-void setExec();
+
+int setOrigin(const char *origin);
+int setDestination(const char *destination);
+int setFlt_no(const char *flt_no);
+int setExec(void);
 
 #endif
