@@ -789,7 +789,8 @@ static int submit_fmc_route_to_sim_center(FMC_Data *data, SimDataCenter *sim_dat
 
     const int before_revision = sim_data_center_route_revision(sim_data_center);
     log_fmc_draft_route(data);
-    printf("FMC Route: EXEC submit requested; draft_points=%d pending_mod=%d clear_pending=%d revision_before=%d.\n",
+    printf("FMC Route: EXEC submit requested; FMC_Data=%p SimDataCenter=%p planned_route=%p draft_points=%d pending_mod=%d clear_pending=%d revision_before=%d.\n",
+           (void *)data, (void *)sim_data_center, (void *)&sim_data_center->planned_route,
            data->route_count,
            fmc_data_route_has_uncommitted_changes(data),
            fmc_data_route_clear_pending(data),
@@ -1034,8 +1035,13 @@ static void render_window(
     SDL_RenderPresent(renderer);
 }
 
-int cockpit_main_run(void)
+static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
 {
+    if (sim_data_center == NULL)
+    {
+        return -1;
+    }
+
     // 使用最近邻缩放，避免纹理缩放时产生模糊
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 
@@ -1215,41 +1221,8 @@ int cockpit_main_run(void)
     EICAS_Data eicas_data;
     XPlaneLiveData xplane_live_data;
     FMC_Data fmc_data;
-    SimDataCenter *sim_data_center = (SimDataCenter *)malloc(sizeof(*sim_data_center));
-    if (sim_data_center == NULL)
-    {
-        printf("SimDataCenter allocation failed.\n");
-        cockpit_startup_log(0, "FAILED: SimDataCenter allocation (%zu bytes).", sizeof(*sim_data_center));
-        cockpit_show_startup_error("simulation data allocation", "Unable to allocate the unified simulation data store.");
-        destroy_render_targets(&targets);
-        if (background_texture != NULL)
-        {
-            SDL_DestroyTexture(background_texture);
-        }
-        if (fmc_background_texture != NULL)
-        {
-            SDL_DestroyTexture(fmc_background_texture);
-        }
-        TTF_CloseFont(font);
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        if (cockpit_owns_ttf)
-        {
-            TTF_Quit();
-        }
-        if (cockpit_owns_sdl)
-        {
-            SDL_Quit();
-        }
-        else if (cockpit_initialized_sdl)
-        {
-            SDL_QuitSubSystem(cockpit_sdl_flags);
-        }
-        return -1;
-    }
     int eicas_data_loaded = 0;
-    const int sim_data_ready = sim_data_center_init(sim_data_center);
+    const int sim_data_ready = sim_data_center_is_ready(sim_data_center);
     const SimSnapshot *sim_snapshot = sim_data_center_snapshot(sim_data_center);
     pfd_data_init(&pfd_data);
     nd_data_init(&nd_data);
@@ -1284,6 +1257,9 @@ int cockpit_main_run(void)
         }
     }
     fmc_data_init(&fmc_data);
+    printf("Cockpit FMC: FMC_Data=%p SimDataCenter=%p planned_route=%p revision=%d.\n",
+           (void *)&fmc_data, (void *)sim_data_center, (void *)&sim_data_center->planned_route,
+           sim_data_center_route_revision(sim_data_center));
     int fmc_uses_unified_route = 0;
     if (sim_data_ready && sim_data_center_has_route(sim_data_center))
     {
@@ -1557,6 +1533,18 @@ int cockpit_main_run(void)
             }
         }
 
+        if (view_mode_before_events != view_mode &&
+            (view_mode_before_events == COCKPIT_VIEW_FMC_ZOOM || view_mode == COCKPIT_VIEW_FMC_ZOOM))
+        {
+            printf("Cockpit FMC: %s FMC_Data=%p SimDataCenter=%p revision=%d origin=%s destination=%s draft_points=%d.\n",
+                   view_mode == COCKPIT_VIEW_FMC_ZOOM ? "entered" : "left",
+                   (void *)&fmc_data, (void *)sim_data_center,
+                   sim_data_center_route_revision(sim_data_center),
+                   fmc_data.origin[0] != '\0' ? fmc_data.origin : "----",
+                   fmc_data.destination[0] != '\0' ? fmc_data.destination : "----",
+                   fmc_data.route_count);
+        }
+
         if (sim_data_ready)
         {
             if (!cockpit_view_shows_nd(view_mode_before_events) && cockpit_view_shows_nd(view_mode))
@@ -1633,8 +1621,6 @@ int cockpit_main_run(void)
     xplane_live_data_shutdown(&xplane_live_data);
     cockpit_startup_log(0, "Cockpit event loop ended normally.");
     cockpit_alarm_destroy(&cockpit_state.alarm);
-    sim_data_center_destroy(sim_data_center);
-    free(sim_data_center);
     fmc_data_destroy(&fmc_data);
     fmc_display_assets_destroy(&fmc_display_assets);
     pfd_ui_clear_text_cache(renderer);
@@ -1665,4 +1651,45 @@ int cockpit_main_run(void)
     }
 
     return 0;
+}
+
+int cockpit_main_run_with_sim_data_center(SimDataCenter *sim_data_center)
+{
+    if (sim_data_center == NULL || !sim_data_center_is_ready(sim_data_center))
+    {
+        printf("Cockpit SHARED: SimDataCenter unavailable.\n");
+        return -1;
+    }
+
+    printf("Cockpit SHARED: SimDataCenter=%p planned_route=%p revision=%d.\n",
+           (void *)sim_data_center, (void *)&sim_data_center->planned_route,
+           sim_data_center_route_revision(sim_data_center));
+    return cockpit_main_run_internal(sim_data_center);
+}
+
+int cockpit_main_run(void)
+{
+    SimDataCenter *sim_data_center = (SimDataCenter *)malloc(sizeof(*sim_data_center));
+    int result;
+
+    if (sim_data_center == NULL)
+    {
+        printf("Cockpit STANDALONE: SimDataCenter allocation failed.\n");
+        return -1;
+    }
+    if (!sim_data_center_init(sim_data_center))
+    {
+        printf("Cockpit STANDALONE: SimDataCenter initialization failed.\n");
+        sim_data_center_destroy(sim_data_center);
+        free(sim_data_center);
+        return -1;
+    }
+
+    printf("Cockpit STANDALONE: SimDataCenter=%p planned_route=%p revision=%d.\n",
+           (void *)sim_data_center, (void *)&sim_data_center->planned_route,
+           sim_data_center_route_revision(sim_data_center));
+    result = cockpit_main_run_internal(sim_data_center);
+    sim_data_center_destroy(sim_data_center);
+    free(sim_data_center);
+    return result;
 }

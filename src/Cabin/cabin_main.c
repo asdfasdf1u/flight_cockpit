@@ -162,6 +162,243 @@ static void cabin_crash_audio_destroy(Cabin_Crash_Audio *audio)
 
 #endif
 
+typedef enum Cabin_Place_Target
+{
+    CABIN_PLACE_TARGET_CURRENT = 0,
+    CABIN_PLACE_TARGET_ORIGIN,
+    CABIN_PLACE_TARGET_DESTINATION
+} Cabin_Place_Target;
+
+typedef struct Cabin_Place_Request
+{
+    Cabin_Place_Target target;
+    double latitude;
+    double longitude;
+    int latitude_grid;
+    int longitude_grid;
+    int route_revision;
+    char data_source[CABIN_TEXT_LEN];
+} Cabin_Place_Request;
+
+typedef struct Cabin_Place_Resolver
+{
+    SDL_Thread *thread;
+    SDL_atomic_t complete;
+    int success;
+    Cabin_Place_Request request;
+    Cabin_Place result;
+} Cabin_Place_Resolver;
+
+#define CABIN_PLACE_GRID_SCALE 10.0
+#define CABIN_PLACE_RETRY_SECONDS 30.0f
+
+static int cabin_place_grid(double value)
+{
+    return (int)floor(value * CABIN_PLACE_GRID_SCALE);
+}
+
+static int cabin_place_coordinates_valid(double latitude, double longitude)
+{
+    return isfinite(latitude) && isfinite(longitude) &&
+           latitude >= -90.0 && latitude <= 90.0 && longitude >= -180.0 && longitude <= 180.0;
+}
+
+static Cabin_Place *cabin_place_target(Cabin_Data *data, Cabin_Place_Target target)
+{
+    if (data == NULL)
+    {
+        return NULL;
+    }
+    if (target == CABIN_PLACE_TARGET_ORIGIN)
+    {
+        return &data->origin_place;
+    }
+    if (target == CABIN_PLACE_TARGET_DESTINATION)
+    {
+        return &data->destination_place;
+    }
+    return &data->current_place;
+}
+
+static int cabin_place_worker(void *user_data)
+{
+    Cabin_Place_Resolver *resolver = (Cabin_Place_Resolver *)user_data;
+    if (resolver == NULL)
+    {
+        return 0;
+    }
+
+    memset(&resolver->result, 0, sizeof(resolver->result));
+    resolver->result.latitude = resolver->request.latitude;
+    resolver->result.longitude = resolver->request.longitude;
+    resolver->result.latitude_grid = resolver->request.latitude_grid;
+    resolver->result.longitude_grid = resolver->request.longitude_grid;
+    resolver->result.route_revision = resolver->request.route_revision;
+    snprintf(resolver->result.source, sizeof(resolver->result.source), "%s", "AMAP");
+    snprintf(resolver->result.snapshot_source, sizeof(resolver->result.snapshot_source), "%s", resolver->request.data_source);
+    resolver->success = cabin_api_reverse_geocode(resolver->request.latitude,
+                                                   resolver->request.longitude,
+                                                   resolver->result.province,
+                                                   sizeof(resolver->result.province),
+                                                   resolver->result.city,
+                                                   sizeof(resolver->result.city),
+                                                   resolver->result.district,
+                                                   sizeof(resolver->result.district));
+    resolver->result.status = resolver->success ? CABIN_PLACE_VALID : CABIN_PLACE_FAILED;
+    SDL_AtomicSet(&resolver->complete, 1);
+    return 0;
+}
+
+static int cabin_place_request_matches(const Cabin_Data *data, const Cabin_Place_Request *request)
+{
+    double latitude = 0.0;
+    double longitude = 0.0;
+
+    if (data == NULL || request == NULL)
+    {
+        return 0;
+    }
+    if (request->target == CABIN_PLACE_TARGET_CURRENT)
+    {
+        latitude = data->latitude;
+        longitude = data->longitude;
+        return data->snapshot_valid &&
+               request->latitude_grid == cabin_place_grid(latitude) &&
+               request->longitude_grid == cabin_place_grid(longitude) &&
+               strcmp(request->data_source, data->data_source) == 0;
+    }
+
+    latitude = request->target == CABIN_PLACE_TARGET_ORIGIN ? data->origin_lat : data->destination_lat;
+    longitude = request->target == CABIN_PLACE_TARGET_ORIGIN ? data->origin_lon : data->destination_lon;
+    return data->route_valid && data->route_revision == request->route_revision &&
+           request->latitude_grid == cabin_place_grid(latitude) &&
+           request->longitude_grid == cabin_place_grid(longitude);
+}
+
+static void cabin_place_apply_completed(Cabin_Place_Resolver *resolver, Cabin_Data *data)
+{
+    Cabin_Place *target;
+
+    if (resolver == NULL || data == NULL || resolver->thread == NULL || SDL_AtomicGet(&resolver->complete) == 0)
+    {
+        return;
+    }
+
+    SDL_WaitThread(resolver->thread, NULL);
+    resolver->thread = NULL;
+    target = cabin_place_target(data, resolver->request.target);
+    if (target != NULL && cabin_place_request_matches(data, &resolver->request))
+    {
+        *target = resolver->result;
+        target->next_retry_sim_time = resolver->success ? 0.0f : data->snapshot_time + CABIN_PLACE_RETRY_SECONDS;
+        printf("Cabin Place: target=%d status=%s lat=%.6f lon=%.6f route_rev=%d city=%s.\n",
+               resolver->request.target, resolver->success ? "VALID" : "FAILED",
+               resolver->request.latitude, resolver->request.longitude, resolver->request.route_revision,
+               resolver->success ? target->city : "----");
+    }
+    else
+    {
+        printf("Cabin Place: discarded stale target=%d route_rev=%d.\n",
+               resolver->request.target, resolver->request.route_revision);
+        if (target != NULL && target->status == CABIN_PLACE_PENDING)
+        {
+            memset(target, 0, sizeof(*target));
+        }
+    }
+}
+
+static int cabin_place_should_request(const Cabin_Place *place, double latitude, double longitude, int route_revision, float sim_time, const char *source)
+{
+    const int latitude_grid = cabin_place_grid(latitude);
+    const int longitude_grid = cabin_place_grid(longitude);
+
+    if (place == NULL || !cabin_place_coordinates_valid(latitude, longitude) || place->status == CABIN_PLACE_PENDING)
+    {
+        return 0;
+    }
+    if (place->status == CABIN_PLACE_VALID && place->latitude_grid == latitude_grid &&
+        place->longitude_grid == longitude_grid && place->route_revision == route_revision &&
+        (source == NULL || strcmp(place->snapshot_source, source) == 0))
+    {
+        return 0;
+    }
+    return place->status != CABIN_PLACE_FAILED || sim_time >= place->next_retry_sim_time;
+}
+
+static void cabin_place_schedule(Cabin_Place_Resolver *resolver, Cabin_Data *data)
+{
+    Cabin_Place_Target targets[] = {CABIN_PLACE_TARGET_ORIGIN, CABIN_PLACE_TARGET_DESTINATION, CABIN_PLACE_TARGET_CURRENT};
+
+    if (resolver == NULL || data == NULL || resolver->thread != NULL)
+    {
+        return;
+    }
+
+    for (int i = 0; i < (int)(sizeof(targets) / sizeof(targets[0])); ++i)
+    {
+        const Cabin_Place_Target type = targets[i];
+        Cabin_Place *place = cabin_place_target(data, type);
+        const double latitude = type == CABIN_PLACE_TARGET_ORIGIN ? data->origin_lat :
+                                (type == CABIN_PLACE_TARGET_DESTINATION ? data->destination_lat : data->latitude);
+        const double longitude = type == CABIN_PLACE_TARGET_ORIGIN ? data->origin_lon :
+                                 (type == CABIN_PLACE_TARGET_DESTINATION ? data->destination_lon : data->longitude);
+        const int route_revision = type == CABIN_PLACE_TARGET_CURRENT ? -1 : data->route_revision;
+        const char *source = type == CABIN_PLACE_TARGET_CURRENT ? data->data_source : "ROUTE";
+        const int available = type == CABIN_PLACE_TARGET_CURRENT ? data->snapshot_valid : data->route_valid;
+
+        if (!available || !cabin_place_should_request(place, latitude, longitude, route_revision, data->snapshot_time, source))
+        {
+            continue;
+        }
+
+        memset(&resolver->request, 0, sizeof(resolver->request));
+        resolver->request.target = type;
+        resolver->request.latitude = latitude;
+        resolver->request.longitude = longitude;
+        resolver->request.latitude_grid = cabin_place_grid(latitude);
+        resolver->request.longitude_grid = cabin_place_grid(longitude);
+        resolver->request.route_revision = route_revision;
+        snprintf(resolver->request.data_source, sizeof(resolver->request.data_source), "%s", source);
+        place->status = CABIN_PLACE_PENDING;
+        place->latitude = latitude;
+        place->longitude = longitude;
+        place->latitude_grid = resolver->request.latitude_grid;
+        place->longitude_grid = resolver->request.longitude_grid;
+        place->route_revision = route_revision;
+        SDL_AtomicSet(&resolver->complete, 0);
+        resolver->thread = SDL_CreateThread(cabin_place_worker, "cabin-place", resolver);
+        if (resolver->thread == NULL)
+        {
+            place->status = CABIN_PLACE_FAILED;
+            place->next_retry_sim_time = data->snapshot_time + CABIN_PLACE_RETRY_SECONDS;
+            printf("Cabin Place: failed to start resolver thread.\n");
+        }
+        return;
+    }
+}
+
+static void cabin_place_apply_labels(Cabin_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+    if (data->origin_place.status == CABIN_PLACE_VALID)
+    {
+        snprintf(data->origin_city, sizeof(data->origin_city), "%s", data->origin_place.city);
+    }
+    if (data->destination_place.status == CABIN_PLACE_VALID)
+    {
+        snprintf(data->destination_city, sizeof(data->destination_city), "%s", data->destination_place.city);
+    }
+    if (data->current_place.status == CABIN_PLACE_VALID)
+    {
+        snprintf(data->current_city, sizeof(data->current_city), "%s", data->current_place.city);
+        snprintf(data->current_district, sizeof(data->current_district), "%s", data->current_place.district);
+        snprintf(data->current_town, sizeof(data->current_town), "%s", data->current_place.province);
+    }
+}
+
 static void resolve_weather_city(const Cabin_Data *data, char *city, size_t city_size, char *adcode, size_t adcode_size)
 {
     if (city != NULL && city_size > 0)
@@ -374,7 +611,7 @@ static void destroy_assets(Cabin_Assets *assets)
     }
 }
 
-static int cabin_main_run_internal(const SimDataCenter *sim_data_center, SimDataCenter *updatable_data_center)
+static int cabin_main_run_internal(SimDataCenter *sim_data_center, int shared_mode)
 {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
     {
@@ -442,7 +679,16 @@ static int cabin_main_run_internal(const SimDataCenter *sim_data_center, SimData
     Cabin_Data data;
     cabin_data_init(&data);
     cabin_data_apply_sim_data_center(&data, sim_data_center, 0.0f);
-    printf("Cabin: using the read-only SimDataCenter view for flight state and planned route.\n");
+    Cabin_Place_Resolver place_resolver;
+    memset(&place_resolver, 0, sizeof(place_resolver));
+    printf("Cabin %s: SimDataCenter=%p planned_route=%p revision=%d origin=%s destination=%s points=%d; active view is the unified updater.\n",
+           shared_mode ? "SHARED" : "STANDALONE",
+           (void *)sim_data_center,
+           sim_data_center != NULL ? (void *)&sim_data_center->planned_route : NULL,
+           data.route_revision,
+           data.origin_airport[0] != '\0' ? data.origin_airport : "----",
+           data.destination_airport[0] != '\0' ? data.destination_airport : "----",
+           data.route_point_count);
     fflush(stdout);
 
     Cabin_Assets assets;
@@ -496,6 +742,7 @@ static int cabin_main_run_internal(const SimDataCenter *sim_data_center, SimData
     int running = 1;
     SDL_Event event;
     Uint32 last_ticks = SDL_GetTicks();
+    Uint32 last_snapshot_log_ticks = 0;
 
     while (running)
     {
@@ -520,11 +767,32 @@ static int cabin_main_run_internal(const SimDataCenter *sim_data_center, SimData
         const Uint32 now = SDL_GetTicks();
         float delta_time = (float)(now - last_ticks) / 1000.0f;
         last_ticks = now;
-        if (updatable_data_center != NULL)
+        /* Launcher runs views sequentially, so the active view is the sole updater. */
+        if (sim_data_center != NULL)
         {
-            sim_data_center_update(updatable_data_center, delta_time);
+            sim_data_center_update(sim_data_center, delta_time);
         }
         const int data_changes = cabin_data_apply_sim_data_center(&data, sim_data_center, delta_time);
+        cabin_place_apply_completed(&place_resolver, &data);
+        cabin_place_schedule(&place_resolver, &data);
+        cabin_place_apply_labels(&data);
+        if (last_snapshot_log_ticks == 0 || now - last_snapshot_log_ticks >= 1000u)
+        {
+            const SimSnapshot *snapshot = sim_data_center_snapshot(sim_data_center);
+            last_snapshot_log_ticks = now;
+            printf("Cabin Snapshot: SimDataCenter=%p frame=%d updated_frame=%d time=%.2f lat=%.6f lon=%.6f alt=%.0f gs=%.0f vs=%.0f source=%s valid=%d.\n",
+                   (void *)sim_data_center,
+                   snapshot != NULL ? snapshot->current_frame : -1,
+                   snapshot != NULL ? snapshot->updated_frame : -1,
+                   snapshot != NULL ? snapshot->sim_time : 0.0f,
+                   snapshot != NULL ? snapshot->latitude : 0.0,
+                   snapshot != NULL ? snapshot->longitude : 0.0,
+                   snapshot != NULL ? snapshot->altitude : 0.0f,
+                   snapshot != NULL ? snapshot->ground_speed : 0.0f,
+                   snapshot != NULL ? snapshot->vertical_speed : 0.0f,
+                   snapshot != NULL ? sim_snapshot_source_name(snapshot->source) : "NONE",
+                   snapshot != NULL ? snapshot->data_valid : 0);
+        }
         if ((data_changes & CABIN_DATA_UPDATE_ROUTE) != 0)
         {
             if (assets.map_texture != NULL)
@@ -551,6 +819,11 @@ static int cabin_main_run_internal(const SimDataCenter *sim_data_center, SimData
         }
     }
 
+    if (place_resolver.thread != NULL)
+    {
+        SDL_WaitThread(place_resolver.thread, NULL);
+        place_resolver.thread = NULL;
+    }
     destroy_assets(&assets);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
@@ -571,17 +844,18 @@ int cabin_main_run(void)
     }
 
     sim_data_center_init(sim_data_center);
-    const int result = cabin_main_run_internal(sim_data_center, sim_data_center);
+    const int result = cabin_main_run_internal(sim_data_center, 0);
     sim_data_center_destroy(sim_data_center);
     free(sim_data_center);
     return result;
 }
 
-int cabin_main_run_with_sim_data_center(const SimDataCenter *sim_data_center)
+int cabin_main_run_with_sim_data_center(SimDataCenter *sim_data_center)
 {
-    if (sim_data_center == NULL)
+    if (sim_data_center == NULL || !sim_data_center_is_ready(sim_data_center))
     {
+        printf("Cabin SHARED: SimDataCenter unavailable.\n");
         return -1;
     }
-    return cabin_main_run_internal(sim_data_center, NULL);
+    return cabin_main_run_internal(sim_data_center, 1);
 }

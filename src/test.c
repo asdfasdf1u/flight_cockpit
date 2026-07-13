@@ -11,6 +11,7 @@
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include <windows.h>
 
@@ -40,6 +41,10 @@ int fmc_main_run(void);
 
 #if defined(TEST_MODULE_CABIN) || defined(TEST_MODULE_LAUNCHER)
 #include "Cabin/cabin_main.h"
+#endif
+
+#ifdef TEST_MODULE_LAUNCHER
+#include "Data/sim_data_center.h"
 #endif
 
 #ifdef TEST_MODULE_LAUNCHER
@@ -347,8 +352,25 @@ static LauncherChoice run_launcher_window(void)
 static int run_launcher(void)
 {
     int exit_code = 0;
+    SimDataCenter *shared_sim_data_center = (SimDataCenter *)malloc(sizeof(*shared_sim_data_center));
 
     launcher_runtime_log(1, "Launcher process started.");
+    if (shared_sim_data_center == NULL)
+    {
+        launcher_runtime_log(0, "FAILED: shared SimDataCenter allocation.");
+        return -1;
+    }
+    if (!sim_data_center_init(shared_sim_data_center))
+    {
+        launcher_runtime_log(0, "FAILED: shared SimDataCenter initialization.");
+        sim_data_center_destroy(shared_sim_data_center);
+        free(shared_sim_data_center);
+        return -1;
+    }
+    launcher_runtime_log(0, "Shared SimDataCenter=%p planned_route=%p revision=%d.",
+                         (void *)shared_sim_data_center,
+                         (void *)&shared_sim_data_center->planned_route,
+                         sim_data_center_route_revision(shared_sim_data_center));
 
     for (;;)
     {
@@ -361,15 +383,21 @@ static int run_launcher(void)
 
         if (choice == LAUNCHER_CHOICE_COCKPIT)
         {
-            launcher_runtime_log(0, "Calling cockpit_main_run.");
-            exit_code = cockpit_main_run();
-            launcher_runtime_log(0, "cockpit_main_run returned %d.", exit_code);
+            launcher_runtime_log(0, "Calling cockpit_main_run_with_sim_data_center(%p).", (void *)shared_sim_data_center);
+            exit_code = cockpit_main_run_with_sim_data_center(shared_sim_data_center);
+            launcher_runtime_log(0, "Cockpit returned %d; shared revision=%d.", exit_code,
+                                 sim_data_center_route_revision(shared_sim_data_center));
         }
         else if (choice == LAUNCHER_CHOICE_CABIN)
         {
-            launcher_runtime_log(0, "Calling cabin_main_run.");
-            exit_code = cabin_main_run();
-            launcher_runtime_log(0, "cabin_main_run returned %d.", exit_code);
+            launcher_runtime_log(0, "Calling cabin_main_run_with_sim_data_center(%p).", (void *)shared_sim_data_center);
+            exit_code = cabin_main_run_with_sim_data_center(shared_sim_data_center);
+            launcher_runtime_log(0, "Cabin returned %d; shared revision=%d origin=%s destination=%s points=%d.",
+                                 exit_code,
+                                 sim_data_center_route_revision(shared_sim_data_center),
+                                 shared_sim_data_center->planned_route.origin,
+                                 shared_sim_data_center->planned_route.destination,
+                                 shared_sim_data_center->planned_route.point_count);
         }
 
         if (exit_code != 0)
@@ -378,6 +406,11 @@ static int run_launcher(void)
         }
     }
 
+    launcher_runtime_log(0, "Destroying shared SimDataCenter=%p revision=%d.",
+                         (void *)shared_sim_data_center,
+                         sim_data_center_route_revision(shared_sim_data_center));
+    sim_data_center_destroy(shared_sim_data_center);
+    free(shared_sim_data_center);
     launcher_runtime_log(0, "Launcher process exiting with code=%d.", exit_code);
     return exit_code;
 }

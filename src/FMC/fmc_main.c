@@ -145,6 +145,7 @@ int fmc_main_run(void)
 
     FMC_Data data;
     fmc_data_init(&data);
+    printf("FMC STANDALONE: no shared SimDataCenter; EXEC is demonstration-only and does not publish a Cabin route.\n");
 
     FMC_Event_State ui_state;
     fmc_event_state_init(&ui_state);

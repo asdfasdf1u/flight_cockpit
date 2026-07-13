@@ -389,6 +389,25 @@ static void cabin_data_fit_map_bounds_to_route(Cabin_Data *data)
     cabin_data_build_map_cache_path(data);
 }
 
+static void cabin_data_fit_map_bounds_to_position(Cabin_Data *data)
+{
+    const double latitude_span = 0.36;
+    const double longitude_span = 0.48;
+
+    if (data == NULL || !cabin_data_valid_geo(data->latitude, data->longitude))
+    {
+        return;
+    }
+
+    data->map_center_lat = data->latitude;
+    data->map_center_lon = data->longitude;
+    data->map_top_left_lat = data->latitude + latitude_span * 0.5;
+    data->map_bottom_right_lat = data->latitude - latitude_span * 0.5;
+    data->map_top_left_lon = data->longitude - longitude_span * 0.5;
+    data->map_bottom_right_lon = data->longitude + longitude_span * 0.5;
+    data->map_zoom = 10;
+}
+
 #if 0 /* Retired helpers for synthetic Cabin position updates. */
 static void cabin_data_interpolate_planned_route(const Cabin_Data *data, float progress, double *latitude, double *longitude)
 {
@@ -787,12 +806,43 @@ static void cabin_data_clear_route_view(Cabin_Data *data)
     copy_text(data->destination_airport, sizeof(data->destination_airport), "----");
     copy_text(data->planned_route_source, sizeof(data->planned_route_source), "NONE");
     memset(data->planned_route, 0, sizeof(data->planned_route));
+    memset(&data->origin_place, 0, sizeof(data->origin_place));
+    memset(&data->destination_place, 0, sizeof(data->destination_place));
     data->flown_track_count = 0;
+}
+
+static const SimRoutePoint *cabin_data_find_route_endpoint(const SimPlannedRoute *route, const char *ident)
+{
+    if (route == NULL || ident == NULL || ident[0] == '\0')
+    {
+        return NULL;
+    }
+
+    for (int i = 0; i < route->point_count; ++i)
+    {
+        const SimRoutePoint *point = &route->points[i];
+        if (point->has_position && cabin_data_valid_geo(point->latitude, point->longitude) &&
+            strcmp(point->ident, ident) == 0 && strcmp(point->type, "AIRPORT") == 0)
+        {
+            return point;
+        }
+    }
+    for (int i = 0; i < route->point_count; ++i)
+    {
+        const SimRoutePoint *point = &route->points[i];
+        if (point->has_position && cabin_data_valid_geo(point->latitude, point->longitude) && strcmp(point->ident, ident) == 0)
+        {
+            return point;
+        }
+    }
+    return NULL;
 }
 
 static void cabin_data_apply_route_view(Cabin_Data *data, const SimPlannedRoute *route, int route_revision)
 {
     int copied_points = 0;
+    const SimRoutePoint *origin_point;
+    const SimRoutePoint *destination_point;
 
     cabin_data_clear_route_view(data);
     data->route_revision = route_revision;
@@ -810,6 +860,8 @@ static void cabin_data_apply_route_view(Cabin_Data *data, const SimPlannedRoute 
     copy_text(data->destination_city, sizeof(data->destination_city), route->destination);
     copy_text(data->destination_airport, sizeof(data->destination_airport), route->destination);
     copy_text(data->planned_route_source, sizeof(data->planned_route_source), sim_data_center_route_source_name(route->source));
+    origin_point = cabin_data_find_route_endpoint(route, route->origin);
+    destination_point = cabin_data_find_route_endpoint(route, route->destination);
 
     for (int i = 0; i < route->point_count && copied_points < CABIN_PLANNED_ROUTE_MAX_POINTS; ++i)
     {
@@ -833,14 +885,25 @@ static void cabin_data_apply_route_view(Cabin_Data *data, const SimPlannedRoute 
     {
         copy_text(data->active_waypoint, sizeof(data->active_waypoint), route->points[route->active_waypoint_index].ident);
     }
+    if (origin_point != NULL)
+    {
+        data->origin_lat = origin_point->latitude;
+        data->origin_lon = origin_point->longitude;
+    }
+    if (destination_point != NULL)
+    {
+        data->destination_lat = destination_point->latitude;
+        data->destination_lon = destination_point->longitude;
+    }
     if (copied_points > 0)
     {
-        data->origin_lat = data->planned_route[0].latitude;
-        data->origin_lon = data->planned_route[0].longitude;
-        data->destination_lat = data->planned_route[copied_points - 1].latitude;
-        data->destination_lon = data->planned_route[copied_points - 1].longitude;
         cabin_data_fit_map_bounds_to_route(data);
     }
+    printf("Cabin Route: revision=%d origin=%s lat=%.6f lon=%.6f endpoint=%s; destination=%s lat=%.6f lon=%.6f endpoint=%s.\n",
+           route_revision, route->origin, data->origin_lat, data->origin_lon,
+           origin_point != NULL ? "MATCHED" : "MISSING",
+           route->destination, data->destination_lat, data->destination_lon,
+           destination_point != NULL ? "MATCHED" : "MISSING");
 }
 
 int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCenter *center, float delta_time)
@@ -934,9 +997,22 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
                                                                    route->points[route->active_waypoint_index].longitude)
                                           : 0.0f;
         data->remaining_time_min = data->ground_speed > 1.0f ? data->distance_to_destination_nm * 60.0f / data->ground_speed : 0.0f;
-        copy_text(data->current_city, sizeof(data->current_city), data->route_valid ? "EN ROUTE" : "POSITION AVAILABLE");
-        copy_text(data->current_district, sizeof(data->current_district), data->flight_phase);
-        copy_text(data->current_town, sizeof(data->current_town), data->active_waypoint[0] != '\0' ? data->active_waypoint : "----");
+        if (!data->route_valid)
+        {
+            cabin_data_fit_map_bounds_to_position(data);
+        }
+        if (data->current_place.status == CABIN_PLACE_VALID)
+        {
+            copy_text(data->current_city, sizeof(data->current_city), data->current_place.city);
+            copy_text(data->current_district, sizeof(data->current_district), data->current_place.district);
+            copy_text(data->current_town, sizeof(data->current_town), data->current_place.province);
+        }
+        else
+        {
+            copy_text(data->current_city, sizeof(data->current_city), data->route_valid ? "EN ROUTE" : "POSITION AVAILABLE");
+            copy_text(data->current_district, sizeof(data->current_district), data->flight_phase);
+            copy_text(data->current_town, sizeof(data->current_town), data->active_waypoint[0] != '\0' ? data->active_waypoint : "----");
+        }
         cabin_data_update_flown_track(data, delta_time > 0.0f ? delta_time : 0.0f, 0);
     }
 

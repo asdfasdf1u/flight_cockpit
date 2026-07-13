@@ -404,11 +404,17 @@ static void draw_location_panel(SDL_Renderer *renderer, const Cabin_Assets *asse
 {
     const int header_h = 44;
     const int row_h = 46;
+    const Cabin_Place *place = data != NULL ? &data->current_place : NULL;
+    const int resolving = place != NULL && place->status == CABIN_PLACE_PENDING;
+    const int valid = place != NULL && place->status == CABIN_PLACE_VALID;
+    const char *province = valid ? safe_text_or(place->province, "--") : (resolving ? "解析中" : "--");
+    const char *city = valid ? safe_text_or(place->city, "--") : (resolving ? "解析中" : "--");
+    const char *district = valid ? safe_text_or(place->district, "--") : (resolving ? "解析中" : "--");
 
     draw_panel_header(renderer, assets->title_font, &(SDL_Rect){x, y, w, header_h}, "地点信息");
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "%s", safe_text_or(data->current_city, "飞行途中"));
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "%s", safe_text_or(data->current_district, "未知区域"));
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "%s", safe_text_or(data->current_town, "未知位置"));
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "省：%s", province);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "市：%s", city);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "县/区：%s", district);
     draw_rect(renderer, &(SDL_Rect){x, y, w, header_h + row_h * 3}, COLOR_TEXT_DARK);
 }
 
@@ -837,27 +843,53 @@ static void draw_flight_info_bar(SDL_Renderer *renderer, const Cabin_Assets *ass
     const int text_w = progress_x - bar.x - 34;
     const SDL_Rect text_clip = {bar.x + 14, bar.y + 8, text_w > 220 ? text_w : 220, bar.h - 16};
     const SDL_Rect progress_clip = {progress_x, bar.y + 8, progress_w + 4, bar.h - 16};
+    const int route_ready = data != NULL && data->route_valid && data->route_point_count >= 2 &&
+                            data->origin_airport[0] != '\0' && data->destination_airport[0] != '\0' &&
+                            strcmp(data->origin_airport, "----") != 0 && strcmp(data->destination_airport, "----") != 0;
+    const int snapshot_ready = data != NULL && data->snapshot_valid;
+    const int origin_city_valid = route_ready && data->origin_place.status == CABIN_PLACE_VALID && data->origin_place.city[0] != '\0';
+    const int destination_city_valid = route_ready && data->destination_place.status == CABIN_PLACE_VALID && data->destination_place.city[0] != '\0';
+    const char *origin_display = origin_city_valid ? data->origin_place.city : (route_ready ? data->origin_airport : "");
+    const char *destination_display = destination_city_valid ? data->destination_place.city : (route_ready ? data->destination_airport : "");
 
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     fill_rect(renderer, &bar, COLOR_BLACK_OVERLAY);
     draw_rect(renderer, &bar, COLOR_ROUTE_SOFT);
 
-    draw_text_clipped(renderer, assets->title_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 10, "%s -> %s",
-              data->origin_city,
-              data->destination_city);
-    draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   速度 %.0fkm/h   剩余 %.0f分钟",
-              data->altitude,
-              data->ground_speed,
-              data->remaining_time_min);
+    if (route_ready)
+    {
+        draw_text_clipped(renderer, assets->title_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 10, "%s -> %s",
+                          origin_display, destination_display);
+    }
+    else
+    {
+        draw_text_clipped(renderer, assets->title_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 10, "未设置航路");
+    }
+    if (snapshot_ready && route_ready)
+    {
+        draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   速度 %.0fkm/h   剩余 %.0f分钟",
+                          data->altitude, data->ground_speed, data->remaining_time_min);
+    }
+    else if (snapshot_ready)
+    {
+        draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   速度 %.0fkm/h   剩余 --",
+                          data->altitude, data->ground_speed);
+    }
+    else
+    {
+        draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 --   速度 --   剩余 --");
+    }
     draw_text_clipped(renderer, assets->small_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 73, "航班 %s  机场 %s -> %s",
-              data->flight_no,
-              data->origin_airport,
-              data->destination_airport);
+                      safe_text_or(data->flight_no, "----"),
+                      route_ready ? data->origin_airport : "--",
+                      route_ready ? data->destination_airport : "--");
 
-    const float progress = clamp_float(data->progress, 0.0f, 1.0f);
+    const float progress = route_ready && snapshot_ready ? clamp_float(data->progress, 0.0f, 1.0f) : 0.0f;
     const SDL_Rect progress_bg = {progress_x, progress_y, progress_w, 12};
     const SDL_Rect progress_fg = {progress_x, progress_y, (int)((float)progress_w * progress), 12};
-    draw_text_clipped(renderer, assets->font, COLOR_WHITE, &progress_clip, progress_x, bar.y + 34, "进度 %.0f%%", progress * 100.0f);
+    draw_text_clipped(renderer, assets->font, COLOR_WHITE, &progress_clip, progress_x, bar.y + 34,
+                      route_ready && snapshot_ready ? "进度 %.0f%%" : "进度 --",
+                      progress * 100.0f);
     fill_rect(renderer, &progress_bg, COLOR_PROGRESS_BG);
     fill_rect(renderer, &progress_fg, COLOR_ROUTE);
     draw_rect(renderer, &progress_bg, COLOR_WHITE);

@@ -17,6 +17,30 @@ enum
     CABIN_DATA_UPDATE_VALIDITY = 1 << 1
 };
 
+typedef enum Cabin_Place_Status
+{
+    CABIN_PLACE_EMPTY = 0,
+    CABIN_PLACE_PENDING,
+    CABIN_PLACE_VALID,
+    CABIN_PLACE_FAILED
+} Cabin_Place_Status;
+
+typedef struct Cabin_Place
+{
+    Cabin_Place_Status status;
+    double latitude;
+    double longitude;
+    int latitude_grid;
+    int longitude_grid;
+    int route_revision;
+    float next_retry_sim_time;
+    char source[CABIN_TEXT_LEN];
+    char snapshot_source[CABIN_TEXT_LEN];
+    char province[CABIN_TEXT_LEN];
+    char city[CABIN_TEXT_LEN];
+    char district[CABIN_TEXT_LEN];
+} Cabin_Place;
+
 typedef struct Cabin_Trajectory_Point
 {
     char ident[CABIN_TEXT_LEN];
@@ -69,6 +93,9 @@ typedef struct Cabin_Data
     int engine_left_running;
     int engine_right_running;
     AlertSnapshot alerts;
+    Cabin_Place current_place;
+    Cabin_Place origin_place;
+    Cabin_Place destination_place;
     char flight_phase[CABIN_TEXT_LEN];
     int route_valid;
     int route_revision;
