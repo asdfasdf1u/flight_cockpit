@@ -1,3 +1,4 @@
+//在屏幕上的显示模块
 #include "fmc_display.h"
 
 #include "fmc_key.h"

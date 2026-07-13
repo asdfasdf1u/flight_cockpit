@@ -1,3 +1,4 @@
+//完成设置后将信息同步给xplane
 #include "fmc_connect.h"
 #include <stdio.h>
 // 补充缺失的头文件：strlen()函数声明在此处

@@ -1,3 +1,4 @@
+//按键对应需要执行的事件函数
 #include "fmc_event.h"
 
 #include "fmc_display.h"
