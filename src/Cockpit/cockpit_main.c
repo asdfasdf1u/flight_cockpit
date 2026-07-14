@@ -46,8 +46,10 @@ int fmc_xplane_send_command(const char *command);
 #define COCKPIT_WINDOW_WIDTH 1600
 #define COCKPIT_WINDOW_HEIGHT 900
 #define COCKPIT_TARGET_FRAME_MS 16
-#define COCKPIT_PFD_TARGET_FRAME_MS 33
+#define COCKPIT_PFD_TARGET_FRAME_MS COCKPIT_TARGET_FRAME_MS
 #define COCKPIT_SYNC_CHECK_LOG_MS 5000
+#define COCKPIT_PFD_PERF_LOG_MS 2000
+#define COCKPIT_SCENE_TEXTURE_MAX_WIDTH 2048
 
 #define COCKPIT_PFD_TEXTURE_WIDTH 900
 #define COCKPIT_PFD_TEXTURE_HEIGHT 800
@@ -302,9 +304,36 @@ static SDL_Texture *create_target_texture(SDL_Renderer *renderer, int width, int
     return texture;
 }
 
+static void cockpit_scene_texture_dimensions(int world_width, int world_height, int *texture_width, int *texture_height)
+{
+    float scale;
+
+    if (texture_width == NULL || texture_height == NULL || world_width <= 0 || world_height <= 0)
+    {
+        return;
+    }
+
+    scale = (float)COCKPIT_SCENE_TEXTURE_MAX_WIDTH / (float)world_width;
+    if (scale > 1.0f)
+    {
+        scale = 1.0f;
+    }
+    *texture_width = (int)((float)world_width * scale + 0.5f);
+    *texture_height = (int)((float)world_height * scale + 0.5f);
+}
+
 static int create_render_targets(SDL_Renderer *renderer, Cockpit_RenderTargets *targets, int world_width, int world_height)
 {
+    int scene_width = 0;
+    int scene_height = 0;
+
     if (renderer == NULL || targets == NULL)
+    {
+        return 0;
+    }
+
+    cockpit_scene_texture_dimensions(world_width, world_height, &scene_width, &scene_height);
+    if (scene_width <= 0 || scene_height <= 0)
     {
         return 0;
     }
@@ -314,7 +343,7 @@ static int create_render_targets(SDL_Renderer *renderer, Cockpit_RenderTargets *
     targets->eicas1_texture = create_target_texture(renderer, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
     targets->eicas2_texture = create_target_texture(renderer, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
     targets->fmc_texture = create_target_texture(renderer, COCKPIT_FMC_TEXTURE_WIDTH, COCKPIT_FMC_TEXTURE_HEIGHT);
-    targets->scene_texture = create_target_texture(renderer, world_width, world_height);
+    targets->scene_texture = create_target_texture(renderer, scene_width, scene_height);
 
     return targets->pfd_texture != NULL &&
            targets->nd_texture != NULL &&
@@ -507,11 +536,21 @@ static void update_module_textures(
     const AircraftSystems_Data *systems_data,
     const FMC_Display_Assets *fmc_assets,
     const FMC_Event_State *fmc_state,
-    const FMC_Data *fmc_data)
+    const FMC_Data *fmc_data,
+    Uint32 *pfd_render_elapsed_ms)
 {
+    if (pfd_render_elapsed_ms != NULL)
+    {
+        *pfd_render_elapsed_ms = 0;
+    }
     if (refresh_pfd)
     {
+        const Uint32 pfd_render_start = SDL_GetTicks();
         render_to_texture(renderer, targets->pfd_texture, render_pfd_adapter, font, pfd_data);
+        if (pfd_render_elapsed_ms != NULL)
+        {
+            *pfd_render_elapsed_ms = SDL_GetTicks() - pfd_render_start;
+        }
     }
     render_to_texture(renderer, targets->nd_texture, render_nd_adapter, font, nd_data);
     render_to_texture(renderer, targets->eicas1_texture, render_eicas1_adapter, font, systems_data);
@@ -530,8 +569,24 @@ static void update_scene_texture(
     const CockpitAlarmState *alarm_state,
     Uint32 ticks)
 {
+    int scene_width = 0;
+    int scene_height = 0;
+    float scene_scale = 1.0f;
+
+    if (renderer == NULL || targets == NULL || targets->scene_texture == NULL || layout == NULL)
+    {
+        return;
+    }
+    if (SDL_QueryTexture(targets->scene_texture, NULL, NULL, &scene_width, &scene_height) != 0 ||
+        scene_width <= 0 || scene_height <= 0)
+    {
+        return;
+    }
+    scene_scale = (float)scene_width / (float)layout->world_width;
+
     SDL_SetRenderTarget(renderer, targets->scene_texture);
     SDL_RenderSetViewport(renderer, NULL);
+    SDL_RenderSetScale(renderer, scene_scale, scene_scale);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
@@ -552,6 +607,7 @@ static void update_scene_texture(
 
     SDL_SetRenderTarget(renderer, NULL);
     SDL_RenderSetViewport(renderer, NULL);
+    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
 }
 
 static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapshot)
@@ -1334,7 +1390,13 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center, const Cockp
         }
         return -1;
     }
-    cockpit_startup_log(0, "Render targets created (%d x %d).", layout.world_width, layout.world_height);
+    {
+        int scene_width = 0;
+        int scene_height = 0;
+        SDL_QueryTexture(targets.scene_texture, NULL, NULL, &scene_width, &scene_height);
+        cockpit_startup_log(0, "Render targets created (world=%d x %d, scene=%d x %d).",
+                            layout.world_width, layout.world_height, scene_width, scene_height);
+    }
 
     PFD_Data pfd_data;
     ND_Data nd_data;
@@ -1436,6 +1498,10 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center, const Cockp
     Uint32 last_ticks = SDL_GetTicks();
     Uint32 last_pfd_render_ticks = 0;
     Uint32 last_sync_check_log_ticks = 0;
+    Uint32 pfd_perf_window_start_ticks = last_ticks;
+    unsigned int pfd_perf_render_count = 0;
+    unsigned int pfd_perf_skipped_count = 0;
+    Uint64 pfd_perf_total_render_ms = 0;
 
     while (running)
     {
@@ -1727,7 +1793,34 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center, const Cockp
             last_pfd_render_ticks = current_ticks;
         }
 
-        update_module_textures(renderer, font, &targets, refresh_pfd, &pfd_data, &nd_data, &systems_data, &fmc_display_assets, &fmc_event_state, &fmc_data);
+        Uint32 pfd_render_elapsed_ms = 0;
+        update_module_textures(renderer, font, &targets, refresh_pfd, &pfd_data, &nd_data, &systems_data,
+                               &fmc_display_assets, &fmc_event_state, &fmc_data, &pfd_render_elapsed_ms);
+        if (refresh_pfd)
+        {
+            ++pfd_perf_render_count;
+            pfd_perf_total_render_ms += pfd_render_elapsed_ms;
+        }
+        else
+        {
+            ++pfd_perf_skipped_count;
+        }
+        if (current_ticks - pfd_perf_window_start_ticks >= COCKPIT_PFD_PERF_LOG_MS)
+        {
+            const float average_pfd_render_ms = pfd_perf_render_count > 0
+                                                    ? (float)pfd_perf_total_render_ms / (float)pfd_perf_render_count
+                                                    : 0.0f;
+            printf("Cockpit PFD Perf: interval=%ums renders=%u skipped=%u avg_render=%.2fms target=%dms.\n",
+                   current_ticks - pfd_perf_window_start_ticks,
+                   pfd_perf_render_count,
+                   pfd_perf_skipped_count,
+                   average_pfd_render_ms,
+                   COCKPIT_PFD_TARGET_FRAME_MS);
+            pfd_perf_window_start_ticks = current_ticks;
+            pfd_perf_render_count = 0;
+            pfd_perf_skipped_count = 0;
+            pfd_perf_total_render_ms = 0;
+        }
         update_scene_texture(renderer, font, &targets, &layout, background_texture, &cockpit_state.alarm, current_ticks);
         render_window(renderer, font, &targets, &layout, &camera, view_mode, selected_fmc, fmc_background_texture, show_fmc_debug, window_width, window_height);
 
