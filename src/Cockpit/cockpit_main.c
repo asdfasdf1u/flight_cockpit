@@ -1740,11 +1740,11 @@ static int cockpit_main_run_internal(
                 }
                 else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_p)
                 {
-                    sim_data_center_set_cockpit_fire_demo(sim_data_center, 1);
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 1);
                 }
                 else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_o)
                 {
-                    sim_data_center_set_cockpit_fire_demo(sim_data_center, 0);
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 0);
                 }
                 else if (event.key.repeat == 0 &&
                          view_mode == COCKPIT_VIEW_ND_ZOOM &&
