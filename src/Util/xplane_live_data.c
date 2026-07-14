@@ -18,6 +18,15 @@
 #define XPLANE_LIVE_OIL_QUANTITY_FULL_SCALE_QT 20.0f
 #define XPLANE_LIVE_VIBRATION_MAX_HZ 100.0f
 #define XPLANE_LIVE_VIBRATION_DISPLAY_MAX 5.0f
+#define XPLANE_LIVE_MIN_TRACK_GROUND_SPEED_KT 5.0f
+#define XPLANE_RREF_FREQUENCY_HZ 30
+#define XPLANE_RREF_PATH_BYTES 400
+#define XPLANE_RREF_REQUEST_BYTES (5 + 4 + 4 + XPLANE_RREF_PATH_BYTES)
+#define XPLANE_RREF_RESPONSE_HEADER_BYTES 5
+#define XPLANE_RREF_RESPONSE_RECORD_BYTES 8
+#define XPLANE_RREF_STALE_SEC 1.5f
+#define XPLANE_RREF_RESUBSCRIBE_SEC 2.0f
+#define XPLANE_RREF_MAX_DRAIN_PACKETS 4
 
 static float clamp_float(float value, float min_value, float max_value)
 {
@@ -212,8 +221,215 @@ static void open_socket_once(XPlaneLiveData *live)
 
     live->socket = aopenUDP(live->xp_ip, live->xp_port, 0);
     live->socket_open = 1;
-    printf("X-Plane live data: waiting for X-Plane Connect at %s:%u.\n", live->xp_ip, live->xp_port);
+    printf("X-Plane live data: waiting for native RREF data at %s:%u.\n", live->xp_ip, live->xp_port);
     fflush(stdout);
+}
+
+static int rref_write_dref_path(char *dest, int dest_size, const char *dref, int element_index, int element_count)
+{
+    int written;
+
+    if (dest == NULL || dest_size <= 0 || dref == NULL)
+    {
+        return 0;
+    }
+
+    if (element_count > 1)
+    {
+        written = snprintf(dest, (size_t)dest_size, "%s[%d]", dref, element_index);
+    }
+    else
+    {
+        written = snprintf(dest, (size_t)dest_size, "%s", dref);
+    }
+
+    return written > 0 && written < dest_size;
+}
+
+static int rref_send_subscription(XPlaneLiveData *live, int subscription_index, const char *dref, int element_index, int element_count, int frequency_hz)
+{
+    char buffer[XPLANE_RREF_REQUEST_BYTES];
+    char path[XPLANE_RREF_PATH_BYTES];
+    int xplane_index;
+
+    if (live == NULL || !live->socket_open)
+    {
+        return 0;
+    }
+
+    memset(buffer, 0, sizeof(buffer));
+    memset(path, 0, sizeof(path));
+    if (!rref_write_dref_path(path, sizeof(path), dref, element_index, element_count))
+    {
+        return 0;
+    }
+
+    memcpy(buffer, "RREF\0", 5);
+    xplane_index = subscription_index + 1;
+    memcpy(buffer + 5, &frequency_hz, sizeof(frequency_hz));
+    memcpy(buffer + 9, &xplane_index, sizeof(xplane_index));
+    memcpy(buffer + 13, path, strlen(path));
+
+    return sendUDP(live->socket, buffer, sizeof(buffer)) >= 0;
+}
+
+static int rref_ensure_subscriptions(XPlaneLiveData *live, const char *drefs[], int dref_count, const int capacities[])
+{
+    int subscription_index = 0;
+    int failures = 0;
+    int should_resubscribe;
+    int rref_stale;
+
+    if (live == NULL || drefs == NULL || capacities == NULL || !live->socket_open)
+    {
+        return 0;
+    }
+
+    rref_stale = live->rref_last_packet_time <= 0.0f ||
+                 live->elapsed_time - live->rref_last_packet_time > XPLANE_RREF_STALE_SEC;
+    should_resubscribe = !live->rref_subscribed ||
+                         (rref_stale &&
+                          live->elapsed_time - live->rref_last_subscribe_time >= XPLANE_RREF_RESUBSCRIBE_SEC);
+    if (!should_resubscribe)
+    {
+        return 1;
+    }
+
+    for (int dref_index = 0; dref_index < dref_count; ++dref_index)
+    {
+        const int element_count = capacities[dref_index] > 0 ? capacities[dref_index] : 1;
+        for (int element_index = 0; element_index < element_count; ++element_index)
+        {
+            if (subscription_index >= XPLANE_RREF_MAX_SUBSCRIPTIONS)
+            {
+                return 0;
+            }
+
+            live->rref_binding_dref_index[subscription_index] = dref_index;
+            live->rref_binding_element_index[subscription_index] = element_index;
+            if (!rref_send_subscription(live, subscription_index, drefs[dref_index], element_index, element_count, XPLANE_RREF_FREQUENCY_HZ))
+            {
+                failures++;
+            }
+            subscription_index++;
+        }
+    }
+
+    live->rref_subscription_count = subscription_index;
+    live->rref_subscribed = failures == 0;
+    live->rref_last_subscribe_time = live->elapsed_time;
+    if (live->rref_subscribed)
+    {
+        printf("X-Plane live data: subscribed to %d native RREF datarefs at %s:%u.\n",
+               live->rref_subscription_count,
+               live->xp_ip,
+               live->xp_port);
+        fflush(stdout);
+    }
+
+    return live->rref_subscribed;
+}
+
+static void rref_drain_packets(XPlaneLiveData *live)
+{
+    char buffer[4096];
+
+    if (live == NULL || !live->socket_open)
+    {
+        return;
+    }
+
+    for (int packet_index = 0; packet_index < XPLANE_RREF_MAX_DRAIN_PACKETS; ++packet_index)
+    {
+        const int bytes_read = readUDP(live->socket, buffer, sizeof(buffer));
+        if (bytes_read <= 0)
+        {
+            return;
+        }
+        if (bytes_read < XPLANE_RREF_RESPONSE_HEADER_BYTES + XPLANE_RREF_RESPONSE_RECORD_BYTES ||
+            memcmp(buffer, "RREF", 4) != 0)
+        {
+            continue;
+        }
+
+        for (int offset = XPLANE_RREF_RESPONSE_HEADER_BYTES;
+             offset + XPLANE_RREF_RESPONSE_RECORD_BYTES <= bytes_read;
+             offset += XPLANE_RREF_RESPONSE_RECORD_BYTES)
+        {
+            int xplane_index;
+            float value;
+            int subscription_index;
+
+            memcpy(&xplane_index, buffer + offset, sizeof(xplane_index));
+            memcpy(&value, buffer + offset + 4, sizeof(value));
+            subscription_index = xplane_index - 1;
+            if (subscription_index < 0 || subscription_index >= live->rref_subscription_count)
+            {
+                continue;
+            }
+
+            live->rref_values[subscription_index] = value;
+            live->rref_last_update[subscription_index] = live->elapsed_time;
+            live->rref_seen[subscription_index] = 1;
+            live->rref_last_packet_time = live->elapsed_time;
+        }
+    }
+}
+
+static int rref_subscription_fresh(const XPlaneLiveData *live, int subscription_index)
+{
+    return live != NULL &&
+           subscription_index >= 0 &&
+           subscription_index < live->rref_subscription_count &&
+           live->rref_seen[subscription_index] &&
+           live->elapsed_time - live->rref_last_update[subscription_index] <= XPLANE_RREF_STALE_SEC;
+}
+
+static int rref_find_subscription(const XPlaneLiveData *live, int dref_index, int element_index)
+{
+    if (live == NULL)
+    {
+        return -1;
+    }
+
+    for (int subscription_index = 0; subscription_index < live->rref_subscription_count; ++subscription_index)
+    {
+        if (live->rref_binding_dref_index[subscription_index] == dref_index &&
+            live->rref_binding_element_index[subscription_index] == element_index)
+        {
+            return subscription_index;
+        }
+    }
+
+    return -1;
+}
+
+static void rref_copy_values(const XPlaneLiveData *live, float *values[], int dref_count, int sizes[])
+{
+    if (live == NULL || values == NULL || sizes == NULL)
+    {
+        return;
+    }
+
+    for (int dref_index = 0; dref_index < dref_count; ++dref_index)
+    {
+        const int capacity = sizes[dref_index];
+        int actual_count = 0;
+
+        for (int element_index = 0; element_index < capacity; ++element_index)
+        {
+            const int subscription_index = rref_find_subscription(live, dref_index, element_index);
+            if (!rref_subscription_fresh(live, subscription_index))
+            {
+                break;
+            }
+
+            values[dref_index][element_index] = live->rref_values[subscription_index];
+            actual_count++;
+        }
+
+        sizes[dref_index] = actual_count;
+    }
 }
 
 static void apply_frame_to_legacy_modules(
@@ -470,7 +686,17 @@ static int poll_all_data(
         1, 1, 1, 1, 1,
         1, 8, 8, 8, 8, 8, 8, 8, 8, 8, 1, 1, 9};
 
-    if (getDREFs(live->socket, drefs, values, DREF_COUNT, sizes) < 0)
+    if (!rref_ensure_subscriptions(live, drefs, DREF_COUNT, sizes))
+    {
+        return 0;
+    }
+    rref_drain_packets(live);
+    rref_copy_values(live, values, DREF_COUNT, sizes);
+
+    if (sizes[DREF_LATITUDE] <= 0 ||
+        sizes[DREF_LONGITUDE] <= 0 ||
+        sizes[DREF_H_IND] <= 0 ||
+        sizes[DREF_IAS] <= 0)
     {
         return 0;
     }
@@ -510,7 +736,11 @@ static int poll_all_data(
     frame->altitude_target = first_or_default(ap_altitude, sizes[DREF_AP_ALTITUDE], pfd_data->altitude_target);
     frame->latitude = (double)first_or_default(latitude, sizes[DREF_LATITUDE], (float)nd_data->latitude);
     frame->longitude = (double)first_or_default(longitude, sizes[DREF_LONGITUDE], (float)nd_data->longitude);
-    if (sizes[DREF_HPATH] > 0 && valid_float(hpath[0]))
+    frame->true_air_speed = first_or_default(true_airspeed, sizes[DREF_TRUE_AIRSPEED], nd_data->true_air_speed / XPLANE_LIVE_MPS_TO_KNOTS) * XPLANE_LIVE_MPS_TO_KNOTS;
+    frame->ground_speed = first_or_default(groundspeed, sizes[DREF_GROUNDSPEED], nd_data->ground_speed / XPLANE_LIVE_MPS_TO_KNOTS) * XPLANE_LIVE_MPS_TO_KNOTS;
+    if (frame->ground_speed >= XPLANE_LIVE_MIN_TRACK_GROUND_SPEED_KT &&
+        sizes[DREF_HPATH] > 0 &&
+        valid_float(hpath[0]))
     {
         const float magnetic_offset = normalize_signed_degrees(frame->heading - frame->yaw);
         frame->track = normalize_degrees(hpath[0] + magnetic_offset);
@@ -519,9 +749,6 @@ static int poll_all_data(
     {
         frame->track = frame->heading;
     }
-    frame->true_air_speed = first_or_default(true_airspeed, sizes[DREF_TRUE_AIRSPEED], nd_data->true_air_speed / XPLANE_LIVE_MPS_TO_KNOTS) * XPLANE_LIVE_MPS_TO_KNOTS;
-    frame->ground_speed = first_or_default(groundspeed, sizes[DREF_GROUNDSPEED], nd_data->ground_speed / XPLANE_LIVE_MPS_TO_KNOTS) * XPLANE_LIVE_MPS_TO_KNOTS;
-
     frame->total_air_temperature = first_or_default(tat, sizes[DREF_TAT], eicas_data->tat);
     frame->n1_left = clamp_float(first_or_default(n1, sizes[DREF_N1], eicas_data->engine_left.n1), 0.0f, 110.0f);
     frame->n1_right = clamp_float(second_or_default(n1, sizes[DREF_N1], eicas_data->engine_right.n1), 0.0f, 110.0f);
@@ -883,7 +1110,7 @@ static int xplane_live_data_update_internal(
         if (!sent_hello)
         {
             sent_hello = 1;
-            printf("X-Plane live data: socket opened, using XPlaneConnect protocol to %s:%u.\n", live->xp_ip, live->xp_port);
+            printf("X-Plane live data: socket opened, using native RREF protocol to %s:%u.\n", live->xp_ip, live->xp_port);
             fflush(stdout);
         }
     }

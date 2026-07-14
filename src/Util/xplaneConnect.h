@@ -104,6 +104,8 @@ XPCSocket aopenUDP(const char *xpIP, unsigned short xpPort, unsigned short port)
 ///
 /// \param sock The socket to close.
 void closeUDP(XPCSocket sock);
+int sendUDP(XPCSocket sock, char buffer[], int len);
+int readUDP(XPCSocket sock, char buffer[], int len);
 
 // Configuration
 

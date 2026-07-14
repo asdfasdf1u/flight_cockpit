@@ -10,6 +10,7 @@
 
 #define XPLANE_LIVE_DEFAULT_IP "127.0.0.1"
 #define XPLANE_LIVE_DEFAULT_PORT 49000
+#define XPLANE_RREF_MAX_SUBSCRIPTIONS 128
 
 typedef struct SimDataCenter SimDataCenter;
 typedef struct SimSnapshot SimSnapshot;
@@ -35,6 +36,16 @@ typedef struct XPlaneLiveData
 
     float poll_elapsed;
     float retry_elapsed;
+
+    int rref_subscribed;
+    int rref_subscription_count;
+    int rref_binding_dref_index[XPLANE_RREF_MAX_SUBSCRIPTIONS];
+    int rref_binding_element_index[XPLANE_RREF_MAX_SUBSCRIPTIONS];
+    float rref_values[XPLANE_RREF_MAX_SUBSCRIPTIONS];
+    float rref_last_update[XPLANE_RREF_MAX_SUBSCRIPTIONS];
+    unsigned char rref_seen[XPLANE_RREF_MAX_SUBSCRIPTIONS];
+    float rref_last_packet_time;
+    float rref_last_subscribe_time;
 
     int compare_initialized;
     int compare_connected;
