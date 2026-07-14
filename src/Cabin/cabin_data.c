@@ -729,6 +729,13 @@ void cabin_data_init(Cabin_Data *data)
     copy_text(data->weather_source, sizeof(data->weather_source), "NONE");
     copy_text(data->map_source, sizeof(data->map_source), "LOCAL");
     data->snapshot_frame = -1;
+    data->frame_id = -1;
+    data->timestamp = 0.0f;
+    data->snapshot_source = SIM_SNAPSHOT_SOURCE_NONE;
+    data->fallback_active = 0;
+    data->xplane_connected = 0;
+    data->timed_out = 0;
+    data->last_valid_xplane_timestamp = 0.0f;
     data->route_revision = -1;
     data->active_waypoint_index = -1;
     return;
@@ -960,11 +967,18 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
     }
 
     data->snapshot_valid = snapshot != NULL && snapshot->data_valid;
+    data->frame_id = snapshot != NULL ? snapshot->frame_id : -1;
+    data->timestamp = snapshot != NULL ? snapshot->timestamp : 0.0f;
+    data->snapshot_source = snapshot != NULL ? snapshot->source : SIM_SNAPSHOT_SOURCE_NONE;
+    data->fallback_active = snapshot != NULL ? snapshot->fallback_active : 0;
+    data->xplane_connected = snapshot != NULL ? snapshot->xplane_connected : 0;
+    data->timed_out = snapshot != NULL ? snapshot->timed_out : 0;
+    data->last_valid_xplane_timestamp = snapshot != NULL ? snapshot->last_valid_xplane_timestamp : 0.0f;
     copy_text(data->data_source, sizeof(data->data_source),
               snapshot != NULL ? sim_snapshot_source_name(snapshot->source) : "NONE");
     copy_text(data->flight_phase, sizeof(data->flight_phase),
               snapshot != NULL ? sim_flight_phase_name(snapshot->flight_phase) : "UNKNOWN");
-    data->snapshot_frame = snapshot != NULL ? snapshot->updated_frame : -1;
+    data->snapshot_frame = data->frame_id;
     data->snapshot_time = snapshot != NULL ? snapshot->sim_time : 0.0f;
 
     if (!data->snapshot_valid)

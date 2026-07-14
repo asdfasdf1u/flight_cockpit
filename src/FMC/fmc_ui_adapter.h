@@ -106,6 +106,20 @@ typedef struct FMC_Data
     int scratchpad_len;
     char message[FMC_TEXT_LEN];
     int origin_exec_pending;
+
+    /* X-Plane live state */
+    double current_latitude;
+    double current_longitude;
+    float current_altitude_ft;
+    float current_ias;
+    float current_mach;
+    float current_heading;
+    float current_ground_speed;
+    float current_vertical_speed;
+    float current_wind_speed;
+    float current_wind_direction;
+    float current_fuel_kg;
+    int live_data_active;
     int route_mod_pending;
     int route_clear_pending;
     int route_delete_pending;

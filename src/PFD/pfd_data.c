@@ -223,6 +223,8 @@ void pfd_data_init(PFD_Data *data)
     data->using_file_data = 0;
     data->file_sample_index = 0;
     data->file_sample_accumulator = 0.0f;
+    data->snapshot_frame_id = 0;
+    data->data_valid = 1;
 
     load_file_samples_once();
     if (file_load_ok)

@@ -76,7 +76,7 @@ void printError(char *functionName, char *format, ...)
 /*****************************************************************************/
 XPCSocket openUDP(const char *xpIP)
 {
-	return aopenUDP(xpIP, 49009, 0);
+	return aopenUDP(xpIP, 49000, 0);
 }
 
 XPCSocket aopenUDP(const char *xpIP, unsigned short xpPort, unsigned short port)
@@ -95,7 +95,7 @@ XPCSocket aopenUDP(const char *xpIP, unsigned short xpPort, unsigned short port)
 		xpIP = "127.0.0.1";
 	}
 	strncpy(sock.xpIP, xpIP, 16);
-	sock.xpPort = xpPort == 0 ? 49009 : xpPort;
+	sock.xpPort = xpPort == 0 ? 49000 : xpPort;
 
 #ifdef _WIN32
 	WSADATA wsa;

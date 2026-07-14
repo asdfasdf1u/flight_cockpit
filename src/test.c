@@ -45,6 +45,7 @@ int fmc_main_run(void);
 
 #ifdef TEST_MODULE_LAUNCHER
 #include "Data/sim_data_center.h"
+#include "Util/xplane_live_data.h"
 #endif
 
 #ifdef TEST_MODULE_LAUNCHER
@@ -353,6 +354,7 @@ static int run_launcher(void)
 {
     int exit_code = 0;
     SimDataCenter *shared_sim_data_center = (SimDataCenter *)malloc(sizeof(*shared_sim_data_center));
+    XPlaneSharedRuntime *shared_runtime = (XPlaneSharedRuntime *)malloc(sizeof(*shared_runtime));
 
     launcher_runtime_log(1, "Launcher process started.");
     if (shared_sim_data_center == NULL)
@@ -360,9 +362,16 @@ static int run_launcher(void)
         launcher_runtime_log(0, "FAILED: shared SimDataCenter allocation.");
         return -1;
     }
+    if (shared_runtime == NULL)
+    {
+        launcher_runtime_log(0, "FAILED: shared XPlane runtime allocation.");
+        free(shared_sim_data_center);
+        return -1;
+    }
     if (!sim_data_center_init(shared_sim_data_center))
     {
         launcher_runtime_log(0, "FAILED: shared SimDataCenter initialization.");
+        free(shared_runtime);
         sim_data_center_destroy(shared_sim_data_center);
         free(shared_sim_data_center);
         return -1;
@@ -371,6 +380,17 @@ static int run_launcher(void)
                          (void *)shared_sim_data_center,
                          (void *)&shared_sim_data_center->planned_route,
                          sim_data_center_route_revision(shared_sim_data_center));
+    xplane_shared_runtime_init(shared_runtime, shared_sim_data_center, NULL, 0);
+    if (!xplane_shared_runtime_initialized(shared_runtime))
+    {
+        launcher_runtime_log(0, "FAILED: shared XPlane runtime initialization.");
+        xplane_shared_runtime_shutdown(shared_runtime);
+        free(shared_runtime);
+        sim_data_center_destroy(shared_sim_data_center);
+        free(shared_sim_data_center);
+        return -1;
+    }
+    launcher_runtime_log(0, "Shared runtime initialized with SimDataCenter=%p.", (void *)shared_sim_data_center);
 
     for (;;)
     {
@@ -383,15 +403,15 @@ static int run_launcher(void)
 
         if (choice == LAUNCHER_CHOICE_COCKPIT)
         {
-            launcher_runtime_log(0, "Calling cockpit_main_run_with_sim_data_center(%p).", (void *)shared_sim_data_center);
-            exit_code = cockpit_main_run_with_sim_data_center(shared_sim_data_center);
+            launcher_runtime_log(0, "Calling cockpit_main_run_with_shared_runtime(%p).", (void *)shared_runtime);
+            exit_code = cockpit_main_run_with_shared_runtime(shared_runtime);
             launcher_runtime_log(0, "Cockpit returned %d; shared revision=%d.", exit_code,
                                  sim_data_center_route_revision(shared_sim_data_center));
         }
         else if (choice == LAUNCHER_CHOICE_CABIN)
         {
-            launcher_runtime_log(0, "Calling cabin_main_run_with_sim_data_center(%p).", (void *)shared_sim_data_center);
-            exit_code = cabin_main_run_with_sim_data_center(shared_sim_data_center);
+            launcher_runtime_log(0, "Calling cabin_main_run_with_shared_runtime(%p).", (void *)shared_runtime);
+            exit_code = cabin_main_run_with_shared_runtime(shared_runtime);
             launcher_runtime_log(0, "Cabin returned %d; shared revision=%d origin=%s destination=%s points=%d.",
                                  exit_code,
                                  sim_data_center_route_revision(shared_sim_data_center),
@@ -409,6 +429,8 @@ static int run_launcher(void)
     launcher_runtime_log(0, "Destroying shared SimDataCenter=%p revision=%d.",
                          (void *)shared_sim_data_center,
                          sim_data_center_route_revision(shared_sim_data_center));
+    xplane_shared_runtime_shutdown(shared_runtime);
+    free(shared_runtime);
     sim_data_center_destroy(shared_sim_data_center);
     free(shared_sim_data_center);
     launcher_runtime_log(0, "Launcher process exiting with code=%d.", exit_code);
