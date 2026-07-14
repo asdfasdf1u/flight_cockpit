@@ -70,7 +70,7 @@ static float array_average_nonnegative(const float *values, int size, int max_co
     return count > 0 ? sum / (float)count : fallback;
 }
 
-static void set_status(XPlaneLiveData *live, int pfd_active, int nd_active, int eicas_active)
+static void set_status(XPlaneLiveData *live, int pfd_active, int nd_active, int eicas_active, int fmc_active)
 {
     if (live == NULL)
     {
@@ -81,7 +81,8 @@ static void set_status(XPlaneLiveData *live, int pfd_active, int nd_active, int 
     live->pfd_active = pfd_active;
     live->nd_active = nd_active;
     live->eicas_active = eicas_active;
-    live->connected = pfd_active || nd_active || eicas_active;
+    live->fmc_active = fmc_active;
+    live->connected = pfd_active || nd_active || eicas_active || fmc_active;
 
     if (!was_connected && live->connected)
     {
@@ -305,7 +306,7 @@ void xplane_live_data_shutdown(XPlaneLiveData *live)
 
     closeUDP(live->socket);
     live->socket_open = 0;
-    set_status(live, 0, 0, 0);
+    set_status(live, 0, 0, 0, 0);
 }
 
 int xplane_live_data_update(
@@ -314,8 +315,11 @@ int xplane_live_data_update(
     ND_Data *nd_data,
     EICAS_Data *eicas_data,
     AircraftSystems_Data *systems_data,
+    FMC_Data *fmc_data,
     float delta_time)
 {
+    (void)fmc_data;
+
     if (live == NULL)
     {
         return 0;
@@ -355,14 +359,14 @@ int xplane_live_data_update(
     if (ok)
     {
         live->missed_frames = 0;
-        set_status(live, 1, 1, 1);
+        set_status(live, 1, 1, 1, 0);
     }
     else
     {
         live->missed_frames++;
         if (live->missed_frames >= XPLANE_LIVE_MAX_MISSED_FRAMES)
         {
-            set_status(live, 0, 0, 0);
+            set_status(live, 0, 0, 0, 0);
         }
     }
 
@@ -382,6 +386,11 @@ int xplane_live_data_nd_active(const XPlaneLiveData *live)
 int xplane_live_data_eicas_active(const XPlaneLiveData *live)
 {
     return live != NULL && live->eicas_active;
+}
+
+int xplane_live_data_fmc_active(const XPlaneLiveData *live)
+{
+    return live != NULL && live->fmc_active;
 }
 
 int xplane_live_data_connected(const XPlaneLiveData *live)

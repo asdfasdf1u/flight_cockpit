@@ -1285,7 +1285,7 @@ int cockpit_main_run(void)
             delta_time = 0.1f;
         }
 
-        const int live_data_active = xplane_live_data_update(&xplane_live_data, &pfd_data, &nd_data, &eicas_data, &systems_data, delta_time);
+        const int live_data_active = xplane_live_data_update(&xplane_live_data, &pfd_data, &nd_data, &eicas_data, &systems_data, &fmc_data, delta_time);
         if (sim_data_ready)
         {
             sim_data_center_update(sim_data_center, delta_time);

@@ -95,7 +95,7 @@ XPCSocket openUDP(const char *xpIP);
 /// Opens a new connection to XPC on the specified port.
 ///
 /// \param xpIP   A string representing the IP address of the host running X-Plane.
-/// \param xpPort The port of the X-Plane Connect plugin is listening on. Usually 49009.
+/// \param xpPort The port the X-Plane UDP endpoint is listening on. This project defaults to 49009.
 /// \param port   The local port to use when sending and receiving data from XPC.
 /// \returns      An XPCSocket struct representing the newly created connection.
 XPCSocket aopenUDP(const char *xpIP, unsigned short xpPort, unsigned short port);

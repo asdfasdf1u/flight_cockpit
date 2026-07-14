@@ -2,6 +2,7 @@
 #define XPLANE_LIVE_DATA_H
 
 #include "../EICAS1/eicas_data.h"
+#include "../FMC/fmc_ui_adapter.h"
 #include "../ND/nd_data.h"
 #include "../PFD/pfd_data.h"
 #include "../Systems/aircraft_systems_data.h"
@@ -21,6 +22,7 @@ typedef struct XPlaneLiveData
     int pfd_active;
     int nd_active;
     int eicas_active;
+    int fmc_active;
     int connected;
 
     int missed_frames;
@@ -38,11 +40,13 @@ int xplane_live_data_update(
     ND_Data *nd_data,
     EICAS_Data *eicas_data,
     AircraftSystems_Data *systems_data,
+    FMC_Data *fmc_data,
     float delta_time);
 
 int xplane_live_data_pfd_active(const XPlaneLiveData *live);
 int xplane_live_data_nd_active(const XPlaneLiveData *live);
 int xplane_live_data_eicas_active(const XPlaneLiveData *live);
+int xplane_live_data_fmc_active(const XPlaneLiveData *live);
 int xplane_live_data_connected(const XPlaneLiveData *live);
 
 #endif
