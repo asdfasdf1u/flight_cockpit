@@ -114,7 +114,8 @@ static int poll_all_data(
     PFD_Data *pfd_data,
     ND_Data *nd_data,
     EICAS_Data *eicas_data,
-    AircraftSystems_Data *systems_data)
+    AircraftSystems_Data *systems_data,
+    FMC_Data *fmc_data)
 {
     if (live == NULL || pfd_data == NULL || nd_data == NULL ||
         eicas_data == NULL || systems_data == NULL || !live->socket_open)
@@ -146,6 +147,14 @@ static int poll_all_data(
         DREF_EGT,
         DREF_FUEL_FLOW,
         DREF_FUEL_MASS,
+        DREF_N2,
+        DREF_OIL_PRESSURE,
+        DREF_OIL_TEMP,
+        DREF_OIL_QUANTITY,
+        DREF_VIBRATION,
+        DREF_MACH,
+        DREF_WIND_SPEED,
+        DREF_WIND_DIR,
         DREF_COUNT
     };
 
@@ -171,7 +180,15 @@ static int poll_all_data(
         "sim/flightmodel/engine/ENGN_N1_",
         "sim/flightmodel/engine/ENGN_EGT_c",
         "sim/cockpit2/engine/indicators/fuel_flow_kg_sec",
-        "sim/flightmodel/weight/m_fuel"};
+        "sim/flightmodel/weight/m_fuel",
+        "sim/flightmodel/engine/ENGN_N2_",
+        "sim/flightmodel/engine/ENGN_oil_press",
+        "sim/flightmodel/engine/ENGN_oil_temp_c",
+        "sim/flightmodel/engine/ENGN_oil_quan",
+        "sim/flightmodel/engine/ENGN_vibe",
+        "sim/flightmodel/misc/machno",
+        "sim/weather/wind_speed_kt",
+        "sim/weather/wind_direction_degt"};
 
     float theta[1] = {0.0f};
     float phi[1] = {0.0f};
@@ -197,6 +214,14 @@ static int poll_all_data(
     float egt[8] = {0.0f};
     float fuel_flow[8] = {0.0f};
     float fuel_mass[9] = {0.0f};
+    float n2[8] = {0.0f};
+    float oil_pressure[8] = {0.0f};
+    float oil_temp[8] = {0.0f};
+    float oil_quantity[8] = {0.0f};
+    float vibration[8] = {0.0f};
+    float mach[1] = {0.0f};
+    float wind_speed[1] = {0.0f};
+    float wind_dir[1] = {0.0f};
 
     float *values[DREF_COUNT] = {
         theta,
@@ -220,12 +245,22 @@ static int poll_all_data(
         n1,
         egt,
         fuel_flow,
-        fuel_mass};
+        fuel_mass,
+        n2,
+        oil_pressure,
+        oil_temp,
+        oil_quantity,
+        vibration,
+        mach,
+        wind_speed,
+        wind_dir};
     int sizes[DREF_COUNT] = {
         1, 1, 1, 1, 1, 8,
         1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1,
-        1, 8, 8, 8, 9};
+        1, 8, 8, 8, 9,
+        8, 8, 8, 8, 8,
+        1, 1, 1};
 
     if (getDREFs(live->socket, drefs, values, DREF_COUNT, sizes) < 0)
     {
@@ -280,6 +315,35 @@ static int poll_all_data(
     eicas_data_refresh_warnings(eicas_data);
     eicas_data_apply_to_aircraft_systems(eicas_data, systems_data);
 
+    /* EICAS2 */
+    eicas_data->engine_left.n2 = clamp_float(first_or_default(n2, sizes[DREF_N2], eicas_data->engine_left.n2), 0.0f, 110.0f);
+    eicas_data->engine_right.n2 = clamp_float(second_or_default(n2, sizes[DREF_N2], eicas_data->engine_right.n2), 0.0f, 110.0f);
+    eicas_data->engine_left.oil_pressure = clamp_float(first_or_default(oil_pressure, sizes[DREF_OIL_PRESSURE], eicas_data->engine_left.oil_pressure), 0.0f, 200.0f);
+    eicas_data->engine_right.oil_pressure = clamp_float(second_or_default(oil_pressure, sizes[DREF_OIL_PRESSURE], eicas_data->engine_right.oil_pressure), 0.0f, 200.0f);
+    eicas_data->engine_left.oil_temperature = clamp_float(first_or_default(oil_temp, sizes[DREF_OIL_TEMP], eicas_data->engine_left.oil_temperature), -50.0f, 250.0f);
+    eicas_data->engine_right.oil_temperature = clamp_float(second_or_default(oil_temp, sizes[DREF_OIL_TEMP], eicas_data->engine_right.oil_temperature), -50.0f, 250.0f);
+    eicas_data->engine_left.oil_quantity = first_or_default(oil_quantity, sizes[DREF_OIL_QUANTITY], eicas_data->engine_left.oil_quantity);
+    eicas_data->engine_right.oil_quantity = second_or_default(oil_quantity, sizes[DREF_OIL_QUANTITY], eicas_data->engine_right.oil_quantity);
+    eicas_data->engine_left.vibration = clamp_float(first_or_default(vibration, sizes[DREF_VIBRATION], eicas_data->engine_left.vibration), 0.0f, 5.0f);
+    eicas_data->engine_right.vibration = clamp_float(second_or_default(vibration, sizes[DREF_VIBRATION], eicas_data->engine_right.vibration), 0.0f, 5.0f);
+
+    /* FMC */
+    if (fmc_data != NULL)
+    {
+        fmc_data->current_latitude = (double)first_or_default(latitude, sizes[DREF_LATITUDE], (float)fmc_data->current_latitude);
+        fmc_data->current_longitude = (double)first_or_default(longitude, sizes[DREF_LONGITUDE], (float)fmc_data->current_longitude);
+        fmc_data->current_altitude_ft = first_or_default(h_ind, sizes[DREF_H_IND], fmc_data->current_altitude_ft);
+        fmc_data->current_ias = first_or_default(indicated_airspeed, sizes[DREF_IAS], fmc_data->current_ias);
+        fmc_data->current_mach = first_or_default(mach, sizes[DREF_MACH], fmc_data->current_mach);
+        fmc_data->current_heading = normalize_degrees(first_or_default(mag_psi, sizes[DREF_MAG_PSI], fmc_data->current_heading));
+        fmc_data->current_ground_speed = first_or_default(groundspeed, sizes[DREF_GROUNDSPEED], fmc_data->current_ground_speed / XPLANE_LIVE_MPS_TO_KNOTS) * XPLANE_LIVE_MPS_TO_KNOTS;
+        fmc_data->current_vertical_speed = first_or_default(vertical_speed, sizes[DREF_VSPEED], fmc_data->current_vertical_speed);
+        fmc_data->current_wind_speed = first_or_default(wind_speed, sizes[DREF_WIND_SPEED], fmc_data->current_wind_speed);
+        fmc_data->current_wind_direction = first_or_default(wind_dir, sizes[DREF_WIND_DIR], fmc_data->current_wind_direction);
+        fmc_data->current_fuel_kg = sizes[DREF_FUEL_MASS] >= 3 ? (fuel_mass[0] + fuel_mass[1] + fuel_mass[2]) : first_or_default(fuel_mass, sizes[DREF_FUEL_MASS], fmc_data->current_fuel_kg);
+        fmc_data->live_data_active = 1;
+    }
+
     return 1;
 }
 
@@ -318,8 +382,6 @@ int xplane_live_data_update(
     FMC_Data *fmc_data,
     float delta_time)
 {
-    (void)fmc_data;
-
     if (live == NULL)
     {
         return 0;
@@ -335,6 +397,17 @@ int xplane_live_data_update(
     }
 
     open_socket_once(live);
+
+    if (live->socket_open)
+    {
+        static int sent_hello = 0;
+        if (!sent_hello)
+        {
+            sent_hello = 1;
+            printf("X-Plane live data: socket opened, using XPlaneConnect protocol to %s:%u.\n", live->xp_ip, live->xp_port);
+            fflush(stdout);
+        }
+    }
 
     if (live->connected)
     {
@@ -355,11 +428,11 @@ int xplane_live_data_update(
         live->retry_elapsed = 0.0f;
     }
 
-    const int ok = poll_all_data(live, pfd_data, nd_data, eicas_data, systems_data);
+    const int ok = poll_all_data(live, pfd_data, nd_data, eicas_data, systems_data, fmc_data);
     if (ok)
     {
         live->missed_frames = 0;
-        set_status(live, 1, 1, 1, 0);
+        set_status(live, 1, 1, 1, 1);
     }
     else
     {
@@ -367,6 +440,10 @@ int xplane_live_data_update(
         if (live->missed_frames >= XPLANE_LIVE_MAX_MISSED_FRAMES)
         {
             set_status(live, 0, 0, 0, 0);
+            if (fmc_data != NULL)
+            {
+                fmc_data->live_data_active = 0;
+            }
         }
     }
 
