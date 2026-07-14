@@ -1736,11 +1736,27 @@ static int cockpit_main_run_internal(
                 }
                 else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_p)
                 {
-                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 1);
+                    cockpit_alarm_set_caution_demo(&cockpit_state.alarm, 1);
                 }
                 else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_o)
                 {
+                    cockpit_alarm_set_caution_demo(&cockpit_state.alarm, 0);
+                }
+                else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_g)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 1);
+                }
+                else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_h)
+                {
                     sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 0);
+                }
+                else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_y)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CRASH, 1);
+                }
+                else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_r)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CRASH, 0);
                 }
                 else if (event.key.repeat == 0 &&
                          view_mode == COCKPIT_VIEW_ND_ZOOM &&

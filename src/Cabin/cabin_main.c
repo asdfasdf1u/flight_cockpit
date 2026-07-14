@@ -799,6 +799,14 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedR
             {
                 running = 0;
             }
+            else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_y)
+            {
+                sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CRASH, 1);
+            }
+            else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_r)
+            {
+                sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CRASH, 0);
+            }
             else
             {
                 cabin_ui_handle_event(window, &event);
