@@ -178,6 +178,7 @@ typedef struct Cabin_Place_Request
     int longitude_grid;
     int route_revision;
     char data_source[CABIN_TEXT_LEN];
+    char endpoint_ident[CABIN_TEXT_LEN];
 } Cabin_Place_Request;
 
 typedef struct Cabin_Place_Resolver
@@ -245,6 +246,14 @@ static int cabin_place_worker(void *user_data)
                                                    resolver->result.district,
                                                    sizeof(resolver->result.district));
     resolver->result.status = resolver->success ? CABIN_PLACE_VALID : CABIN_PLACE_FAILED;
+    if (resolver->request.target != CABIN_PLACE_TARGET_CURRENT)
+    {
+        printf("Cabin Place: endpoint code=%s lat=%.6f lon=%.6f result=%s.\n",
+               resolver->request.endpoint_ident,
+               resolver->request.latitude,
+               resolver->request.longitude,
+               resolver->success ? "VALID" : "FAILED");
+    }
     SDL_AtomicSet(&resolver->complete, 1);
     return 0;
 }
@@ -271,6 +280,8 @@ static int cabin_place_request_matches(const Cabin_Data *data, const Cabin_Place
     latitude = request->target == CABIN_PLACE_TARGET_ORIGIN ? data->origin_lat : data->destination_lat;
     longitude = request->target == CABIN_PLACE_TARGET_ORIGIN ? data->origin_lon : data->destination_lon;
     return data->route_valid && data->route_revision == request->route_revision &&
+           strcmp(request->endpoint_ident,
+                  request->target == CABIN_PLACE_TARGET_ORIGIN ? data->origin_airport : data->destination_airport) == 0 &&
            request->latitude_grid == cabin_place_grid(latitude) &&
            request->longitude_grid == cabin_place_grid(longitude);
 }
@@ -359,6 +370,14 @@ static void cabin_place_schedule(Cabin_Place_Resolver *resolver, Cabin_Data *dat
         resolver->request.longitude_grid = cabin_place_grid(longitude);
         resolver->request.route_revision = route_revision;
         snprintf(resolver->request.data_source, sizeof(resolver->request.data_source), "%s", source);
+        if (type == CABIN_PLACE_TARGET_ORIGIN)
+        {
+            snprintf(resolver->request.endpoint_ident, sizeof(resolver->request.endpoint_ident), "%s", data->origin_airport);
+        }
+        else if (type == CABIN_PLACE_TARGET_DESTINATION)
+        {
+            snprintf(resolver->request.endpoint_ident, sizeof(resolver->request.endpoint_ident), "%s", data->destination_airport);
+        }
         place->status = CABIN_PLACE_PENDING;
         place->latitude = latitude;
         place->longitude = longitude;
@@ -385,15 +404,15 @@ static void cabin_place_apply_labels(Cabin_Data *data)
     }
     if (data->origin_place.status == CABIN_PLACE_VALID)
     {
-        snprintf(data->origin_city, sizeof(data->origin_city), "%s", data->origin_place.city);
+        snprintf(data->origin_city, sizeof(data->origin_city), "%s", cabin_place_display_name(&data->origin_place));
     }
     if (data->destination_place.status == CABIN_PLACE_VALID)
     {
-        snprintf(data->destination_city, sizeof(data->destination_city), "%s", data->destination_place.city);
+        snprintf(data->destination_city, sizeof(data->destination_city), "%s", cabin_place_display_name(&data->destination_place));
     }
     if (data->current_place.status == CABIN_PLACE_VALID)
     {
-        snprintf(data->current_city, sizeof(data->current_city), "%s", data->current_place.city);
+        snprintf(data->current_city, sizeof(data->current_city), "%s", cabin_place_display_name(&data->current_place));
         snprintf(data->current_district, sizeof(data->current_district), "%s", data->current_place.district);
         snprintf(data->current_town, sizeof(data->current_town), "%s", data->current_place.province);
     }

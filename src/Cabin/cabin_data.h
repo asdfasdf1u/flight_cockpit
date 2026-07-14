@@ -140,5 +140,6 @@ typedef struct Cabin_Data
 
 void cabin_data_init(Cabin_Data *data);
 int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCenter *center, float delta_time);
+const char *cabin_place_display_name(const Cabin_Place *place);
 
 #endif

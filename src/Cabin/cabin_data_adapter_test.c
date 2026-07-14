@@ -49,6 +49,27 @@ static SimPlannedRoute domestic_test_route(void)
     return route;
 }
 
+static void assert_place_display_fallbacks(void)
+{
+    Cabin_Place place;
+
+    memset(&place, 0, sizeof(place));
+    place.status = CABIN_PLACE_VALID;
+    snprintf(place.province, sizeof(place.province), "%s", "北京市");
+    snprintf(place.district, sizeof(place.district), "%s", "顺义区");
+    assert(strcmp(cabin_place_display_name(&place), "北京市") == 0);
+
+    snprintf(place.city, sizeof(place.city), "%s", "成都市");
+    assert(strcmp(cabin_place_display_name(&place), "成都市") == 0);
+
+    place.city[0] = '\0';
+    place.province[0] = '\0';
+    assert(strcmp(cabin_place_display_name(&place), "顺义区") == 0);
+
+    place.status = CABIN_PLACE_FAILED;
+    assert(cabin_place_display_name(&place)[0] == '\0');
+}
+
 int main(void)
 {
     SimDataCenter *center = (SimDataCenter *)malloc(sizeof(*center));
@@ -56,6 +77,7 @@ int main(void)
     SimPlannedRoute changed_route;
 
     assert(center != NULL);
+    assert_place_display_fallbacks();
     assert(sim_data_center_init(center));
     changed_route = domestic_test_route();
     sim_data_center_set_route(center, &changed_route);

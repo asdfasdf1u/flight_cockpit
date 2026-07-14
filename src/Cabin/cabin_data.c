@@ -37,6 +37,23 @@ static void copy_text(char *dest, size_t dest_size, const char *src)
     snprintf(dest, dest_size, "%s", src != NULL ? src : "");
 }
 
+const char *cabin_place_display_name(const Cabin_Place *place)
+{
+    if (place == NULL || place->status != CABIN_PLACE_VALID)
+    {
+        return "";
+    }
+    if (place->city[0] != '\0')
+    {
+        return place->city;
+    }
+    if (place->province[0] != '\0')
+    {
+        return place->province;
+    }
+    return place->district;
+}
+
 static float clamp_float(float value, float min_value, float max_value)
 {
     if (value < min_value)
