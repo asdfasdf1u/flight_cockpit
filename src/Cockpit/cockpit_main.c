@@ -1722,10 +1722,6 @@ static int cockpit_main_run_internal(
                     show_fmc_debug = !show_fmc_debug;
                     suppress_debug_text_input = view_mode == COCKPIT_VIEW_FMC_ZOOM;
                 }
-                else if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F5)
-                {
-                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 1);
-                }
                 else if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F6)
                 {
                     sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CABIN_ALTITUDE, 1);
