@@ -1738,6 +1738,14 @@ static int cockpit_main_run_internal(
                 {
                     sim_data_center_clear_demo_alerts(sim_data_center);
                 }
+                else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_p)
+                {
+                    sim_data_center_set_cockpit_fire_demo(sim_data_center, 1);
+                }
+                else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_o)
+                {
+                    sim_data_center_set_cockpit_fire_demo(sim_data_center, 0);
+                }
                 else if (event.key.repeat == 0 &&
                          view_mode == COCKPIT_VIEW_ND_ZOOM &&
                          handle_nd_map_keydown(&nd_data, event.key.keysym.sym))
@@ -1836,7 +1844,13 @@ static int cockpit_main_run_internal(
             }
         }
         fmc_data_update_mock(&fmc_data, delta_time);
-        cockpit_alarm_update(&cockpit_state.alarm, sim_data_center_alerts(sim_data_center));
+        const int takeoff_detected = pfd_data.airspeed_current >= 80.0f &&
+                                    pfd_data.agl_altitude >= 15.0f;
+        cockpit_alarm_update(
+            &cockpit_state.alarm,
+            sim_data_center_alerts(sim_data_center),
+            sim_snapshot,
+            takeoff_detected);
         if (last_sync_check_log_ticks == 0 ||
             current_ticks - last_sync_check_log_ticks >= COCKPIT_SYNC_CHECK_LOG_MS)
         {
