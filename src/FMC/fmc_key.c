@@ -42,13 +42,14 @@ static void set_rect_button(int index,
                             FMC_LineSelectKey line_select,
                             FMC_ButtonAction action)
 {
-    fmc_buttons[index].id = id;
-    fmc_buttons[index].shape = FMC_BUTTON_SHAPE_RECT;
+    fmc_buttons[index].key = id;
+    fmc_buttons[index].shape = FMC_SHAPE_RECT;
     fmc_buttons[index].rect.x = x;
     fmc_buttons[index].rect.y = y;
     fmc_buttons[index].rect.w = w;
     fmc_buttons[index].rect.h = h;
     fmc_buttons[index].label = label;
+    fmc_buttons[index].on_click = NULL;
     fmc_buttons[index].input_char = input_char;
     fmc_buttons[index].page = page;
     fmc_buttons[index].line_select = line_select;
@@ -62,12 +63,14 @@ static void set_circle_button(int index,
                               const char *label,
                               char input_char)
 {
-    fmc_buttons[index].id = FMC_BUTTON_TEXT;
-    fmc_buttons[index].shape = FMC_BUTTON_SHAPE_CIRCLE;
-    fmc_buttons[index].center.x = x;
-    fmc_buttons[index].center.y = y;
-    fmc_buttons[index].radius = radius;
+    fmc_buttons[index].key = FMC_BUTTON_TEXT;
+    fmc_buttons[index].shape = FMC_SHAPE_CIRCLE;
+    fmc_buttons[index].rect.x = x;
+    fmc_buttons[index].rect.y = y;
+    fmc_buttons[index].rect.w = radius;
+    fmc_buttons[index].rect.h = radius;
     fmc_buttons[index].label = label;
+    fmc_buttons[index].on_click = NULL;
     fmc_buttons[index].input_char = input_char;
     fmc_buttons[index].page = FMC_PAGE_INDEX;
     fmc_buttons[index].line_select = FMC_LSK_NONE;
@@ -442,7 +445,7 @@ static const char *xplane_command_for_button(const FMC_Button *button)
         return NULL;
     }
 
-    switch (button->id)
+    switch (button->key)
     {
     case FMC_BUTTON_INIT_REF:
         return "sim/FMS/init";
@@ -517,7 +520,7 @@ static int send_button_to_xplane(const FMC_Button *button)
         return 0;
     }
 
-    if (button->id == FMC_BUTTON_TEXT)
+    if (button->key == FMC_BUTTON_TEXT)
     {
         return 0;
     }
@@ -581,10 +584,16 @@ static int point_in_rect(int x, int y, const SDL_Rect *rect)
            y < rect->y + rect->h;
 }
 
-static int point_in_circle(int x, int y, SDL_Point center, int radius)
+static int point_in_circle(int x, int y, const SDL_Rect *circle_rect)
 {
-    const int dx = x - center.x;
-    const int dy = y - center.y;
+    if (circle_rect == NULL)
+    {
+        return 0;
+    }
+
+    const int radius = circle_rect->w;
+    const int dx = x - circle_rect->x;
+    const int dy = y - circle_rect->y;
     return radius > 0 && dx * dx + dy * dy <= radius * radius;
 }
 
@@ -607,14 +616,14 @@ const FMC_Button *fmc_key_button_at(int index)
 
 int fmc_key_button_contains_base_point(const FMC_Button *button, int x, int y)
 {
-    if (button == NULL || button->id == FMC_BUTTON_NONE)
+    if (button == NULL || button->key == FMC_BUTTON_NONE)
     {
         return 0;
     }
 
-    if (button->shape == FMC_BUTTON_SHAPE_CIRCLE)
+    if (button->shape == FMC_SHAPE_CIRCLE)
     {
-        return point_in_circle(x, y, button->center, button->radius);
+        return point_in_circle(x, y, &button->rect);
     }
 
     return point_in_rect(x, y, &button->rect);
@@ -632,7 +641,7 @@ void fmc_key_activate_button(FMC_Data *data, const FMC_Button *button)
         return;
     }
 
-    if (button->id != FMC_BUTTON_EXEC &&
+    if (button->key != FMC_BUTTON_EXEC &&
         !button_sync_deferred_until_data_success(data, button))
     {
         send_button_to_xplane(button);
