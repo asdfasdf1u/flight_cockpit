@@ -9,7 +9,7 @@
 #include "xplaneConnect.h"
 
 #define XPLANE_LIVE_DEFAULT_IP "127.0.0.1"
-#define XPLANE_LIVE_DEFAULT_PORT 49009
+#define XPLANE_LIVE_DEFAULT_PORT 49000
 
 typedef struct SimDataCenter SimDataCenter;
 typedef struct SimSnapshot SimSnapshot;

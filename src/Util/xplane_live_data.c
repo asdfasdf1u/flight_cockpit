@@ -177,7 +177,7 @@ static int valid_engine(float value)
     return valid_float(value) && value >= 0.0f;
 }
 
-static void set_status(XPlaneLiveData *live, int pfd_active, int nd_active, int eicas_active)
+static void set_status(XPlaneLiveData *live, int pfd_active, int nd_active, int eicas_active, int fmc_active)
 {
     if (live == NULL)
     {
@@ -309,6 +309,11 @@ static void apply_frame_to_legacy_modules(
     systems_data->simulation_time = frame->timestamp;
     systems_data->snapshot_frame_id = frame->frame_id;
     systems_data->data_valid = frame->valid;
+
+    if (fmc_data != NULL)
+    {
+        fmc_data->live_data_active = 1;
+    }
 }
 
 static int poll_all_data(
@@ -317,6 +322,7 @@ static int poll_all_data(
     ND_Data *nd_data,
     EICAS_Data *eicas_data,
     AircraftSystems_Data *systems_data,
+    FMC_Data *fmc_data,
     SimXPlaneLiveFrame *frame,
     float delta_time,
     int write_legacy_outputs)
@@ -359,12 +365,6 @@ static int poll_all_data(
         DREF_B738_VIBRATION_LEFT,
         DREF_B738_VIBRATION_RIGHT,
         DREF_FUEL_MASS,
-        DREF_MACH,
-        DREF_WIND_SPEED,
-        DREF_WIND_DIR,
-        DREF_GEAR_DEPLOY,
-        DREF_FLAP_RATIO,
-        DREF_PARKING_BRAKE,
         DREF_COUNT
     };
 
@@ -398,16 +398,7 @@ static int poll_all_data(
         "sim/flightmodel/engine/ENGN_vib_",
         "laminar/B738/engine/indicators/engine1_vib",
         "laminar/B738/engine/indicators/engine2_vib",
-        "sim/flightmodel/weight/m_fuel",
-<<<<<<< HEAD
-        "sim/flightmodel/misc/machno",
-        "sim/weather/wind_speed_kt",
-        "sim/weather/wind_direction_degt"};
-=======
-        "sim/flightmodel2/gear/deploy_ratio",
-        "sim/cockpit2/controls/flap_handle_deploy_ratio",
-        "sim/flightmodel/controls/parkbrake"};
->>>>>>> dc861ef3215017f438b4af9c46e53f7bf56a8506
+        "sim/flightmodel/weight/m_fuel"};
 
     float theta[1] = {0.0f};
     float phi[1] = {0.0f};
@@ -441,15 +432,6 @@ static int poll_all_data(
     float b738_vibration_left[1] = {0.0f};
     float b738_vibration_right[1] = {0.0f};
     float fuel_mass[9] = {0.0f};
-<<<<<<< HEAD
-    float mach[1] = {0.0f};
-    float wind_speed[1] = {0.0f};
-    float wind_dir[1] = {0.0f};
-=======
-    float gear_deploy[10] = {0.0f};
-    float flap_ratio[1] = {0.0f};
-    float parking_brake[1] = {0.0f};
->>>>>>> dc861ef3215017f438b4af9c46e53f7bf56a8506
 
     float *values[DREF_COUNT] = {
         theta,
@@ -481,27 +463,12 @@ static int poll_all_data(
         vibration_legacy,
         b738_vibration_left,
         b738_vibration_right,
-        fuel_mass,
-<<<<<<< HEAD
-        mach,
-        wind_speed,
-        wind_dir};
-=======
-        gear_deploy,
-        flap_ratio,
-        parking_brake};
->>>>>>> dc861ef3215017f438b4af9c46e53f7bf56a8506
+        fuel_mass};
     int sizes[DREF_COUNT] = {
         1, 1, 1, 1, 1, 8,
         1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1,
-<<<<<<< HEAD
-        1, 8, 8, 8, 8, 8, 8, 8, 8, 8,
-        9, 1, 1, 1};
-=======
-        1, 8, 8, 8, 8, 8, 8, 8, 8, 8, 1, 1, 9,
-        10, 1, 1};
->>>>>>> dc861ef3215017f438b4af9c46e53f7bf56a8506
+        1, 8, 8, 8, 8, 8, 8, 8, 8, 8, 1, 1, 9};
 
     if (getDREFs(live->socket, drefs, values, DREF_COUNT, sizes) < 0)
     {
@@ -586,7 +553,6 @@ static int poll_all_data(
         frame->fuel_left_quantity = fuel_mass[0] * XPLANE_LIVE_KG_TO_KLB;
         frame->fuel_center_quantity = fuel_mass[1] * XPLANE_LIVE_KG_TO_KLB;
         frame->fuel_right_quantity = fuel_mass[2] * XPLANE_LIVE_KG_TO_KLB;
-        frame->fuel_quantity = (frame->fuel_left_quantity + frame->fuel_center_quantity + frame->fuel_right_quantity) / (60.9f + 48.7f * 2.0f);
         frame->fuel_tank_quantities_valid = 1;
     }
     else
@@ -594,58 +560,15 @@ static int poll_all_data(
         frame->fuel_left_quantity = eicas_data->fuel_left_quantity;
         frame->fuel_center_quantity = eicas_data->fuel_center_quantity;
         frame->fuel_right_quantity = eicas_data->fuel_right_quantity;
-        frame->fuel_quantity = eicas_data->fuel_quantity;
         frame->fuel_tank_quantities_valid = 0;
     }
 
-    if (sizes[DREF_GEAR_DEPLOY] > 0)
-    {
-        const float gear_ratio = array_average_nonnegative(gear_deploy, sizes[DREF_GEAR_DEPLOY], 10, eicas_data->gear_down ? 1.0f : 0.0f);
-        frame->gear_down = gear_ratio >= 0.5f;
-        frame->has_gear = 1;
-    }
-    else
-    {
-        frame->gear_down = eicas_data->gear_down;
-    }
-    if (sizes[DREF_FLAP_RATIO] > 0 && valid_float(flap_ratio[0]))
-    {
-        const float flap_level = clamp_float(flap_ratio[0], 0.0f, 1.0f) * 30.0f;
-        frame->flaps_level = (int)(floorf((flap_level + 2.5f) / 5.0f) * 5.0f);
-        frame->has_flaps = 1;
-    }
-    else
-    {
-        frame->flaps_level = eicas_data->flaps_level;
-    }
-    if (sizes[DREF_PARKING_BRAKE] > 0 && valid_float(parking_brake[0]))
-    {
-        frame->parking_brake_on = parking_brake[0] >= 0.5f;
-        frame->has_parking_brake = 1;
-    }
-    else
-    {
-        frame->parking_brake_on = eicas_data->parking_brake_on;
-    }
-
+    frame->fuel_quantity = frame->fuel_left_quantity + frame->fuel_center_quantity + frame->fuel_right_quantity;
     frame->valid = valid_geo(frame->latitude, frame->longitude) &&
                    valid_altitude(frame->altitude) &&
-                   valid_altitude(frame->agl_altitude) &&
                    valid_airspeed(frame->airspeed) &&
-                   valid_airspeed(frame->true_air_speed) &&
-                   valid_airspeed(frame->ground_speed) &&
-                   valid_float(frame->heading) && valid_float(frame->track) &&
-                   valid_float(frame->pitch) && valid_float(frame->roll) &&
-                   valid_float(frame->vertical_speed) &&
-                   valid_engine(frame->n1_left) && valid_engine(frame->n1_right) &&
-                   valid_engine(frame->n2_left) && valid_engine(frame->n2_right) &&
-                   valid_engine(frame->egt_left) && valid_engine(frame->egt_right) &&
-                   valid_engine(frame->fuel_flow_left) && valid_engine(frame->fuel_flow_right) &&
-                   valid_engine(frame->oil_pressure_left) && valid_engine(frame->oil_pressure_right) &&
-                   valid_engine(frame->oil_temperature_left) && valid_engine(frame->oil_temperature_right) &&
-                   valid_engine(frame->oil_quantity_left) && valid_engine(frame->oil_quantity_right) &&
-                   valid_engine(frame->vibration_left) && valid_engine(frame->vibration_right) &&
-                   valid_engine(frame->fuel_quantity);
+                   valid_engine(frame->n1_left) &&
+                   valid_engine(frame->n1_right);
 
     if (!frame->valid)
     {
@@ -655,26 +578,10 @@ static int poll_all_data(
     live->frame_id = frame->frame_id;
     live->last_valid_time = frame->timestamp;
     frame->last_valid_timestamp = live->last_valid_time;
+
     if (write_legacy_outputs)
     {
-        apply_frame_to_legacy_modules(frame, pfd_data, nd_data, eicas_data, systems_data);
-    }
-
-    /* FMC */
-    if (fmc_data != NULL)
-    {
-        fmc_data->current_latitude = (double)first_or_default(latitude, sizes[DREF_LATITUDE], (float)fmc_data->current_latitude);
-        fmc_data->current_longitude = (double)first_or_default(longitude, sizes[DREF_LONGITUDE], (float)fmc_data->current_longitude);
-        fmc_data->current_altitude_ft = first_or_default(h_ind, sizes[DREF_H_IND], fmc_data->current_altitude_ft);
-        fmc_data->current_ias = first_or_default(indicated_airspeed, sizes[DREF_IAS], fmc_data->current_ias);
-        fmc_data->current_mach = first_or_default(mach, sizes[DREF_MACH], fmc_data->current_mach);
-        fmc_data->current_heading = normalize_degrees(first_or_default(mag_psi, sizes[DREF_MAG_PSI], fmc_data->current_heading));
-        fmc_data->current_ground_speed = first_or_default(groundspeed, sizes[DREF_GROUNDSPEED], fmc_data->current_ground_speed / XPLANE_LIVE_MPS_TO_KNOTS) * XPLANE_LIVE_MPS_TO_KNOTS;
-        fmc_data->current_vertical_speed = first_or_default(vertical_speed, sizes[DREF_VSPEED], fmc_data->current_vertical_speed);
-        fmc_data->current_wind_speed = first_or_default(wind_speed, sizes[DREF_WIND_SPEED], fmc_data->current_wind_speed);
-        fmc_data->current_wind_direction = first_or_default(wind_dir, sizes[DREF_WIND_DIR], fmc_data->current_wind_direction);
-        fmc_data->current_fuel_kg = sizes[DREF_FUEL_MASS] >= 3 ? (fuel_mass[0] + fuel_mass[1] + fuel_mass[2]) : first_or_default(fuel_mass, sizes[DREF_FUEL_MASS], fmc_data->current_fuel_kg);
-        fmc_data->live_data_active = 1;
+        apply_frame_to_legacy_modules(frame, pfd_data, nd_data, eicas_data, systems_data, fmc_data);
     }
 
     return 1;
@@ -945,15 +852,11 @@ static int xplane_live_data_update_internal(
     ND_Data *nd_data,
     EICAS_Data *eicas_data,
     AircraftSystems_Data *systems_data,
-<<<<<<< HEAD
     FMC_Data *fmc_data,
-    float delta_time)
-=======
     SimDataCenter *sim_data_center,
     float delta_time,
     int write_legacy_outputs,
     int compare_snapshot)
->>>>>>> dc861ef3215017f438b4af9c46e53f7bf56a8506
 {
     SimXPlaneLiveFrame frame;
 
@@ -1006,21 +909,27 @@ static int xplane_live_data_update_internal(
         live->retry_elapsed = 0.0f;
     }
 
-<<<<<<< HEAD
-    const int ok = poll_all_data(live, pfd_data, nd_data, eicas_data, systems_data, fmc_data);
-    if (ok)
-    {
-        live->missed_frames = 0;
-        set_status(live, 1, 1, 1, 1);
-=======
     memset(&frame, 0, sizeof(frame));
-    const int ok = poll_all_data(live, pfd_data, nd_data, eicas_data, systems_data, &frame, delta_time, write_legacy_outputs);
+    const int ok = poll_all_data(
+        live,
+        pfd_data,
+        nd_data,
+        eicas_data,
+        systems_data,
+        fmc_data,
+        &frame,
+        delta_time,
+        write_legacy_outputs);
     if (ok)
     {
         live->missed_frames = 0;
-        set_status(live, 1, 1, 1);
+        set_status(live, 1, 1, 1, fmc_data != NULL);
         frame.connected = live->connected;
         frame.timed_out = 0;
+        if (fmc_data != NULL)
+        {
+            fmc_data->live_data_active = 1;
+        }
         if (sim_data_center != NULL)
         {
             const int applied_xplane = sim_data_center_apply_xplane_live_frame(sim_data_center, &frame);
@@ -1029,7 +938,6 @@ static int xplane_live_data_update_internal(
                 compare_xplane_frame_to_snapshot(live, &frame, sim_data_center_snapshot(sim_data_center));
             }
         }
->>>>>>> dc861ef3215017f438b4af9c46e53f7bf56a8506
     }
     else
     {
@@ -1054,9 +962,10 @@ int xplane_live_data_update(
     ND_Data *nd_data,
     EICAS_Data *eicas_data,
     AircraftSystems_Data *systems_data,
+    FMC_Data *fmc_data,
     float delta_time)
 {
-    return xplane_live_data_update_internal(live, pfd_data, nd_data, eicas_data, systems_data, NULL, delta_time, 1, 0);
+    return xplane_live_data_update_internal(live, pfd_data, nd_data, eicas_data, systems_data, fmc_data, NULL, delta_time, 1, 0);
 }
 
 int xplane_live_data_update_with_sim_data_center(
@@ -1068,7 +977,7 @@ int xplane_live_data_update_with_sim_data_center(
     SimDataCenter *sim_data_center,
     float delta_time)
 {
-    return xplane_live_data_update_internal(live, pfd_data, nd_data, eicas_data, systems_data, sim_data_center, delta_time, 0, 0);
+    return xplane_live_data_update_internal(live, pfd_data, nd_data, eicas_data, systems_data, NULL, sim_data_center, delta_time, 0, 0);
 }
 
 int xplane_live_data_pfd_active(const XPlaneLiveData *live)
