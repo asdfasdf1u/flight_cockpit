@@ -34,6 +34,7 @@ typedef void (*CockpitAlarmEventSink)(const CockpitAlarmEvent *event, void *user
 typedef struct CockpitAlarmState
 {
     int fire_active;
+    int engine_fire_active;
     int caution_active;
     int stall_active;
     int evac_active;
@@ -57,7 +58,7 @@ typedef CockpitAlarmState Cockpit_AlarmState;
 
 void cockpit_alarm_init(CockpitAlarmState *state);
 void cockpit_alarm_destroy(CockpitAlarmState *state);
-void cockpit_alarm_update(CockpitAlarmState *state, const AlertSnapshot *alerts);
+void cockpit_alarm_update(CockpitAlarmState *state, const AlertSnapshot *alerts, const SimSnapshot *snapshot, int takeoff_detected);
 void cockpit_alarm_render(SDL_Renderer *renderer, const Cockpit_Layout *layout, const CockpitAlarmState *state, Uint32 ticks);
 int cockpit_alarm_handle_click(CockpitAlarmState *state, AlertManager *manager, float world_x, float world_y, const Cockpit_Layout *layout);
 void cockpit_alarm_set_event_sink(CockpitAlarmState *state, CockpitAlarmEventSink sink, void *user_data);

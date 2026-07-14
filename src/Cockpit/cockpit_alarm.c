@@ -13,37 +13,26 @@
 #define COCKPIT_ALARM_AUDIO_CHUNK_MS 180
 #define COCKPIT_ALARM_MAX_AUDIO_SAMPLES (COCKPIT_ALARM_AUDIO_RATE * COCKPIT_ALARM_CAUTION_TONE_MS / 1000)
 
-#if 0 /* AlertManager owns warning text classification. */
 static int text_contains(const char *text, const char *needle)
 {
     return text != NULL && needle != NULL && strstr(text, needle) != NULL;
 }
 
-static int is_master_warning(const SimWarning *warning)
+/*
+ * AlertManager owns the normal master-warning categories.  These two flight
+ * conditions are kept from the raw snapshot because AlertManager has no
+ * dedicated STALL or OVERSPEED alert type.
+ */
+static int is_overspeed_warning(const SimWarning *warning)
 {
-    if (warning == NULL || !warning->active || warning->level == SIM_WARNING_INFO)
-    {
-        return 0;
-    }
-
-    return text_contains(warning->text, "FIRE") || text_contains(warning->text, "OVERSPEED");
+    return warning != NULL && warning->active && warning->level != SIM_WARNING_INFO &&
+           text_contains(warning->text, "OVERSPEED");
 }
 
 static int is_stall_warning(const SimWarning *warning)
 {
     return warning != NULL && warning->active && text_contains(warning->text, "STALL");
 }
-
-static int is_master_caution_warning(const SimWarning *warning)
-{
-    if (warning == NULL || !warning->active || warning->level == SIM_WARNING_INFO)
-    {
-        return 0;
-    }
-
-    return !is_master_warning(warning) && !is_stall_warning(warning);
-}
-#endif
 
 static void append_signature(char *signature, size_t signature_size, const char *text)
 {
@@ -240,21 +229,6 @@ static int queue_tone(CockpitAlarmState *state, int frequency_hz, int duration_m
     return 1;
 }
 
-static void play_master_caution_tone(CockpitAlarmState *state)
-{
-    if (state == NULL || state->audio_device == 0)
-    {
-        return;
-    }
-
-    clear_audio(state);
-    if (queue_tone(state, COCKPIT_ALARM_CAUTION_TONE_HZ, COCKPIT_ALARM_CAUTION_TONE_MS, 7200.0f, 0))
-    {
-        printf("Cockpit Alarm: MASTER_CAUTION single tone played.\n");
-        fflush(stdout);
-    }
-}
-
 static void service_continuous_audio(CockpitAlarmState *state)
 {
     CockpitAlarmAudioMode wanted_mode = COCKPIT_ALARM_AUDIO_NONE;
@@ -301,6 +275,10 @@ void cockpit_alarm_init(CockpitAlarmState *state)
 
     memset(state, 0, sizeof(*state));
     state->audio_mode = COCKPIT_ALARM_AUDIO_NONE;
+    /* The master-caution lamp is a startup self-test only. */
+    state->caution_active = 1;
+    state->caution_tone_played = 1;
+    snprintf(state->caution_signature, sizeof(state->caution_signature), "%s", "STARTUP");
 
     if ((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) == 0)
     {
@@ -344,27 +322,36 @@ void cockpit_alarm_destroy(CockpitAlarmState *state)
     memset(state, 0, sizeof(*state));
 }
 
-void cockpit_alarm_update(CockpitAlarmState *state, const AlertSnapshot *alerts)
+void cockpit_alarm_update(
+    CockpitAlarmState *state,
+    const AlertSnapshot *alerts,
+    const SimSnapshot *snapshot,
+    int takeoff_detected)
 {
     char warning_signature[sizeof(state->fire_signature)];
-    char caution_signature[sizeof(state->caution_signature)];
     char stall_signature[sizeof(state->stall_signature)];
     int warning_active = 0;
-    int caution_active = 0;
+    int engine_fire_active = 0;
     int stall_active = 0;
     int warning_is_new = 0;
-    int caution_is_new = 0;
+    int engine_fire_is_new = 0;
     int stall_is_new = 0;
     int warning_acknowledged = 1;
-    int caution_acknowledged = 1;
+    int direct_warning_active = 0;
 
     if (state == NULL)
     {
         return;
     }
 
+    if (takeoff_detected && state->caution_active)
+    {
+        publish_event(state, COCKPIT_ALARM_LEVEL_CAUTION, 0, state->caution_signature);
+        state->caution_active = 0;
+        state->caution_acknowledged = 1;
+    }
+
     warning_signature[0] = '\0';
-    caution_signature[0] = '\0';
     stall_signature[0] = '\0';
 
     if (alerts != NULL)
@@ -376,35 +363,48 @@ void cockpit_alarm_update(CockpitAlarmState *state, const AlertSnapshot *alerts)
             {
                 continue;
             }
+            if (alert->type == ALERT_TYPE_ENGINE_FIRE)
+            {
+                engine_fire_active = 1;
+            }
             if (alert->level == ALERT_LEVEL_WARNING)
             {
                 warning_active = 1;
                 warning_acknowledged &= alert->acknowledged;
                 append_signature(warning_signature, sizeof(warning_signature), alert->message);
             }
-            else if (alert->level == ALERT_LEVEL_CAUTION)
+        }
+    }
+
+    if (snapshot != NULL)
+    {
+        for (int i = 0; i < snapshot->warning_count; ++i)
+        {
+            const SimWarning *warning = &snapshot->warnings[i];
+
+            if (is_overspeed_warning(warning))
             {
-                caution_active = 1;
-                caution_acknowledged &= alert->acknowledged;
-                append_signature(caution_signature, sizeof(caution_signature), alert->message);
+                warning_active = 1;
+                direct_warning_active = 1;
+                append_signature(warning_signature, sizeof(warning_signature), warning->text);
+            }
+            if (is_stall_warning(warning))
+            {
+                stall_active = 1;
+                append_signature(stall_signature, sizeof(stall_signature), warning->text);
             }
         }
     }
 
     warning_is_new = warning_active &&
                      (!state->fire_active || strcmp(state->fire_signature, warning_signature) != 0);
-    caution_is_new = caution_active &&
-                     (!state->caution_active || strcmp(state->caution_signature, caution_signature) != 0);
+    engine_fire_is_new = engine_fire_active && !state->engine_fire_active;
     stall_is_new = stall_active &&
                    (!state->stall_active || strcmp(state->stall_signature, stall_signature) != 0);
 
     if (state->fire_active && !warning_active)
     {
         publish_event(state, COCKPIT_ALARM_LEVEL_WARNING, 0, state->fire_signature);
-    }
-    if (state->caution_active && !caution_active)
-    {
-        publish_event(state, COCKPIT_ALARM_LEVEL_CAUTION, 0, state->caution_signature);
     }
     if (state->stall_active && !stall_active)
     {
@@ -418,28 +418,18 @@ void cockpit_alarm_update(CockpitAlarmState *state, const AlertSnapshot *alerts)
     else if (warning_is_new)
     {
         state->fire_acknowledged = 0;
-        state->fire_flash_started_ticks = SDL_GetTicks();
         publish_event(state, COCKPIT_ALARM_LEVEL_WARNING, 1, warning_signature);
     }
     else
     {
-        state->fire_acknowledged = warning_acknowledged;
+        /* Raw OVERSPEED warnings remain unacknowledged until the pilot presses MASTER WARNING. */
+        state->fire_acknowledged = warning_acknowledged &&
+                                   (!direct_warning_active || state->fire_acknowledged);
     }
 
-    if (!caution_active)
+    if (engine_fire_is_new)
     {
-        state->caution_acknowledged = 0;
-        state->caution_tone_played = 0;
-    }
-    else if (caution_is_new)
-    {
-        state->caution_acknowledged = 0;
-        state->caution_tone_played = 0;
-        publish_event(state, COCKPIT_ALARM_LEVEL_CAUTION, 1, caution_signature);
-    }
-    else
-    {
-        state->caution_acknowledged = caution_acknowledged;
+        state->fire_flash_started_ticks = SDL_GetTicks();
     }
 
     if (stall_is_new)
@@ -448,21 +438,10 @@ void cockpit_alarm_update(CockpitAlarmState *state, const AlertSnapshot *alerts)
     }
 
     state->fire_active = warning_active;
-    state->caution_active = caution_active;
+    state->engine_fire_active = engine_fire_active;
     state->stall_active = stall_active;
     snprintf(state->fire_signature, sizeof(state->fire_signature), "%s", warning_signature);
-    snprintf(state->caution_signature, sizeof(state->caution_signature), "%s", caution_signature);
     snprintf(state->stall_signature, sizeof(state->stall_signature), "%s", stall_signature);
-
-    if (state->caution_active &&
-        !state->caution_acknowledged &&
-        !state->caution_tone_played &&
-        !state->fire_active &&
-        !state->stall_active)
-    {
-        play_master_caution_tone(state);
-        state->caution_tone_played = 1;
-    }
 
     service_continuous_audio(state);
     log_alarm_state(state);
@@ -520,7 +499,7 @@ void cockpit_alarm_render(SDL_Renderer *renderer, const Cockpit_Layout *layout, 
         return;
     }
 
-    if (state->fire_active)
+    if (state->engine_fire_active)
     {
         warning_flash = smooth_flash_intensity(ticks - state->fire_flash_started_ticks);
     }
@@ -569,8 +548,9 @@ int cockpit_alarm_handle_click(CockpitAlarmState *state, AlertManager *manager, 
                 alert_manager_acknowledge(manager, manager->snapshot.alerts[i].type);
             }
         }
+        publish_event(state, COCKPIT_ALARM_LEVEL_CAUTION, 0, state->caution_signature);
+        state->caution_active = 0;
         state->caution_acknowledged = 1;
-        state->caution_tone_played = 0;
         if (state->audio_mode == COCKPIT_ALARM_AUDIO_NONE)
         {
             clear_audio(state);
