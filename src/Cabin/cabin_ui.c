@@ -21,6 +21,8 @@ static const SDL_Color COLOR_ROUTE_SOFT = {126, 188, 242, 255};
 static const SDL_Color COLOR_GREEN = {68, 176, 68, 255};
 static const SDL_Color COLOR_BLACK_OVERLAY = {16, 26, 35, 198};
 static const SDL_Color COLOR_PROGRESS_BG = {64, 80, 92, 255};
+static const SDL_Color COLOR_EMERGENCY_RED = {242, 24, 35, 255};
+static const SDL_Color COLOR_EMERGENCY_DARK = {70, 0, 4, 232};
 
 static float g_map_zoom = 1.0f;
 static float g_map_pan_x = 0.0f;
@@ -402,11 +404,17 @@ static void draw_location_panel(SDL_Renderer *renderer, const Cabin_Assets *asse
 {
     const int header_h = 44;
     const int row_h = 46;
+    const Cabin_Place *place = data != NULL ? &data->current_place : NULL;
+    const int resolving = place != NULL && place->status == CABIN_PLACE_PENDING;
+    const int valid = place != NULL && place->status == CABIN_PLACE_VALID;
+    const char *province = valid ? safe_text_or(place->province, "--") : (resolving ? "解析中" : "--");
+    const char *city = valid ? safe_text_or(place->city, "--") : (resolving ? "解析中" : "--");
+    const char *district = valid ? safe_text_or(place->district, "--") : (resolving ? "解析中" : "--");
 
     draw_panel_header(renderer, assets->title_font, &(SDL_Rect){x, y, w, header_h}, "地点信息");
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "%s", safe_text_or(data->current_city, "飞行途中"));
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "%s", safe_text_or(data->current_district, "未知区域"));
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "%s", safe_text_or(data->current_town, "未知位置"));
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "省：%s", province);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "市：%s", city);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "县/区：%s", district);
     draw_rect(renderer, &(SDL_Rect){x, y, w, header_h + row_h * 3}, COLOR_TEXT_DARK);
 }
 
@@ -835,30 +843,83 @@ static void draw_flight_info_bar(SDL_Renderer *renderer, const Cabin_Assets *ass
     const int text_w = progress_x - bar.x - 34;
     const SDL_Rect text_clip = {bar.x + 14, bar.y + 8, text_w > 220 ? text_w : 220, bar.h - 16};
     const SDL_Rect progress_clip = {progress_x, bar.y + 8, progress_w + 4, bar.h - 16};
+    const int route_ready = data != NULL && data->route_valid && data->route_point_count >= 2 &&
+                            data->origin_airport[0] != '\0' && data->destination_airport[0] != '\0' &&
+                            strcmp(data->origin_airport, "----") != 0 && strcmp(data->destination_airport, "----") != 0;
+    const int snapshot_ready = data != NULL && data->snapshot_valid;
+    const char *origin_place_name = route_ready ? cabin_place_display_name(&data->origin_place) : "";
+    const char *destination_place_name = route_ready ? cabin_place_display_name(&data->destination_place) : "";
+    const char *origin_display = origin_place_name[0] != '\0' ? origin_place_name : (route_ready ? data->origin_airport : "");
+    const char *destination_display = destination_place_name[0] != '\0' ? destination_place_name : (route_ready ? data->destination_airport : "");
 
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     fill_rect(renderer, &bar, COLOR_BLACK_OVERLAY);
     draw_rect(renderer, &bar, COLOR_ROUTE_SOFT);
 
-    draw_text_clipped(renderer, assets->title_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 10, "%s -> %s",
-              data->origin_city,
-              data->destination_city);
-    draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   速度 %.0fkm/h   剩余 %.0f分钟",
-              data->altitude,
-              data->ground_speed,
-              data->remaining_time_min);
+    if (route_ready)
+    {
+        draw_text_clipped(renderer, assets->title_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 10, "%s -> %s",
+                          origin_display, destination_display);
+    }
+    else
+    {
+        draw_text_clipped(renderer, assets->title_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 10, "未设置航路");
+    }
+    if (snapshot_ready && route_ready)
+    {
+        draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   速度 %.0fkm/h   剩余 %.0f分钟",
+                          data->altitude, data->ground_speed, data->remaining_time_min);
+    }
+    else if (snapshot_ready)
+    {
+        draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   速度 %.0fkm/h   剩余 --",
+                          data->altitude, data->ground_speed);
+    }
+    else
+    {
+        draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 --   速度 --   剩余 --");
+    }
     draw_text_clipped(renderer, assets->small_font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 73, "航班 %s  机场 %s -> %s",
-              data->flight_no,
-              data->origin_airport,
-              data->destination_airport);
+                      safe_text_or(data->flight_no, "----"),
+                      route_ready ? data->origin_airport : "--",
+                      route_ready ? data->destination_airport : "--");
 
-    const float progress = clamp_float(data->progress, 0.0f, 1.0f);
+    const float progress = route_ready && snapshot_ready ? clamp_float(data->progress, 0.0f, 1.0f) : 0.0f;
     const SDL_Rect progress_bg = {progress_x, progress_y, progress_w, 12};
     const SDL_Rect progress_fg = {progress_x, progress_y, (int)((float)progress_w * progress), 12};
-    draw_text_clipped(renderer, assets->font, COLOR_WHITE, &progress_clip, progress_x, bar.y + 34, "进度 %.0f%%", progress * 100.0f);
+    draw_text_clipped(renderer, assets->font, COLOR_WHITE, &progress_clip, progress_x, bar.y + 34,
+                      route_ready && snapshot_ready ? "进度 %.0f%%" : "进度 --",
+                      progress * 100.0f);
     fill_rect(renderer, &progress_bg, COLOR_PROGRESS_BG);
     fill_rect(renderer, &progress_fg, COLOR_ROUTE);
     draw_rect(renderer, &progress_bg, COLOR_WHITE);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+}
+
+static void draw_crash_demo_overlay(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, int width, int height)
+{
+    TTF_Font *emergency_font = assets->emergency_font != NULL ? assets->emergency_font : assets->title_font;
+    const Uint32 elapsed = SDL_GetTicks() - data->crash_demo_started_ticks;
+    const int flash_on = ((elapsed / 110u) % 2u) == 0u;
+    const SDL_Color overlay_color = flash_on ? (SDL_Color){126, 0, 8, 74} : (SDL_Color){52, 0, 4, 46};
+    const SDL_Color panel_border_color = {215, 30, 40, 255};
+    const int panel_width = width > 1000 ? 720 : (width * 4) / 5;
+    const int panel_height = height > 600 ? 250 : 210;
+    const SDL_Rect screen = {0, 0, width, height};
+    const SDL_Rect panel = {(width - panel_width) / 2, (height - panel_height) / 2, panel_width, panel_height};
+    const SDL_Rect emergency_line = {panel.x + 18, panel.y + 28, panel.w - 36, 82};
+    const SDL_Rect detected_line = {panel.x + 18, panel.y + 106, panel.w - 36, 58};
+    const SDL_Rect reset_line = {panel.x + 18, panel.y + panel.h - 56, panel.w - 36, 34};
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    fill_rect(renderer, &screen, overlay_color);
+
+    fill_rect(renderer, &panel, COLOR_EMERGENCY_DARK);
+    draw_rect(renderer, &panel, panel_border_color);
+    draw_rect(renderer, &(SDL_Rect){panel.x + 5, panel.y + 5, panel.w - 10, panel.h - 10}, panel_border_color);
+    draw_text_centered(renderer, emergency_font, COLOR_EMERGENCY_RED, &emergency_line, "EMERGENCY");
+    draw_text_centered(renderer, assets->title_font, COLOR_WHITE, &detected_line, "CRASH DETECTED");
+    draw_text_centered(renderer, assets->small_font, COLOR_WHITE, &reset_line, "CRASH DEMO  -  PRESS R TO RESET");
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
@@ -915,5 +976,301 @@ void cabin_ui_render(SDL_Renderer *renderer, const Cabin_Assets *assets, const C
     {
         draw_status_badge(renderer, assets, data, &map_view_rect);
     }
+    if (data->crash_demo_active)
+    {
+        draw_crash_demo_overlay(renderer, assets, data, width, height);
+    }
 }
 
+/* ------------------------------------------------------------------ */
+/* API Key dialog                                                     */
+/* ------------------------------------------------------------------ */
+
+typedef struct Cabin_ApiKeyDialog
+{
+    char api_key[256];
+    int remember;
+    int active;
+    int width;
+    int height;
+    SDL_Rect dialog_rect;
+    SDL_Rect input_rect;
+    SDL_Rect checkbox_rect;
+    SDL_Rect ok_rect;
+    SDL_Rect cancel_rect;
+} Cabin_ApiKeyDialog;
+
+static void apikey_dialog_compute_layout(Cabin_ApiKeyDialog *dlg, int win_w, int win_h)
+{
+    const int dlg_w = 540;
+    const int dlg_h = 340;
+    dlg->width = win_w;
+    dlg->height = win_h;
+    dlg->dialog_rect = (SDL_Rect){(win_w - dlg_w) / 2, (win_h - dlg_h) / 2, dlg_w, dlg_h};
+    dlg->input_rect = (SDL_Rect){dlg->dialog_rect.x + 32, dlg->dialog_rect.y + 116, dlg_w - 64, 42};
+    dlg->checkbox_rect = (SDL_Rect){dlg->dialog_rect.x + 32, dlg->dialog_rect.y + 174, 22, 22};
+    dlg->ok_rect = (SDL_Rect){dlg->dialog_rect.x + dlg_w - 232, dlg->dialog_rect.y + dlg_h - 64, 96, 38};
+    dlg->cancel_rect = (SDL_Rect){dlg->dialog_rect.x + dlg_w - 120, dlg->dialog_rect.y + dlg_h - 64, 96, 38};
+}
+
+static void apikey_dialog_init(Cabin_ApiKeyDialog *dlg, int win_w, int win_h)
+{
+    memset(dlg, 0, sizeof(*dlg));
+    dlg->remember = 1;
+    dlg->active = 1;
+    apikey_dialog_compute_layout(dlg, win_w, win_h);
+}
+
+static void apikey_dialog_append_text(Cabin_ApiKeyDialog *dlg, const char *text)
+{
+    if (!dlg->active || text == NULL)
+    {
+        return;
+    }
+
+    const size_t used = strlen(dlg->api_key);
+    const size_t add = strlen(text);
+    if (used + add < sizeof(dlg->api_key))
+    {
+        strcat(dlg->api_key, text);
+    }
+}
+
+static void apikey_dialog_handle_text_input(Cabin_ApiKeyDialog *dlg, const char *text)
+{
+    apikey_dialog_append_text(dlg, text);
+}
+
+static void apikey_dialog_handle_keydown(Cabin_ApiKeyDialog *dlg, const SDL_KeyboardEvent *key)
+{
+    if (!dlg->active)
+    {
+        return;
+    }
+
+    if ((key->keysym.mod & KMOD_CTRL) != 0 && key->keysym.sym == SDLK_v)
+    {
+        char *clipboard_text = SDL_GetClipboardText();
+        if (clipboard_text != NULL)
+        {
+            apikey_dialog_append_text(dlg, clipboard_text);
+            SDL_free(clipboard_text);
+        }
+    }
+    else if (key->keysym.sym == SDLK_BACKSPACE)
+    {
+        const size_t used = strlen(dlg->api_key);
+        if (used > 0)
+        {
+            /* Trim one UTF-8 codepoint if possible; for API keys ASCII is fine. */
+            dlg->api_key[used - 1] = '\0';
+        }
+    }
+    else if (key->keysym.sym == SDLK_RETURN || key->keysym.sym == SDLK_KP_ENTER)
+    {
+        dlg->active = 2; /* confirmed */
+    }
+    else if (key->keysym.sym == SDLK_ESCAPE)
+    {
+        dlg->active = 3; /* cancelled */
+    }
+}
+
+static void apikey_dialog_handle_mouse(Cabin_ApiKeyDialog *dlg, const SDL_MouseButtonEvent *btn)
+{
+    if (!dlg->active || btn->button != SDL_BUTTON_LEFT)
+    {
+        return;
+    }
+
+    if (point_in_rect(btn->x, btn->y, &dlg->input_rect))
+    {
+        return;
+    }
+
+    if (point_in_rect(btn->x, btn->y, &dlg->checkbox_rect))
+    {
+        dlg->remember = !dlg->remember;
+        return;
+    }
+
+    if (point_in_rect(btn->x, btn->y, &dlg->ok_rect))
+    {
+        dlg->active = 2;
+        return;
+    }
+
+    if (point_in_rect(btn->x, btn->y, &dlg->cancel_rect))
+    {
+        dlg->active = 3;
+        return;
+    }
+}
+
+static void apikey_dialog_draw_button(SDL_Renderer *renderer,
+                                      TTF_Font *font,
+                                      const SDL_Rect *rect,
+                                      const char *text,
+                                      SDL_Color bg,
+                                      SDL_Color fg)
+{
+    fill_rect(renderer, rect, bg);
+    draw_rect(renderer, rect, COLOR_PANEL_LINE);
+    draw_text_centered(renderer, font, fg, rect, text);
+}
+
+static void apikey_dialog_render(SDL_Renderer *renderer,
+                                 TTF_Font *title_font,
+                                 TTF_Font *font,
+                                 TTF_Font *small_font,
+                                 Cabin_ApiKeyDialog *dlg)
+{
+    const SDL_Color overlay = {16, 26, 35, 180};
+    const SDL_Color panel = {248, 248, 246, 255};
+    const SDL_Color title_bg = {31, 142, 237, 255};
+    const SDL_Color input_bg = {255, 255, 255, 255};
+    const SDL_Color input_border_active = {31, 142, 237, 255};
+    const SDL_Color input_border_normal = {176, 184, 190, 255};
+    const SDL_Color blue = {31, 142, 237, 255};
+    const SDL_Color white = {255, 255, 255, 255};
+    const SDL_Color dark = {36, 42, 48, 255};
+    const SDL_Color muted = {120, 130, 140, 255};
+    const SDL_Color btn_bg = {230, 235, 240, 255};
+
+    /* Dim background. */
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    fill_rect(renderer, &(SDL_Rect){0, 0, dlg->width, dlg->height}, overlay);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+    /* Dialog panel. */
+    fill_rect(renderer, &dlg->dialog_rect, panel);
+    draw_rect(renderer, &dlg->dialog_rect, COLOR_PANEL_LINE);
+
+    /* Title bar. */
+    const SDL_Rect title_rect = {dlg->dialog_rect.x, dlg->dialog_rect.y, dlg->dialog_rect.w, 48};
+    fill_rect(renderer, &title_rect, title_bg);
+    draw_text(renderer, title_font, white, dlg->dialog_rect.x + 18, dlg->dialog_rect.y + 10, "请输入高德 API Key");
+
+    /* Hint text. */
+    draw_text(renderer, font, dark, dlg->dialog_rect.x + 32, dlg->dialog_rect.y + 66,
+              "输入 Key 后调用真实 API 数据，关闭则使用模拟数据。");
+    draw_text(renderer, small_font, muted, dlg->dialog_rect.x + 32, dlg->dialog_rect.y + 92,
+              "Key 仅保存在本次运行内存中，关闭程序后不保留。");
+
+    /* Input box. */
+    fill_rect(renderer, &dlg->input_rect, input_bg);
+    draw_rect(renderer, &dlg->input_rect, dlg->active == 1 ? input_border_active : input_border_normal);
+    const SDL_Rect input_clip = {dlg->input_rect.x + 8, dlg->input_rect.y + 2,
+                                 dlg->input_rect.w - 16, dlg->input_rect.h - 4};
+    const int font_h = font != NULL ? TTF_FontHeight(font) : 20;
+    const int text_y = dlg->input_rect.y + (dlg->input_rect.h - font_h) / 2;
+    draw_text_clipped(renderer, font, dark, &input_clip, dlg->input_rect.x + 10, text_y,
+                      "%s%s", dlg->api_key[0] != '\0' ? dlg->api_key : " ",
+                      (SDL_GetTicks() / 530) % 2 == 0 ? "|" : "");
+
+    /* Remember checkbox. */
+    fill_rect(renderer, &dlg->checkbox_rect, white);
+    draw_rect(renderer, &dlg->checkbox_rect, COLOR_PANEL_LINE);
+    if (dlg->remember)
+    {
+        const SDL_Rect check_inner = {dlg->checkbox_rect.x + 5, dlg->checkbox_rect.y + 5,
+                                      dlg->checkbox_rect.w - 10, dlg->checkbox_rect.h - 10};
+        fill_rect(renderer, &check_inner, blue);
+    }
+    draw_text(renderer, font, dark, dlg->checkbox_rect.x + dlg->checkbox_rect.w + 10,
+              dlg->checkbox_rect.y + 1, "记住当前 API Key（本次运行有效）");
+
+    /* Buttons. */
+    apikey_dialog_draw_button(renderer, font, &dlg->ok_rect, "确定", blue, white);
+    apikey_dialog_draw_button(renderer, font, &dlg->cancel_rect, "关闭", btn_bg, dark);
+}
+
+int cabin_ui_run_apikey_dialog(SDL_Window *window,
+                               SDL_Renderer *renderer,
+                               const Cabin_Assets *assets,
+                               const Cabin_Data *data,
+                               TTF_Font *title_font,
+                               TTF_Font *font,
+                               TTF_Font *small_font,
+                               Cabin_ApiKeyDialogResult *result)
+{
+    if (window == NULL || renderer == NULL || result == NULL)
+    {
+        return -1;
+    }
+
+    int win_w = 0;
+    int win_h = 0;
+    SDL_GetWindowSize(window, &win_w, &win_h);
+    if (win_w <= 0 || win_h <= 0)
+    {
+        win_w = 1600;
+        win_h = 900;
+    }
+
+    Cabin_ApiKeyDialog dlg;
+    apikey_dialog_init(&dlg, win_w, win_h);
+
+    result->confirmed = 0;
+    result->remember = 0;
+    result->api_key[0] = '\0';
+
+    SDL_StartTextInput();
+
+    int running = 1;
+    SDL_Event event;
+    while (running)
+    {
+        while (SDL_PollEvent(&event))
+        {
+            if (event.type == SDL_QUIT)
+            {
+                running = 0;
+                dlg.active = 3;
+            }
+            else if (event.type == SDL_KEYDOWN)
+            {
+                apikey_dialog_handle_keydown(&dlg, &event.key);
+            }
+            else if (event.type == SDL_TEXTINPUT)
+            {
+                apikey_dialog_handle_text_input(&dlg, event.text.text);
+            }
+            else if (event.type == SDL_MOUSEBUTTONDOWN)
+            {
+                apikey_dialog_handle_mouse(&dlg, &event.button);
+            }
+            else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
+            {
+                apikey_dialog_compute_layout(&dlg, event.window.data1, event.window.data2);
+            }
+        }
+
+        if (dlg.active == 2 || dlg.active == 3)
+        {
+            running = 0;
+        }
+
+        if (assets != NULL && data != NULL)
+        {
+            cabin_ui_render(renderer, assets, data);
+        }
+        else
+        {
+            SDL_SetRenderDrawColor(renderer, 45, 72, 96, 255);
+            SDL_RenderClear(renderer);
+        }
+        apikey_dialog_render(renderer, title_font, font, small_font, &dlg);
+        SDL_RenderPresent(renderer);
+
+        SDL_Delay(16);
+    }
+
+    SDL_StopTextInput();
+
+    result->confirmed = (dlg.active == 2) ? 1 : 0;
+    result->remember = dlg.remember;
+    snprintf(result->api_key, sizeof(result->api_key), "%s", dlg.api_key);
+
+    return 0;
+}

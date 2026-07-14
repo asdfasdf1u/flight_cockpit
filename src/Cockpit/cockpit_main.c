@@ -37,14 +37,19 @@
 #include "../FMC/fmc_data.h"
 #include "../FMC/fmc_display.h"
 #include "../FMC/fmc_event.h"
+#include "../FMC/fmc_connect.h"
 
 #include "../Util/xplane_live_data.h"
+
+int fmc_xplane_send_command(const char *command);
 
 #define COCKPIT_WINDOW_WIDTH 1600
 #define COCKPIT_WINDOW_HEIGHT 900
 #define COCKPIT_TARGET_FRAME_MS 16
-#define COCKPIT_PFD_TARGET_FRAME_MS 33
+#define COCKPIT_PFD_TARGET_FRAME_MS COCKPIT_TARGET_FRAME_MS
 #define COCKPIT_SYNC_CHECK_LOG_MS 5000
+#define COCKPIT_PFD_PERF_LOG_MS 2000
+#define COCKPIT_SCENE_TEXTURE_MAX_WIDTH 2048
 
 #define COCKPIT_PFD_TEXTURE_WIDTH 900
 #define COCKPIT_PFD_TEXTURE_HEIGHT 800
@@ -57,6 +62,105 @@
 
 #define COCKPIT_MIN_SCALE 0.5f
 #define COCKPIT_MAX_SCALE 3.0f
+
+typedef struct Cockpit_XPlaneConfig
+{
+    char ip[16];
+    unsigned short port;
+} Cockpit_XPlaneConfig;
+
+static unsigned short cockpit_parse_xplane_port(const char *text, unsigned short fallback)
+{
+    char *end = NULL;
+    long value;
+
+    if (text == NULL || text[0] == '\0')
+    {
+        return fallback;
+    }
+
+    value = strtol(text, &end, 10);
+    if (end == text || *end != '\0' || value <= 0 || value > 65535)
+    {
+        printf("Cockpit X-Plane: invalid port '%s'; using %u.\n", text, fallback);
+        return fallback;
+    }
+
+    return (unsigned short)value;
+}
+
+static void cockpit_xplane_config_set_ip(Cockpit_XPlaneConfig *config, const char *ip)
+{
+    if (config == NULL || ip == NULL || ip[0] == '\0')
+    {
+        return;
+    }
+
+    snprintf(config->ip, sizeof(config->ip), "%s", ip);
+}
+
+static void cockpit_xplane_config_init(Cockpit_XPlaneConfig *config, int argc, char *argv[])
+{
+    int i;
+    const char *env_ip = getenv("XPLANE_IP");
+    const char *env_port = getenv("XPLANE_PORT");
+
+    if (config == NULL)
+    {
+        return;
+    }
+
+    snprintf(config->ip, sizeof(config->ip), "%s", XPLANE_LIVE_DEFAULT_IP);
+    config->port = XPLANE_LIVE_DEFAULT_PORT;
+
+    cockpit_xplane_config_set_ip(config, env_ip);
+    config->port = cockpit_parse_xplane_port(env_port, config->port);
+
+    for (i = 1; i < argc; ++i)
+    {
+        const char *arg = argv[i];
+
+        if (arg == NULL)
+        {
+            continue;
+        }
+        if (strncmp(arg, "--xplane-ip=", 12) == 0)
+        {
+            cockpit_xplane_config_set_ip(config, arg + 12);
+        }
+        else if (strcmp(arg, "--xplane-ip") == 0 && i + 1 < argc)
+        {
+            cockpit_xplane_config_set_ip(config, argv[++i]);
+        }
+        else if (strncmp(arg, "--xplane-port=", 15) == 0)
+        {
+            config->port = cockpit_parse_xplane_port(arg + 15, config->port);
+        }
+        else if (strcmp(arg, "--xplane-port") == 0 && i + 1 < argc)
+        {
+            config->port = cockpit_parse_xplane_port(argv[++i], config->port);
+        }
+    }
+}
+
+static void cockpit_xplane_config_apply_env(const Cockpit_XPlaneConfig *config)
+{
+    char port_text[16];
+
+    if (config == NULL)
+    {
+        return;
+    }
+
+    snprintf(port_text, sizeof(port_text), "%u", config->port);
+#ifdef _WIN32
+    _putenv_s("XPLANE_IP", config->ip);
+    _putenv_s("XPLANE_PORT", port_text);
+#else
+    setenv("XPLANE_IP", config->ip, 1);
+    setenv("XPLANE_PORT", port_text, 1);
+#endif
+}
 
 typedef struct Cockpit_RenderTargets
 {
@@ -200,9 +304,36 @@ static SDL_Texture *create_target_texture(SDL_Renderer *renderer, int width, int
     return texture;
 }
 
+static void cockpit_scene_texture_dimensions(int world_width, int world_height, int *texture_width, int *texture_height)
+{
+    float scale;
+
+    if (texture_width == NULL || texture_height == NULL || world_width <= 0 || world_height <= 0)
+    {
+        return;
+    }
+
+    scale = (float)COCKPIT_SCENE_TEXTURE_MAX_WIDTH / (float)world_width;
+    if (scale > 1.0f)
+    {
+        scale = 1.0f;
+    }
+    *texture_width = (int)((float)world_width * scale + 0.5f);
+    *texture_height = (int)((float)world_height * scale + 0.5f);
+}
+
 static int create_render_targets(SDL_Renderer *renderer, Cockpit_RenderTargets *targets, int world_width, int world_height)
 {
+    int scene_width = 0;
+    int scene_height = 0;
+
     if (renderer == NULL || targets == NULL)
+    {
+        return 0;
+    }
+
+    cockpit_scene_texture_dimensions(world_width, world_height, &scene_width, &scene_height);
+    if (scene_width <= 0 || scene_height <= 0)
     {
         return 0;
     }
@@ -212,7 +343,7 @@ static int create_render_targets(SDL_Renderer *renderer, Cockpit_RenderTargets *
     targets->eicas1_texture = create_target_texture(renderer, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
     targets->eicas2_texture = create_target_texture(renderer, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
     targets->fmc_texture = create_target_texture(renderer, COCKPIT_FMC_TEXTURE_WIDTH, COCKPIT_FMC_TEXTURE_HEIGHT);
-    targets->scene_texture = create_target_texture(renderer, world_width, world_height);
+    targets->scene_texture = create_target_texture(renderer, scene_width, scene_height);
 
     return targets->pfd_texture != NULL &&
            targets->nd_texture != NULL &&
@@ -320,6 +451,8 @@ static void apply_sim_snapshot_to_aircraft_systems(AircraftSystems_Data *data, c
     data->engine_left.n2 = snapshot->n2_left;
     data->engine_left.egt = snapshot->egt_left;
     data->engine_left.fuel_flow = snapshot->fuel_flow_left;
+    data->engine_left.eicas1_fuel_flow_display_valid = 0;
+    data->engine_left.eicas2_fuel_flow_display_valid = 0;
     data->engine_left.oil_pressure = snapshot->oil_pressure_left;
     data->engine_left.oil_temp = snapshot->oil_temperature_left;
     data->engine_left.oil_quantity = snapshot->oil_quantity_left;
@@ -330,6 +463,8 @@ static void apply_sim_snapshot_to_aircraft_systems(AircraftSystems_Data *data, c
     data->engine_right.n2 = snapshot->n2_right;
     data->engine_right.egt = snapshot->egt_right;
     data->engine_right.fuel_flow = snapshot->fuel_flow_right;
+    data->engine_right.eicas1_fuel_flow_display_valid = 0;
+    data->engine_right.eicas2_fuel_flow_display_valid = 0;
     data->engine_right.oil_pressure = snapshot->oil_pressure_right;
     data->engine_right.oil_temp = snapshot->oil_temperature_right;
     data->engine_right.oil_quantity = snapshot->oil_quantity_right;
@@ -338,6 +473,11 @@ static void apply_sim_snapshot_to_aircraft_systems(AircraftSystems_Data *data, c
 
     data->total_air_temperature = snapshot->total_air_temperature;
     data->fuel_quantity = snapshot->fuel_quantity;
+    data->fuel_left_quantity = snapshot->fuel_left_quantity;
+    data->fuel_center_quantity = snapshot->fuel_center_quantity;
+    data->fuel_right_quantity = snapshot->fuel_right_quantity;
+    data->fuel_total_quantity = snapshot->fuel_left_quantity + snapshot->fuel_center_quantity + snapshot->fuel_right_quantity;
+    data->fuel_tank_quantities_valid = snapshot->has_eicas_upper;
     data->hydraulic_pressure = snapshot->hydraulic_pressure;
     data->cabin_pressure = snapshot->cabin_pressure;
     data->battery_voltage = snapshot->battery_voltage;
@@ -377,6 +517,7 @@ static void render_fmc_to_texture(
     {
         SDL_RenderCopy(renderer, assets->panel_texture, NULL, &(SDL_Rect){0, 0, COCKPIT_FMC_TEXTURE_WIDTH, COCKPIT_FMC_TEXTURE_HEIGHT});
         fmc_display_render_screen_only(renderer, font, data, &COCKPIT_FMC_SCREEN_RECT);
+        fmc_display_render_exec_light_only(renderer, data);
         fmc_display_render_hover_only(renderer, state);
     }
     else
@@ -395,11 +536,21 @@ static void update_module_textures(
     const AircraftSystems_Data *systems_data,
     const FMC_Display_Assets *fmc_assets,
     const FMC_Event_State *fmc_state,
-    const FMC_Data *fmc_data)
+    const FMC_Data *fmc_data,
+    Uint32 *pfd_render_elapsed_ms)
 {
+    if (pfd_render_elapsed_ms != NULL)
+    {
+        *pfd_render_elapsed_ms = 0;
+    }
     if (refresh_pfd)
     {
+        const Uint32 pfd_render_start = SDL_GetTicks();
         render_to_texture(renderer, targets->pfd_texture, render_pfd_adapter, font, pfd_data);
+        if (pfd_render_elapsed_ms != NULL)
+        {
+            *pfd_render_elapsed_ms = SDL_GetTicks() - pfd_render_start;
+        }
     }
     render_to_texture(renderer, targets->nd_texture, render_nd_adapter, font, nd_data);
     render_to_texture(renderer, targets->eicas1_texture, render_eicas1_adapter, font, systems_data);
@@ -418,8 +569,24 @@ static void update_scene_texture(
     const CockpitAlarmState *alarm_state,
     Uint32 ticks)
 {
+    int scene_width = 0;
+    int scene_height = 0;
+    float scene_scale = 1.0f;
+
+    if (renderer == NULL || targets == NULL || targets->scene_texture == NULL || layout == NULL)
+    {
+        return;
+    }
+    if (SDL_QueryTexture(targets->scene_texture, NULL, NULL, &scene_width, &scene_height) != 0 ||
+        scene_width <= 0 || scene_height <= 0)
+    {
+        return;
+    }
+    scene_scale = (float)scene_width / (float)layout->world_width;
+
     SDL_SetRenderTarget(renderer, targets->scene_texture);
     SDL_RenderSetViewport(renderer, NULL);
+    SDL_RenderSetScale(renderer, scene_scale, scene_scale);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
@@ -440,6 +607,7 @@ static void update_scene_texture(
 
     SDL_SetRenderTarget(renderer, NULL);
     SDL_RenderSetViewport(renderer, NULL);
+    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
 }
 
 static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapshot)
@@ -638,18 +806,27 @@ static void handle_fmc_keydown(FMC_Data *data, SDL_Keycode key)
     if (key == SDLK_BACKSPACE)
     {
         fmc_data_backspace(data);
+        fmc_xplane_send_command("sim/FMS/clear");
+    }
+    else if ((key == SDLK_RETURN || key == SDLK_KP_ENTER) &&
+             data->current_page == FMC_PAGE_ROUTE)
+    {
+        fmc_data_exec_route_selection(data);
     }
     else if (key == SDLK_F1)
     {
         fmc_data_set_page(data, FMC_PAGE_INDEX);
+        fmc_xplane_send_command("sim/FMS/init");
     }
     else if (key == SDLK_F2)
     {
         fmc_data_set_page(data, FMC_PAGE_ROUTE);
+        fmc_xplane_send_command("sim/FMS/fpln");
     }
     else if (key == SDLK_F3)
     {
         fmc_data_set_page(data, FMC_PAGE_DEP_ARR);
+        fmc_xplane_send_command("sim/FMS/dep_arr");
     }
     else if (key == SDLK_F4)
     {
@@ -658,7 +835,205 @@ static void handle_fmc_keydown(FMC_Data *data, SDL_Keycode key)
     else if (key == SDLK_F5)
     {
         fmc_data_set_page(data, FMC_PAGE_LEGS);
+        fmc_xplane_send_command("sim/FMS/legs");
     }
+}
+
+static int cockpit_view_shows_nd(Cockpit_ViewMode view_mode)
+{
+    return view_mode == COCKPIT_VIEW_MAIN || view_mode == COCKPIT_VIEW_ND_ZOOM;
+}
+
+static void log_fmc_draft_route(const FMC_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    const int draft_point_count = (data->origin[0] != '\0' ? 1 : 0) + data->route_count;
+    printf("FMC Route Diagnostic: draft point_count=%d origin=%s destination=%s pending_mod=%d.\n",
+           draft_point_count,
+           data->origin[0] != '\0' ? data->origin : "----",
+           data->destination[0] != '\0' ? data->destination : "----",
+           fmc_data_route_has_uncommitted_changes(data));
+    if (data->origin[0] != '\0')
+    {
+        printf("FMC Route Diagnostic: draft[0]=%s has_position=%d lat=%.6f lon=%.6f.\n",
+               data->origin,
+               data->origin_has_position,
+               data->origin_latitude,
+               data->origin_longitude);
+    }
+    for (int i = 0; i < data->route_count; ++i)
+    {
+        printf("FMC Route Diagnostic: draft[%d]=%s has_position=%d lat=%.6f lon=%.6f.\n",
+               i + 1,
+               data->route_points[i],
+               data->route_has_position[i],
+               data->route_latitudes[i],
+               data->route_longitudes[i]);
+    }
+}
+
+static void log_planned_route(const SimPlannedRoute *route, const char *stage)
+{
+    if (route == NULL)
+    {
+        printf("FMC Route Diagnostic: %s planned_route unavailable.\n", stage != NULL ? stage : "route");
+        return;
+    }
+
+    printf("FMC Route Diagnostic: %s planned_route point_count=%d active_waypoint_index=%d.\n",
+           stage != NULL ? stage : "route",
+           route->point_count,
+           route->active_waypoint_index);
+    for (int i = 0; i < route->point_count; ++i)
+    {
+        const SimRoutePoint *point = &route->points[i];
+        printf("FMC Route Diagnostic: %s planned[%d]=%s type=%s has_position=%d lat=%.6f lon=%.6f.\n",
+               stage != NULL ? stage : "route",
+               i,
+               point->ident,
+               point->type,
+               point->has_position,
+               point->latitude,
+               point->longitude);
+    }
+}
+
+static int sync_nd_route_from_sim_center(ND_Data *data, const SimDataCenter *sim_data_center, int force_check, const char *reason)
+{
+    if (data == NULL || sim_data_center == NULL)
+    {
+        return 0;
+    }
+
+    const int revision = sim_data_center_route_revision(sim_data_center);
+    const SimPlannedRoute *route = sim_data_center_route(sim_data_center);
+    if (force_check)
+    {
+        printf("ND activated: current route revision=%d cached route revision=%d reason=%s.\n",
+               revision,
+               data->route_cached_revision,
+               reason != NULL ? reason : "activate");
+        log_planned_route(route, "ND activation");
+    }
+
+    return nd_data_sync_planned_route(data, route, revision, force_check);
+}
+
+static int route_has_drawable_coordinates(const SimPlannedRoute *route)
+{
+    if (route == NULL || !route->valid || route->point_count <= 0)
+    {
+        return 0;
+    }
+
+    int drawable_count = 0;
+    for (int i = 0; i < route->point_count; ++i)
+    {
+        const SimRoutePoint *point = &route->points[i];
+        if (point->has_position &&
+            point->latitude >= -90.0 && point->latitude <= 90.0 &&
+            point->longitude >= -180.0 && point->longitude <= 180.0 &&
+            (point->latitude != 0.0 || point->longitude != 0.0))
+        {
+            drawable_count++;
+        }
+    }
+
+    return drawable_count > 0;
+}
+
+static int submit_fmc_route_to_sim_center(FMC_Data *data, SimDataCenter *sim_data_center)
+{
+    if (data == NULL || sim_data_center == NULL)
+    {
+        return 0;
+    }
+
+    const int before_revision = sim_data_center_route_revision(sim_data_center);
+    log_fmc_draft_route(data);
+    printf("FMC Route: EXEC submit requested; FMC_Data=%p SimDataCenter=%p planned_route=%p draft_points=%d pending_mod=%d clear_pending=%d revision_before=%d.\n",
+           (void *)data, (void *)sim_data_center, (void *)&sim_data_center->planned_route,
+           data->route_count,
+           fmc_data_route_has_uncommitted_changes(data),
+           fmc_data_route_clear_pending(data),
+           before_revision);
+
+    if (fmc_data_route_clear_pending(data))
+    {
+        sim_data_center_clear_route(sim_data_center);
+        fmc_data_mark_route_committed(data);
+        snprintf(data->message, sizeof(data->message), "RTE CLEARED");
+        printf("FMC Route: clear committed; planned_route points=0 revision=%d pending_mod=%d.\n",
+               sim_data_center_route_revision(sim_data_center),
+               fmc_data_route_has_uncommitted_changes(data));
+        return 1;
+    }
+
+    SimPlannedRoute route;
+    if (!fmc_data_export_planned_route(data, &route) ||
+        route.origin[0] == '\0' ||
+        route.destination[0] == '\0' ||
+        route.point_count < 2 ||
+        !route_has_drawable_coordinates(&route))
+    {
+        snprintf(data->message, sizeof(data->message), "RTE EXEC FAIL");
+        printf("FMC Route: EXEC failed; draft origin=%s destination=%s exported_points=%d has_coordinates=%d revision=%d pending_mod=%d.\n",
+               route.origin[0] != '\0' ? route.origin : "----",
+               route.destination[0] != '\0' ? route.destination : "----",
+               route.point_count,
+               route.has_coordinates,
+               sim_data_center_route_revision(sim_data_center),
+               fmc_data_route_has_uncommitted_changes(data));
+        return 0;
+    }
+
+    sim_data_center_set_route(sim_data_center, &route);
+    fmc_data_mark_route_committed(data);
+    fmc_data_sync_route_to_xplane(data);
+    snprintf(data->message, sizeof(data->message), "RTE %s-%s EXEC", route.origin, route.destination);
+    printf("FMC Route: EXEC committed; origin=%s destination=%s planned_route points=%d revision=%d pending_mod=%d.\n",
+           route.origin,
+           route.destination,
+           route.point_count,
+           sim_data_center_route_revision(sim_data_center),
+           fmc_data_route_has_uncommitted_changes(data));
+    log_planned_route(sim_data_center_route(sim_data_center), "EXEC committed");
+    return 1;
+}
+
+static int handle_nd_map_keydown(ND_Data *data, SDL_Keycode key)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    switch (key)
+    {
+    case SDLK_1:
+    case SDLK_KP_1:
+        nd_data_toggle_map_layer_visible(data, ND_MAP_LAYER_WPT);
+        return 1;
+    case SDLK_2:
+    case SDLK_KP_2:
+        nd_data_toggle_map_layer_visible(data, ND_MAP_LAYER_ARPT);
+        return 1;
+    case SDLK_3:
+    case SDLK_KP_3:
+        nd_data_toggle_map_layer_visible(data, ND_MAP_LAYER_STA);
+        return 1;
+    case SDLK_l:
+        nd_data_toggle_map_labels_visible(data);
+        return 1;
+    default:
+        break;
+    }
+
+    return 0;
 }
 
 static void map_zoom_click_to_fmc(int screen_x, int screen_y, SDL_Rect zoom_rect, int *fmc_x, int *fmc_y)
@@ -672,14 +1047,47 @@ static void map_zoom_click_to_fmc(int screen_x, int screen_y, SDL_Rect zoom_rect
     *fmc_y = (screen_y - zoom_rect.y) * COCKPIT_FMC_TEXTURE_HEIGHT / zoom_rect.h;
 }
 
-static int handle_cockpit_fmc_panel_button(FMC_Event_State *state, FMC_Data *data, int fmc_x, int fmc_y)
+static int handle_cockpit_fmc_panel_button(
+    FMC_Event_State *state,
+    FMC_Data *data,
+    SimDataCenter *sim_data_center,
+    int *fmc_uses_unified_route,
+    int fmc_x,
+    int fmc_y)
 {
     if (data == NULL)
     {
         return 0;
     }
 
-    return fmc_event_handle_mouse_button_base(state, data, fmc_x, fmc_y);
+    const int button_count = fmc_key_button_count();
+    for (int i = 0; i < button_count; ++i)
+    {
+        const FMC_Button *button = fmc_key_button_at(i);
+        if (button != NULL && fmc_key_button_contains_base_point(button, fmc_x, fmc_y))
+        {
+            if (state != NULL)
+            {
+                state->hovered_button_index = i;
+                state->hovered_button = button->id;
+            }
+
+            if (button->id == FMC_BUTTON_EXEC)
+            {
+                const int committed = submit_fmc_route_to_sim_center(data, sim_data_center);
+                if (fmc_uses_unified_route != NULL)
+                {
+                    *fmc_uses_unified_route = committed && sim_data_center_has_route(sim_data_center);
+                }
+                return 1;
+            }
+
+            break;
+        }
+    }
+
+    const int handled = fmc_event_handle_mouse_button_base(state, data, fmc_x, fmc_y);
+    return handled;
 }
 
 static Cockpit_ViewMode cockpit_module_hit_test(const Cockpit_Layout *layout, float world_x, float world_y)
@@ -794,8 +1202,23 @@ static void render_window(
     SDL_RenderPresent(renderer);
 }
 
-int cockpit_main_run(void)
+static int cockpit_main_run_internal(SimDataCenter *sim_data_center, const Cockpit_XPlaneConfig *xplane_config)
 {
+    Cockpit_XPlaneConfig resolved_xplane_config;
+
+    if (sim_data_center == NULL)
+    {
+        return -1;
+    }
+
+    if (xplane_config == NULL)
+    {
+        cockpit_xplane_config_init(&resolved_xplane_config, 0, NULL);
+        xplane_config = &resolved_xplane_config;
+    }
+    cockpit_xplane_config_apply_env(xplane_config);
+    printf("Cockpit X-Plane: using %s:%u.\n", xplane_config->ip, xplane_config->port);
+
     // 使用最近邻缩放，避免纹理缩放时产生模糊
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 
@@ -967,7 +1390,13 @@ int cockpit_main_run(void)
         }
         return -1;
     }
-    cockpit_startup_log(0, "Render targets created (%d x %d).", layout.world_width, layout.world_height);
+    {
+        int scene_width = 0;
+        int scene_height = 0;
+        SDL_QueryTexture(targets.scene_texture, NULL, NULL, &scene_width, &scene_height);
+        cockpit_startup_log(0, "Render targets created (world=%d x %d, scene=%d x %d).",
+                            layout.world_width, layout.world_height, scene_width, scene_height);
+    }
 
     PFD_Data pfd_data;
     ND_Data nd_data;
@@ -975,47 +1404,14 @@ int cockpit_main_run(void)
     EICAS_Data eicas_data;
     XPlaneLiveData xplane_live_data;
     FMC_Data fmc_data;
-    SimDataCenter *sim_data_center = (SimDataCenter *)malloc(sizeof(*sim_data_center));
-    if (sim_data_center == NULL)
-    {
-        printf("SimDataCenter allocation failed.\n");
-        cockpit_startup_log(0, "FAILED: SimDataCenter allocation (%zu bytes).", sizeof(*sim_data_center));
-        cockpit_show_startup_error("simulation data allocation", "Unable to allocate the unified simulation data store.");
-        destroy_render_targets(&targets);
-        if (background_texture != NULL)
-        {
-            SDL_DestroyTexture(background_texture);
-        }
-        if (fmc_background_texture != NULL)
-        {
-            SDL_DestroyTexture(fmc_background_texture);
-        }
-        TTF_CloseFont(font);
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        if (cockpit_owns_ttf)
-        {
-            TTF_Quit();
-        }
-        if (cockpit_owns_sdl)
-        {
-            SDL_Quit();
-        }
-        else if (cockpit_initialized_sdl)
-        {
-            SDL_QuitSubSystem(cockpit_sdl_flags);
-        }
-        return -1;
-    }
     int eicas_data_loaded = 0;
-    const int sim_data_ready = sim_data_center_init(sim_data_center);
+    const int sim_data_ready = sim_data_center_is_ready(sim_data_center);
     const SimSnapshot *sim_snapshot = sim_data_center_snapshot(sim_data_center);
     pfd_data_init(&pfd_data);
     nd_data_init(&nd_data);
     aircraft_systems_data_init(&systems_data);
     eicas_data_init(&eicas_data);
-    xplane_live_data_init(&xplane_live_data, XPLANE_LIVE_DEFAULT_IP, XPLANE_LIVE_DEFAULT_PORT);
+    xplane_live_data_init(&xplane_live_data, xplane_config->ip, xplane_config->port);
     if (sim_data_ready && sim_snapshot != NULL)
     {
         eicas_data_loaded = sim_data_center_has_eicas_data(sim_data_center);
@@ -1044,6 +1440,9 @@ int cockpit_main_run(void)
         }
     }
     fmc_data_init(&fmc_data);
+    printf("Cockpit FMC: FMC_Data=%p SimDataCenter=%p planned_route=%p revision=%d.\n",
+           (void *)&fmc_data, (void *)sim_data_center, (void *)&sim_data_center->planned_route,
+           sim_data_center_route_revision(sim_data_center));
     int fmc_uses_unified_route = 0;
     if (sim_data_ready && sim_data_center_has_route(sim_data_center))
     {
@@ -1061,6 +1460,10 @@ int cockpit_main_run(void)
     {
         printf("Cockpit FMC: unified route unavailable; keeping existing FMC state.\n");
         fflush(stdout);
+    }
+    if (sim_data_ready)
+    {
+        sync_nd_route_from_sim_center(&nd_data, sim_data_center, 1, "startup");
     }
     print_data_source_summary(sim_data_ready, sim_data_center, &pfd_data, &nd_data, eicas_data_loaded, &fmc_data, fmc_uses_unified_route);
     cockpit_startup_log(0, "Data initialized (sim_data_ready=%d, eicas_data_loaded=%d).", sim_data_ready, eicas_data_loaded);
@@ -1095,10 +1498,15 @@ int cockpit_main_run(void)
     Uint32 last_ticks = SDL_GetTicks();
     Uint32 last_pfd_render_ticks = 0;
     Uint32 last_sync_check_log_ticks = 0;
+    Uint32 pfd_perf_window_start_ticks = last_ticks;
+    unsigned int pfd_perf_render_count = 0;
+    unsigned int pfd_perf_skipped_count = 0;
+    Uint64 pfd_perf_total_render_ms = 0;
 
     while (running)
     {
         const Uint32 frame_start = SDL_GetTicks();
+        const Cockpit_ViewMode view_mode_before_events = view_mode;
 
         while (SDL_PollEvent(&event))
         {
@@ -1123,7 +1531,7 @@ int cockpit_main_run(void)
                 float alarm_world_x = 0.0f;
                 float alarm_world_y = 0.0f;
                 screen_to_world(event.button.x, event.button.y, &camera, &alarm_world_x, &alarm_world_y);
-                if (view_mode == COCKPIT_VIEW_MAIN && cockpit_alarm_handle_click(&cockpit_state.alarm, alarm_world_x, alarm_world_y, &layout))
+                if (view_mode == COCKPIT_VIEW_MAIN && cockpit_alarm_handle_click(&cockpit_state.alarm, &sim_data_center->alert_manager, alarm_world_x, alarm_world_y, &layout))
                 {
                     dragging = 0;
                 }
@@ -1140,7 +1548,12 @@ int cockpit_main_run(void)
                         int fmc_x = 0;
                         int fmc_y = 0;
                         map_zoom_click_to_fmc(event.button.x, event.button.y, zoom_rect, &fmc_x, &fmc_y);
-                        handle_cockpit_fmc_panel_button(&fmc_event_state, &fmc_data, fmc_x, fmc_y);
+                        handle_cockpit_fmc_panel_button(&fmc_event_state,
+                                                        &fmc_data,
+                                                        sim_data_center,
+                                                        &fmc_uses_unified_route,
+                                                        fmc_x,
+                                                        fmc_y);
                     }
                 }
                 else if (view_mode == COCKPIT_VIEW_PFD_ZOOM)
@@ -1270,10 +1683,64 @@ int cockpit_main_run(void)
                     show_fmc_debug = !show_fmc_debug;
                     suppress_debug_text_input = view_mode == COCKPIT_VIEW_FMC_ZOOM;
                 }
+                else if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F5)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 1);
+                }
+                else if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F6)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CABIN_ALTITUDE, 1);
+                }
+                else if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F7)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CRASH, 1);
+                }
+                else if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F8)
+                {
+                    sim_data_center_clear_demo_alerts(sim_data_center);
+                }
+                else if (event.key.repeat == 0 &&
+                         view_mode == COCKPIT_VIEW_ND_ZOOM &&
+                         handle_nd_map_keydown(&nd_data, event.key.keysym.sym))
+                {
+                }
                 else if (view_mode == COCKPIT_VIEW_FMC_ZOOM)
                 {
-                    handle_fmc_keydown(&fmc_data, event.key.keysym.sym);
+                    if ((event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER) &&
+                        fmc_data.current_page == FMC_PAGE_ROUTE)
+                    {
+                        fmc_uses_unified_route = submit_fmc_route_to_sim_center(&fmc_data, sim_data_center) &&
+                                                 sim_data_center_has_route(sim_data_center);
+                    }
+                    else
+                    {
+                        handle_fmc_keydown(&fmc_data, event.key.keysym.sym);
+                    }
                 }
+            }
+        }
+
+        if (view_mode_before_events != view_mode &&
+            (view_mode_before_events == COCKPIT_VIEW_FMC_ZOOM || view_mode == COCKPIT_VIEW_FMC_ZOOM))
+        {
+            printf("Cockpit FMC: %s FMC_Data=%p SimDataCenter=%p revision=%d origin=%s destination=%s draft_points=%d.\n",
+                   view_mode == COCKPIT_VIEW_FMC_ZOOM ? "entered" : "left",
+                   (void *)&fmc_data, (void *)sim_data_center,
+                   sim_data_center_route_revision(sim_data_center),
+                   fmc_data.origin[0] != '\0' ? fmc_data.origin : "----",
+                   fmc_data.destination[0] != '\0' ? fmc_data.destination : "----",
+                   fmc_data.route_count);
+        }
+
+        if (sim_data_ready)
+        {
+            if (!cockpit_view_shows_nd(view_mode_before_events) && cockpit_view_shows_nd(view_mode))
+            {
+                sync_nd_route_from_sim_center(&nd_data, sim_data_center, 1, "view");
+            }
+            else if (cockpit_view_shows_nd(view_mode))
+            {
+                sync_nd_route_from_sim_center(&nd_data, sim_data_center, 0, "visible");
             }
         }
 
@@ -1311,7 +1778,7 @@ int cockpit_main_run(void)
             }
         }
         fmc_data_update_mock(&fmc_data, delta_time);
-        cockpit_alarm_update(&cockpit_state.alarm, sim_snapshot);
+        cockpit_alarm_update(&cockpit_state.alarm, sim_data_center_alerts(sim_data_center));
         if (last_sync_check_log_ticks == 0 ||
             current_ticks - last_sync_check_log_ticks >= COCKPIT_SYNC_CHECK_LOG_MS)
         {
@@ -1326,7 +1793,34 @@ int cockpit_main_run(void)
             last_pfd_render_ticks = current_ticks;
         }
 
-        update_module_textures(renderer, font, &targets, refresh_pfd, &pfd_data, &nd_data, &systems_data, &fmc_display_assets, &fmc_event_state, &fmc_data);
+        Uint32 pfd_render_elapsed_ms = 0;
+        update_module_textures(renderer, font, &targets, refresh_pfd, &pfd_data, &nd_data, &systems_data,
+                               &fmc_display_assets, &fmc_event_state, &fmc_data, &pfd_render_elapsed_ms);
+        if (refresh_pfd)
+        {
+            ++pfd_perf_render_count;
+            pfd_perf_total_render_ms += pfd_render_elapsed_ms;
+        }
+        else
+        {
+            ++pfd_perf_skipped_count;
+        }
+        if (current_ticks - pfd_perf_window_start_ticks >= COCKPIT_PFD_PERF_LOG_MS)
+        {
+            const float average_pfd_render_ms = pfd_perf_render_count > 0
+                                                    ? (float)pfd_perf_total_render_ms / (float)pfd_perf_render_count
+                                                    : 0.0f;
+            printf("Cockpit PFD Perf: interval=%ums renders=%u skipped=%u avg_render=%.2fms target=%dms.\n",
+                   current_ticks - pfd_perf_window_start_ticks,
+                   pfd_perf_render_count,
+                   pfd_perf_skipped_count,
+                   average_pfd_render_ms,
+                   COCKPIT_PFD_TARGET_FRAME_MS);
+            pfd_perf_window_start_ticks = current_ticks;
+            pfd_perf_render_count = 0;
+            pfd_perf_skipped_count = 0;
+            pfd_perf_total_render_ms = 0;
+        }
         update_scene_texture(renderer, font, &targets, &layout, background_texture, &cockpit_state.alarm, current_ticks);
         render_window(renderer, font, &targets, &layout, &camera, view_mode, selected_fmc, fmc_background_texture, show_fmc_debug, window_width, window_height);
 
@@ -1341,8 +1835,6 @@ int cockpit_main_run(void)
     xplane_live_data_shutdown(&xplane_live_data);
     cockpit_startup_log(0, "Cockpit event loop ended normally.");
     cockpit_alarm_destroy(&cockpit_state.alarm);
-    sim_data_center_destroy(sim_data_center);
-    free(sim_data_center);
     fmc_data_destroy(&fmc_data);
     fmc_display_assets_destroy(&fmc_display_assets);
     pfd_ui_clear_text_cache(renderer);
@@ -1373,4 +1865,52 @@ int cockpit_main_run(void)
     }
 
     return 0;
+}
+
+int cockpit_main_run_with_sim_data_center(SimDataCenter *sim_data_center)
+{
+    if (sim_data_center == NULL || !sim_data_center_is_ready(sim_data_center))
+    {
+        printf("Cockpit SHARED: SimDataCenter unavailable.\n");
+        return -1;
+    }
+
+    printf("Cockpit SHARED: SimDataCenter=%p planned_route=%p revision=%d.\n",
+           (void *)sim_data_center, (void *)&sim_data_center->planned_route,
+           sim_data_center_route_revision(sim_data_center));
+    return cockpit_main_run_internal(sim_data_center, NULL);
+}
+
+int cockpit_main_run(void)
+{
+    return cockpit_main_run_with_args(0, NULL);
+}
+
+int cockpit_main_run_with_args(int argc, char *argv[])
+{
+    SimDataCenter *sim_data_center = (SimDataCenter *)malloc(sizeof(*sim_data_center));
+    Cockpit_XPlaneConfig xplane_config;
+    int result;
+
+    if (sim_data_center == NULL)
+    {
+        printf("Cockpit STANDALONE: SimDataCenter allocation failed.\n");
+        return -1;
+    }
+    if (!sim_data_center_init(sim_data_center))
+    {
+        printf("Cockpit STANDALONE: SimDataCenter initialization failed.\n");
+        sim_data_center_destroy(sim_data_center);
+        free(sim_data_center);
+        return -1;
+    }
+
+    printf("Cockpit STANDALONE: SimDataCenter=%p planned_route=%p revision=%d.\n",
+           (void *)sim_data_center, (void *)&sim_data_center->planned_route,
+           sim_data_center_route_revision(sim_data_center));
+    cockpit_xplane_config_init(&xplane_config, argc, argv);
+    result = cockpit_main_run_internal(sim_data_center, &xplane_config);
+    sim_data_center_destroy(sim_data_center);
+    free(sim_data_center);
+    return result;
 }

@@ -81,6 +81,7 @@ struct FMC_Button
 };
 
 int fmc_key_button_count(void);
+int fmc_buttons_load(void);
 const FMC_Button *fmc_key_button_at(int index);
 int fmc_key_button_contains_base_point(const FMC_Button *button, int x, int y);
 int fmc_key_is_page_button(const FMC_Button *button);

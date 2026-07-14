@@ -1,3 +1,4 @@
+//数据库的检索
 #include "fmc_data.h"
 
 #include <ctype.h>
@@ -5,6 +6,10 @@
 #include <float.h>
 #include <limits.h>
 #include <math.h>
+
+#ifndef MAX_VIATO_NUM
+#define MAX_VIATO_NUM 20
+#endif
 
 // AVL树树根
 AirportAVLNode *airport_avl_root = NULL;

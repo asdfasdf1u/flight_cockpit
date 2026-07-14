@@ -40,6 +40,7 @@
                 "${workspaceFolder}/src/PFD/pfd_data.c",
                 "${workspaceFolder}/src/Util/SDL_Util.c",
                 "${workspaceFolder}/src/Data/sim_data_center.c",
+                "${workspaceFolder}/src/Data/alert_manager.c",
                 "${workspaceFolder}/src/Data/sim_data_loader.c",
                 "-o",
                 "${workspaceFolder}/build/test.exe",
@@ -67,16 +68,20 @@
             "detail": "Compile the current test entry"
         },
         {
-            "type": "shell",
+            "type": "process",
             "label": "run test",
-            "command": "${workspaceFolder}/build/test.exe",
+            "command": "${workspaceFolder}\\build\\test.exe",
             "dependsOn": [
                 "build test"
             ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
             "group": {
                 "kind": "build",
                 "isDefault": false
             },
+            "problemMatcher": [],
             "detail": "Run the current test entry"
         },
         {

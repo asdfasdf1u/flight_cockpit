@@ -1,3 +1,4 @@
+//在屏幕上的显示模块
 #include "fmc_display.h"
 
 #include "fmc_key.h"
@@ -7,6 +8,11 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+
+extern int rte_index;
+extern int dep_arr_index;
+extern int dep_arr_type;
+extern char show_ariport[20];
 
 #define FMC_BASE_WIDTH 638
 #define FMC_BASE_HEIGHT 998
@@ -24,7 +30,7 @@ static const SDL_Color COLOR_DIM = {48, 150, 180, 255};
 static const SDL_Color COLOR_CYAN = {64, 225, 255, 255};
 static const SDL_Color COLOR_WHITE = {235, 244, 232, 255};
 static const SDL_Color COLOR_AMBER = {255, 185, 95, 255};
-static const SDL_Color COLOR_EXEC = {80, 255, 120, 150};
+static const SDL_Color COLOR_EXEC = {40, 150, 255, 235};
 
 static const SDL_Rect FMC_SCREEN_RECT = {104, 74, 435, 345};
 static const SDL_Rect FMC_SCRATCHPAD_RECT = {145, 388, 350, 28};
@@ -464,7 +470,12 @@ static void draw_route_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_La
     }
 
     snprintf(page_text, sizeof(page_text), "RTE %d/%d", page_index, page_count);
-    draw_fmc_header(renderer, font, layout, "ACT FPLN", "", page_text);
+    draw_fmc_header(renderer,
+                    font,
+                    layout,
+                    data != NULL && fmc_data_route_has_uncommitted_changes(data) ? "MOD FPLN" : "ACT FPLN",
+                    "",
+                    page_text);
 
     if (page_index == 1)
     {
@@ -751,8 +762,12 @@ static void draw_descent_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_
 
 static void draw_legs_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
 {
-    (void)data;
-    draw_fmc_header(renderer, font, layout, "ACT LEGS", "ROUTE SEGMENTS", "1/1");
+    draw_fmc_header(renderer,
+                    font,
+                    layout,
+                    data != NULL && fmc_data_route_has_uncommitted_changes(data) ? "MOD LEGS" : "ACT LEGS",
+                    "ROUTE SEGMENTS",
+                    "1/1");
     draw_text(renderer, font, layout, COLOR_TEXT, 126, 112, "LEG");
     draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 112, "TO");
 
@@ -772,6 +787,16 @@ static void draw_legs_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Lay
         draw_text(renderer, font, layout, COLOR_DIM, 126, row_y + i * row_spacing, "%02d %s", i + 1, via_to_list[i].VIA);
         draw_right_text(renderer, font, layout, COLOR_WHITE, 510, row_y + i * row_spacing, "%s", via_to_list[i].TO);
     }
+
+    draw_right_text(renderer, font, layout, COLOR_TEXT, 510, 364, "MOVE FIX/AFTER");
+    draw_right_text(renderer,
+                    font,
+                    layout,
+                    COLOR_DIM,
+                    510,
+                    384,
+                    "%s",
+                    data != NULL && data->legs_sequence[0] != '\0' ? data->legs_sequence : "----");
 
     draw_fmc_softkeys(renderer, font, layout, "<RTE", "");
 }
@@ -896,9 +921,15 @@ static void draw_exec_light(SDL_Renderer *renderer, const FMC_Layout *layout, co
         const FMC_Button *button = fmc_key_button_at(i);
         if (button != NULL && button->id == FMC_BUTTON_EXEC)
         {
+            const SDL_Rect exec_light = {
+                button->rect.x + 8,
+                button->rect.y - 34,
+                button->rect.w - 16,
+                10};
+
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-            draw_scaled_rect(renderer, layout, &button->rect, COLOR_EXEC);
-            draw_button_highlight(renderer, layout, button, COLOR_EXEC);
+            draw_scaled_rect(renderer, layout, &exec_light, COLOR_EXEC);
+            draw_scaled_outline(renderer, layout, &exec_light, COLOR_EXEC);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
             return;
         }
@@ -992,6 +1023,17 @@ void fmc_display_render_screen_only(SDL_Renderer *renderer, TTF_Font *font, cons
     draw_page_content(renderer, font, &layout, data);
     draw_scratchpad(renderer, font, &layout, data);
     SDL_RenderSetClipRect(renderer, NULL);
+}
+
+void fmc_display_render_exec_light_only(SDL_Renderer *renderer, const FMC_Data *data)
+{
+    if (renderer == NULL || data == NULL)
+    {
+        return;
+    }
+
+    FMC_Layout layout = get_layout(renderer);
+    draw_exec_light(renderer, &layout, data);
 }
 
 void fmc_display_render_hover_only(SDL_Renderer *renderer, const FMC_Event_State *state)

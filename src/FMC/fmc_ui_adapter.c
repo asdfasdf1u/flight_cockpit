@@ -3,8 +3,43 @@
 #include "fmc_connect.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#ifndef MAX_VIATO_NUM
+#define MAX_VIATO_NUM 20
+#endif
+
+extern int rte_index;
+extern int dep_arr_index;
+extern int dep_arr_type;
+extern char show_ariport[20];
+
+int is_string_in_range(const char *str, int min_val, int max_val, int *result);
+int is_string_in_range_f(const char *str, float min_val, float max_val, float *result);
+int fmc_xplane_connect_init(const char *xp_ip, unsigned short xp_port);
+void fmc_xplane_connect_shutdown(void);
+int fmc_xplane_connect_is_ready(void);
+int fmc_xplane_connect_is_connected(void);
+int fmc_xplane_set_origin(const char *origin);
+int fmc_xplane_set_destination(const char *destination);
+int fmc_xplane_set_co_route(const char *co_route);
+int fmc_xplane_set_flt_no(const char *flt_no);
+int fmc_xplane_set_exec(void);
+
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#define FMC_ACCESS(path) _access((path), 0)
+#define FMC_MKDIR(path) _mkdir((path))
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#define FMC_ACCESS(path) access((path), F_OK)
+#define FMC_MKDIR(path) mkdir((path), 0755)
+#endif
 
 static void set_text(char *dest, int dest_size, const char *text)
 {
@@ -19,6 +54,154 @@ static void set_text(char *dest, int dest_size, const char *text)
     }
 
     snprintf(dest, (size_t)dest_size, "%s", text);
+}
+
+static int fmc_valid_position(double latitude, double longitude);
+
+typedef struct FMC_ResolvedCoordinate
+{
+    double latitude;
+    double longitude;
+    int has_position;
+    FMC_CoordinateSource source;
+} FMC_ResolvedCoordinate;
+
+typedef struct FMC_AirportCoordinateOverride
+{
+    const char *ident;
+    double latitude;
+    double longitude;
+} FMC_AirportCoordinateOverride;
+
+static const FMC_AirportCoordinateOverride FMC_AIRPORT_COORDINATE_OVERRIDES[] = {
+    {"ZBBB", 40.080111, 116.584556},
+};
+
+static const char *fmc_coordinate_source_name(FMC_CoordinateSource source)
+{
+    switch (source)
+    {
+    case FMC_COORD_SOURCE_ROUTE:
+        return "ROUTE";
+    case FMC_COORD_SOURCE_OVERRIDE:
+        return "OVERRIDE";
+    case FMC_COORD_SOURCE_APT_DAT:
+        return "APT_DAT";
+    case FMC_COORD_SOURCE_INVALID:
+    default:
+        return "INVALID";
+    }
+}
+
+static int fmc_ident_equals(const char *a, const char *b)
+{
+    if (a == NULL || b == NULL)
+    {
+        return 0;
+    }
+
+    while (*a != '\0' && *b != '\0')
+    {
+        if (toupper((unsigned char)*a) != toupper((unsigned char)*b))
+        {
+            return 0;
+        }
+        ++a;
+        ++b;
+    }
+
+    return *a == '\0' && *b == '\0';
+}
+
+static int fmc_find_airport_coordinate_override(const char *ident, double *latitude, double *longitude)
+{
+    if (ident == NULL)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < (int)(sizeof(FMC_AIRPORT_COORDINATE_OVERRIDES) / sizeof(FMC_AIRPORT_COORDINATE_OVERRIDES[0])); ++i)
+    {
+        const FMC_AirportCoordinateOverride *item = &FMC_AIRPORT_COORDINATE_OVERRIDES[i];
+        if (fmc_ident_equals(ident, item->ident) &&
+            fmc_valid_position(item->latitude, item->longitude))
+        {
+            if (latitude != NULL)
+            {
+                *latitude = item->latitude;
+            }
+            if (longitude != NULL)
+            {
+                *longitude = item->longitude;
+            }
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static FMC_ResolvedCoordinate fmc_invalid_coordinate(void)
+{
+    FMC_ResolvedCoordinate result;
+    result.latitude = 0.0;
+    result.longitude = 0.0;
+    result.has_position = 0;
+    result.source = FMC_COORD_SOURCE_INVALID;
+    return result;
+}
+
+static FMC_ResolvedCoordinate fmc_resolve_airport_coordinate(
+    const char *ident,
+    int has_existing,
+    double existing_latitude,
+    double existing_longitude,
+    FMC_CoordinateSource existing_source)
+{
+    double override_latitude = 0.0;
+    double override_longitude = 0.0;
+    const int has_override = fmc_find_airport_coordinate_override(ident, &override_latitude, &override_longitude);
+
+    if (has_existing && fmc_valid_position(existing_latitude, existing_longitude))
+    {
+        if (existing_source == FMC_COORD_SOURCE_ROUTE ||
+            existing_source == FMC_COORD_SOURCE_OVERRIDE ||
+            (existing_source == FMC_COORD_SOURCE_INVALID && !has_override) ||
+            (existing_source == FMC_COORD_SOURCE_APT_DAT && !has_override))
+        {
+            FMC_ResolvedCoordinate result;
+            result.latitude = existing_latitude;
+            result.longitude = existing_longitude;
+            result.has_position = 1;
+            result.source = existing_source != FMC_COORD_SOURCE_INVALID
+                                ? existing_source
+                                : FMC_COORD_SOURCE_ROUTE;
+            return result;
+        }
+    }
+
+    if (has_override)
+    {
+        FMC_ResolvedCoordinate result;
+        result.latitude = override_latitude;
+        result.longitude = override_longitude;
+        result.has_position = 1;
+        result.source = FMC_COORD_SOURCE_OVERRIDE;
+        return result;
+    }
+
+    Airport *airport = fmc_query_airport_by_icao(ident);
+    if (airport != NULL && fmc_valid_position(airport->datum_lat, airport->datum_lon))
+    {
+        FMC_ResolvedCoordinate result;
+        result.latitude = airport->datum_lat;
+        result.longitude = airport->datum_lon;
+        result.has_position = 1;
+        result.source = FMC_COORD_SOURCE_APT_DAT;
+        return result;
+    }
+
+    return fmc_invalid_coordinate();
 }
 
 static void sync_library_route_fields(const FMC_Data *data)
@@ -50,6 +233,25 @@ static void update_exec_ready(FMC_Data *data)
     }
 }
 
+static void mark_route_modified(FMC_Data *data, const char *reason)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    if (!data->route_mod_pending)
+    {
+        printf("FMC Route: MOD entered (%s); draft origin=%s destination=%s points=%d.\n",
+               reason != NULL ? reason : "edit",
+               data->origin[0] != '\0' ? data->origin : "----",
+               data->destination[0] != '\0' ? data->destination : "----",
+               data->route_count);
+    }
+
+    data->route_mod_pending = 1;
+}
+
 static void clear_auto_route(FMC_Data *data)
 {
     if (data == NULL)
@@ -69,6 +271,7 @@ static void clear_auto_route(FMC_Data *data)
         data->route_latitudes[i] = 0.0;
         data->route_longitudes[i] = 0.0;
         data->route_has_position[i] = 0;
+        data->route_coordinate_sources[i] = FMC_COORD_SOURCE_INVALID;
     }
     if (via_to_list != NULL)
     {
@@ -77,7 +280,29 @@ static void clear_auto_route(FMC_Data *data)
     rte_index = 1;
 }
 
-static int add_route_point_geo(FMC_Data *data, const char *ident, double latitude, double longitude, int has_position)
+static void set_origin_position_source(FMC_Data *data, double latitude, double longitude, int has_position, FMC_CoordinateSource source)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->origin_latitude = latitude;
+    data->origin_longitude = longitude;
+    data->origin_has_position = has_position;
+    data->origin_coordinate_source = has_position ? source : FMC_COORD_SOURCE_INVALID;
+}
+
+static void set_origin_position(FMC_Data *data, double latitude, double longitude, int has_position)
+{
+    set_origin_position_source(data,
+                               latitude,
+                               longitude,
+                               has_position,
+                               has_position ? FMC_COORD_SOURCE_ROUTE : FMC_COORD_SOURCE_INVALID);
+}
+
+static int add_route_point_geo_source(FMC_Data *data, const char *ident, double latitude, double longitude, int has_position, FMC_CoordinateSource source)
 {
     if (data == NULL || ident == NULL || ident[0] == '\0' || data->route_count >= FMC_MAX_ROUTE_POINTS)
     {
@@ -89,7 +314,87 @@ static int add_route_point_geo(FMC_Data *data, const char *ident, double latitud
     data->route_latitudes[index] = latitude;
     data->route_longitudes[index] = longitude;
     data->route_has_position[index] = has_position;
+    data->route_coordinate_sources[index] = has_position ? source : FMC_COORD_SOURCE_INVALID;
     data->route_count++;
+    return 1;
+}
+
+static int add_route_point_geo(FMC_Data *data, const char *ident, double latitude, double longitude, int has_position)
+{
+    return add_route_point_geo_source(data,
+                                      ident,
+                                      latitude,
+                                      longitude,
+                                      has_position,
+                                      has_position ? FMC_COORD_SOURCE_ROUTE : FMC_COORD_SOURCE_INVALID);
+}
+
+static int route_has_terminal_destination(const FMC_Data *data)
+{
+    return data != NULL &&
+           data->route_count > 0 &&
+           data->destination[0] != '\0' &&
+           fmc_ident_equals(data->route_points[data->route_count - 1], data->destination);
+}
+
+static void sync_viato_list_from_route(const FMC_Data *data)
+{
+    if (via_to_list == NULL)
+    {
+        initVIATO();
+    }
+    if (via_to_list == NULL)
+    {
+        return;
+    }
+
+    via_to_list_count = 0;
+    if (data == NULL)
+    {
+        return;
+    }
+
+    for (int i = 0; i < data->route_count && via_to_list_count < MAX_VIATO_NUM; ++i)
+    {
+        set_text(via_to_list[via_to_list_count].VIA,
+                 sizeof(via_to_list[via_to_list_count].VIA),
+                 "DIRECT");
+        set_text(via_to_list[via_to_list_count].TO,
+                 sizeof(via_to_list[via_to_list_count].TO),
+                 data->route_points[i]);
+        ++via_to_list_count;
+    }
+}
+
+static int insert_route_point_before_destination(
+    FMC_Data *data,
+    const char *ident,
+    double latitude,
+    double longitude,
+    int has_position,
+    FMC_CoordinateSource source)
+{
+    if (data == NULL || ident == NULL || ident[0] == '\0' || data->route_count >= FMC_MAX_ROUTE_POINTS)
+    {
+        return 0;
+    }
+
+    const int insert_index = route_has_terminal_destination(data) ? data->route_count - 1 : data->route_count;
+    for (int i = data->route_count; i > insert_index; --i)
+    {
+        memcpy(data->route_points[i], data->route_points[i - 1], sizeof(data->route_points[i]));
+        data->route_latitudes[i] = data->route_latitudes[i - 1];
+        data->route_longitudes[i] = data->route_longitudes[i - 1];
+        data->route_has_position[i] = data->route_has_position[i - 1];
+        data->route_coordinate_sources[i] = data->route_coordinate_sources[i - 1];
+    }
+
+    set_text(data->route_points[insert_index], sizeof(data->route_points[insert_index]), ident);
+    data->route_latitudes[insert_index] = latitude;
+    data->route_longitudes[insert_index] = longitude;
+    data->route_has_position[insert_index] = has_position;
+    data->route_coordinate_sources[insert_index] = has_position ? source : FMC_COORD_SOURCE_INVALID;
+    ++data->route_count;
     return 1;
 }
 
@@ -109,16 +414,7 @@ static int add_viato_route_point(FMC_Data *data, const char *ident)
         return 0;
     }
 
-    if (via_to_list == NULL)
-    {
-        initVIATO();
-    }
-    if (via_to_list == NULL)
-    {
-        set_text(data->message, sizeof(data->message), "ROUTE MEMORY ERR");
-        return 0;
-    }
-    if (via_to_list_count >= MAX_VIATO_NUM)
+    if (data->route_count >= FMC_MAX_ROUTE_POINTS)
     {
         set_text(data->message, sizeof(data->message), "ROUTE FULL");
         return 0;
@@ -133,26 +429,27 @@ static int add_viato_route_point(FMC_Data *data, const char *ident)
     }
 
     to = wpt != NULL ? wpt->wp_code : arp->icao_code;
-    set_text(via_to_list[via_to_list_count].VIA, sizeof(via_to_list[via_to_list_count].VIA), "DIRECT");
-    set_text(via_to_list[via_to_list_count].TO, sizeof(via_to_list[via_to_list_count].TO), to);
-    if (data->route_count < FMC_MAX_ROUTE_POINTS)
+    if (fmc_ident_equals(to, data->destination) && route_has_terminal_destination(data))
     {
-        if (wpt != NULL)
-        {
-            add_route_point_geo(data, to, wpt->lat, wpt->lon, 1);
-        }
-        else if (arp != NULL)
-        {
-            add_route_point_geo(data, to, arp->datum_lat, arp->datum_lon, 1);
-        }
-        else
-        {
-            add_route_point(data, to);
-        }
+        fmc_data_clear_scratchpad(data);
+        set_text(data->message, sizeof(data->message), "DEST ALREADY LAST");
+        return 0;
     }
-    via_to_list_count++;
+
+    if (wpt != NULL)
+    {
+        insert_route_point_before_destination(data, to, wpt->lat, wpt->lon, 1, FMC_COORD_SOURCE_ROUTE);
+    }
+    else
+    {
+        FMC_ResolvedCoordinate coord = fmc_resolve_airport_coordinate(to, 0, 0.0, 0.0, FMC_COORD_SOURCE_INVALID);
+        insert_route_point_before_destination(data, to, coord.latitude, coord.longitude, coord.has_position, coord.source);
+    }
+    sync_viato_list_from_route(data);
     update_exec_ready(data);
     fmc_data_clear_scratchpad(data);
+    data->route_clear_pending = 0;
+    mark_route_modified(data, "add waypoint");
     return 1;
 }
 
@@ -196,11 +493,16 @@ static int load_fms_route_file(FMC_Data *data, const char *path)
             if (strcmp(ident, data->origin) == 0)
             {
                 seen_origin = 1;
+                set_origin_position_source(data,
+                                           latitude,
+                                           longitude,
+                                           fmc_valid_position(latitude, longitude),
+                                           FMC_COORD_SOURCE_ROUTE);
             }
             continue;
         }
 
-        add_route_point_geo(data, ident, latitude, longitude, 1);
+        add_route_point_geo_source(data, ident, latitude, longitude, 1, FMC_COORD_SOURCE_ROUTE);
         if (via_to_list != NULL && via_to_list_count < MAX_VIATO_NUM)
         {
             set_text(via_to_list[via_to_list_count].VIA, sizeof(via_to_list[via_to_list_count].VIA), "DIRECT");
@@ -260,15 +562,8 @@ static void build_direct_route(FMC_Data *data)
     clear_auto_route(data);
     if (data != NULL && data->destination[0] != '\0')
     {
-        Airport *arp = fmc_query_airport_by_icao(data->destination);
-        if (arp != NULL)
-        {
-            add_route_point_geo(data, data->destination, arp->datum_lat, arp->datum_lon, 1);
-        }
-        else
-        {
-            add_route_point(data, data->destination);
-        }
+        FMC_ResolvedCoordinate coord = fmc_resolve_airport_coordinate(data->destination, 0, 0.0, 0.0, FMC_COORD_SOURCE_INVALID);
+        add_route_point_geo_source(data, data->destination, coord.latitude, coord.longitude, coord.has_position, coord.source);
         if (via_to_list == NULL)
         {
             initVIATO();
@@ -344,18 +639,29 @@ static int set_airport_field(FMC_Data *data, char *dest_field, int dest_size, co
 
     set_text(airport_code, sizeof(airport_code), data->scratchpad);
     airport = fmc_query_airport_by_icao(data->scratchpad);
-    if (airport == NULL)
+    FMC_ResolvedCoordinate coord = fmc_resolve_airport_coordinate(data->scratchpad, 0, 0.0, 0.0, FMC_COORD_SOURCE_INVALID);
+    if (airport == NULL && !coord.has_position)
     {
         fmc_data_clear_scratchpad(data);
         set_text(data->message, sizeof(data->message), "NOT IN DATABASE");
         return 0;
     }
 
-    set_text(dest_field, dest_size, airport->icao_code);
+    set_text(dest_field, dest_size, airport != NULL ? airport->icao_code : airport_code);
+    if (dest_field == data->origin)
+    {
+        set_origin_position_source(data,
+                                   coord.latitude,
+                                   coord.longitude,
+                                   coord.has_position,
+                                   coord.source);
+    }
     fmc_data_clear_scratchpad(data);
     sync_library_route_fields(data);
     update_exec_ready(data);
     update_auto_route(data);
+    data->route_clear_pending = 0;
+    mark_route_modified(data, label);
     if (data->origin[0] != '\0' && data->destination[0] != '\0' && data->route_count > 0)
     {
         return 1;
@@ -381,7 +687,76 @@ static int set_scratchpad_text(FMC_Data *data, char *dest_field, int dest_size, 
     fmc_data_clear_scratchpad(data);
     sync_library_route_fields(data);
     update_exec_ready(data);
+    if (strcmp(label, "CO ROUTE") == 0 || strcmp(label, "VIA") == 0)
+    {
+        mark_route_modified(data, label);
+    }
     snprintf(data->message, sizeof(data->message), "%s SET", label);
+    return 1;
+}
+
+static void clear_route_draft(FMC_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->origin[0] = '\0';
+    data->destination[0] = '\0';
+    set_origin_position(data, 0.0, 0.0, 0);
+    data->company_route[0] = '\0';
+    data->route_via[0] = '\0';
+    clear_auto_route(data);
+    sync_library_route_fields(data);
+    data->route_delete_pending = 0;
+    data->route_clear_pending = 1;
+    mark_route_modified(data, "clear draft");
+    set_text(data->message, sizeof(data->message), "RTE DELETE MOD");
+}
+
+static int delete_last_route_point(FMC_Data *data)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    data->route_delete_pending = 0;
+    if (data->route_count <= 0)
+    {
+        set_text(data->message, sizeof(data->message), "NO ROUTE POINT");
+        return 0;
+    }
+
+    int delete_index = data->route_count - 1;
+    if (route_has_terminal_destination(data))
+    {
+        if (data->route_count <= 1)
+        {
+            set_text(data->message, sizeof(data->message), "NO INTERMEDIATE WPT");
+            return 0;
+        }
+        delete_index = data->route_count - 2;
+    }
+
+    for (int i = delete_index; i < data->route_count - 1; ++i)
+    {
+        memcpy(data->route_points[i], data->route_points[i + 1], sizeof(data->route_points[i]));
+        data->route_latitudes[i] = data->route_latitudes[i + 1];
+        data->route_longitudes[i] = data->route_longitudes[i + 1];
+        data->route_has_position[i] = data->route_has_position[i + 1];
+        data->route_coordinate_sources[i] = data->route_coordinate_sources[i + 1];
+    }
+    --data->route_count;
+    data->route_points[data->route_count][0] = '\0';
+    data->route_latitudes[data->route_count] = 0.0;
+    data->route_longitudes[data->route_count] = 0.0;
+    data->route_has_position[data->route_count] = 0;
+    data->route_coordinate_sources[data->route_count] = FMC_COORD_SOURCE_INVALID;
+    sync_viato_list_from_route(data);
+    mark_route_modified(data, "delete waypoint");
+    set_text(data->message, sizeof(data->message), "WPT DELETE MOD");
     return 1;
 }
 
@@ -415,11 +790,13 @@ void fmc_data_init(FMC_Data *data)
     init_airport_data();
     load_airport_data();
     load_waypoint_data();
+    fmc_xplane_connect_init(NULL, 0);
 }
 
 void fmc_data_destroy(FMC_Data *data)
 {
     (void)data;
+    fmc_xplane_connect_shutdown();
     destroy_airport_data();
 }
 
@@ -471,6 +848,7 @@ void fmc_data_append_char(FMC_Data *data, char c)
 
     data->scratchpad[data->scratchpad_len++] = (char)toupper((unsigned char)c);
     data->scratchpad[data->scratchpad_len] = '\0';
+    data->route_delete_pending = 0;
     data->message[0] = '\0';
 }
 
@@ -483,6 +861,7 @@ void fmc_data_backspace(FMC_Data *data)
 
     if (data->scratchpad_len <= 0)
     {
+        data->route_delete_pending = 0;
         data->message[0] = '\0';
         return;
     }
@@ -500,6 +879,7 @@ void fmc_data_show_delete(FMC_Data *data)
 
     data->scratchpad[0] = '\0';
     data->scratchpad_len = 0;
+    data->route_delete_pending = 1;
     set_text(data->message, sizeof(data->message), "DELETE");
 }
 
@@ -512,6 +892,7 @@ void fmc_data_clear_scratchpad(FMC_Data *data)
 
     data->scratchpad[0] = '\0';
     data->scratchpad_len = 0;
+    data->route_delete_pending = 0;
     data->message[0] = '\0';
 }
 
@@ -564,16 +945,63 @@ int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field)
         return 0;
     }
 
+    if (data->route_delete_pending)
+    {
+        if (field == FMC_ROUTE_FIELD_ORIGIN || field == FMC_ROUTE_FIELD_DESTINATION)
+        {
+            clear_route_draft(data);
+            return 1;
+        }
+        if (field == FMC_ROUTE_FIELD_TO_FIX)
+        {
+            return delete_last_route_point(data);
+        }
+
+        data->route_delete_pending = 0;
+        set_text(data->message, sizeof(data->message), "DELETE INVALID");
+        return 0;
+    }
+
     switch (field)
     {
     case FMC_ROUTE_FIELD_ORIGIN:
-        return set_airport_field(data, data->origin, sizeof(data->origin), "ORIGIN");
+        if (!set_airport_field(data, data->origin, sizeof(data->origin), "ORIGIN"))
+        {
+            return 0;
+        }
+        if (fmc_xplane_set_origin(data->origin) < 0)
+        {
+            set_text(data->message, sizeof(data->message),
+                     fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
+            return 0;
+        }
+        return 1;
     case FMC_ROUTE_FIELD_DESTINATION:
-        return set_airport_field(data, data->destination, sizeof(data->destination), "DEST");
+        if (!set_airport_field(data, data->destination, sizeof(data->destination), "DEST"))
+        {
+            return 0;
+        }
+        if (fmc_xplane_set_destination(data->destination) < 0)
+        {
+            set_text(data->message, sizeof(data->message),
+                     fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
+            return 0;
+        }
+        return 1;
     case FMC_ROUTE_FIELD_COMPANY_ROUTE:
         return set_scratchpad_text(data, data->company_route, sizeof(data->company_route), "CO ROUTE");
     case FMC_ROUTE_FIELD_FLIGHT_NO:
-        return set_scratchpad_text(data, data->flight_no, sizeof(data->flight_no), "FLT NO");
+        if (!set_scratchpad_text(data, data->flight_no, sizeof(data->flight_no), "FLT NO"))
+        {
+            return 0;
+        }
+        if (fmc_xplane_set_flt_no(data->flight_no) < 0)
+        {
+            set_text(data->message, sizeof(data->message),
+                     fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
+            return 0;
+        }
+        return 1;
     case FMC_ROUTE_FIELD_VIA:
         if (rte_index != 1)
         {
@@ -926,12 +1354,107 @@ void fmc_data_dep_arr_back_to_index(FMC_Data *data)
 
 int fmc_data_set_legs_parameter(FMC_Data *data, int field_index)
 {
-    (void)field_index;
     if (data == NULL)
     {
         return 0;
     }
-    return set_scratchpad_text(data, data->legs_sequence, sizeof(data->legs_sequence), "LEGS");
+    if (field_index != 1)
+    {
+        set_text(data->message, sizeof(data->message), "NO LEGS FIELD");
+        return 0;
+    }
+    if (data->scratchpad_len <= 0)
+    {
+        set_text(data->message, sizeof(data->message), "ENTER FIX/AFTER");
+        return 0;
+    }
+
+    const char *separator = strchr(data->scratchpad, '/');
+    if (separator == NULL)
+    {
+        return set_scratchpad_text(data, data->legs_sequence, sizeof(data->legs_sequence), "LEGS");
+    }
+
+    const size_t move_length = (size_t)(separator - data->scratchpad);
+    const size_t after_length = strlen(separator + 1);
+    if (move_length == 0 || move_length >= FMC_TEXT_LEN || after_length == 0 || after_length >= FMC_TEXT_LEN)
+    {
+        set_text(data->message, sizeof(data->message), "FORMAT FIX/AFTER");
+        return 0;
+    }
+
+    char move_ident[FMC_TEXT_LEN] = {0};
+    char after_ident[FMC_TEXT_LEN] = {0};
+    memcpy(move_ident, data->scratchpad, move_length);
+    memcpy(after_ident, separator + 1, after_length);
+
+    const int intermediate_end = route_has_terminal_destination(data) ? data->route_count - 1 : data->route_count;
+    int move_index = -1;
+    int after_index = -2; /* -1 means insert after origin. */
+    for (int i = 0; i < intermediate_end; ++i)
+    {
+        if (fmc_ident_equals(data->route_points[i], move_ident))
+        {
+            move_index = i;
+        }
+        if (fmc_ident_equals(data->route_points[i], after_ident))
+        {
+            after_index = i;
+        }
+    }
+    if (fmc_ident_equals(after_ident, "ORIGIN"))
+    {
+        after_index = -1;
+    }
+    if (move_index < 0 || after_index == -2 || move_index == after_index)
+    {
+        set_text(data->message, sizeof(data->message), "LEGS FIX NOT FOUND");
+        return 0;
+    }
+
+    char moved_point[FMC_TEXT_LEN];
+    const double moved_latitude = data->route_latitudes[move_index];
+    const double moved_longitude = data->route_longitudes[move_index];
+    const int moved_has_position = data->route_has_position[move_index];
+    const FMC_CoordinateSource moved_source = data->route_coordinate_sources[move_index];
+    memcpy(moved_point, data->route_points[move_index], sizeof(moved_point));
+
+    for (int i = move_index; i < data->route_count - 1; ++i)
+    {
+        memcpy(data->route_points[i], data->route_points[i + 1], sizeof(data->route_points[i]));
+        data->route_latitudes[i] = data->route_latitudes[i + 1];
+        data->route_longitudes[i] = data->route_longitudes[i + 1];
+        data->route_has_position[i] = data->route_has_position[i + 1];
+        data->route_coordinate_sources[i] = data->route_coordinate_sources[i + 1];
+    }
+    --data->route_count;
+    if (after_index > move_index)
+    {
+        --after_index;
+    }
+
+    const int insert_index = after_index + 1;
+    for (int i = data->route_count; i > insert_index; --i)
+    {
+        memcpy(data->route_points[i], data->route_points[i - 1], sizeof(data->route_points[i]));
+        data->route_latitudes[i] = data->route_latitudes[i - 1];
+        data->route_longitudes[i] = data->route_longitudes[i - 1];
+        data->route_has_position[i] = data->route_has_position[i - 1];
+        data->route_coordinate_sources[i] = data->route_coordinate_sources[i - 1];
+    }
+    memcpy(data->route_points[insert_index], moved_point, sizeof(data->route_points[insert_index]));
+    data->route_latitudes[insert_index] = moved_latitude;
+    data->route_longitudes[insert_index] = moved_longitude;
+    data->route_has_position[insert_index] = moved_has_position;
+    data->route_coordinate_sources[insert_index] = moved_source;
+    ++data->route_count;
+
+    set_text(data->legs_sequence, sizeof(data->legs_sequence), data->scratchpad);
+    sync_viato_list_from_route(data);
+    fmc_data_clear_scratchpad(data);
+    mark_route_modified(data, "reorder waypoint");
+    set_text(data->message, sizeof(data->message), "LEGS ORDER MOD");
+    return 1;
 }
 
 int fmc_data_set_hold_parameter(FMC_Data *data, int field_index)
@@ -994,7 +1517,35 @@ static int fmc_valid_position(double latitude, double longitude)
            !(latitude == 0.0 && longitude == 0.0);
 }
 
-static void set_sim_route_point(SimRoutePoint *point, const char *ident, const char *type, double latitude, double longitude, int has_position)
+static FMC_CoordinateSource fmc_coordinate_source_from_name(const char *source)
+{
+    if (source == NULL || source[0] == '\0')
+    {
+        return FMC_COORD_SOURCE_INVALID;
+    }
+    if (strcmp(source, "ROUTE") == 0)
+    {
+        return FMC_COORD_SOURCE_ROUTE;
+    }
+    if (strcmp(source, "OVERRIDE") == 0)
+    {
+        return FMC_COORD_SOURCE_OVERRIDE;
+    }
+    if (strcmp(source, "APT_DAT") == 0)
+    {
+        return FMC_COORD_SOURCE_APT_DAT;
+    }
+    return FMC_COORD_SOURCE_INVALID;
+}
+
+static void set_sim_route_point(
+    SimRoutePoint *point,
+    const char *ident,
+    const char *type,
+    double latitude,
+    double longitude,
+    int has_position,
+    FMC_CoordinateSource source)
 {
     if (point == NULL)
     {
@@ -1004,6 +1555,7 @@ static void set_sim_route_point(SimRoutePoint *point, const char *ident, const c
     memset(point, 0, sizeof(*point));
     set_text(point->ident, sizeof(point->ident), ident);
     set_text(point->type, sizeof(point->type), type);
+    set_text(point->coordinate_source, sizeof(point->coordinate_source), fmc_coordinate_source_name(source));
     point->latitude = latitude;
     point->longitude = longitude;
     point->altitude = 0.0;
@@ -1020,10 +1572,28 @@ int fmc_data_apply_planned_route(FMC_Data *data, const SimPlannedRoute *route)
     clear_auto_route(data);
     set_text(data->origin, sizeof(data->origin), route->origin);
     set_text(data->destination, sizeof(data->destination), route->destination);
+    if (route->point_count > 0)
+    {
+        const SimRoutePoint *origin_point = &route->points[0];
+        FMC_CoordinateSource source = fmc_coordinate_source_from_name(origin_point->coordinate_source);
+        if (source == FMC_COORD_SOURCE_INVALID && origin_point->has_position)
+        {
+            source = FMC_COORD_SOURCE_ROUTE;
+        }
+        set_origin_position_source(data,
+                                   origin_point->latitude,
+                                   origin_point->longitude,
+                                   origin_point->has_position,
+                                   source);
+    }
     set_text(data->fms_plan_path, sizeof(data->fms_plan_path), route->source_path);
     data->route_loaded_from_file = route->source == SIM_ROUTE_SOURCE_FMC_FMS_FILE;
     data->route_source = route->source;
     data->active_waypoint_index = route->active_waypoint_index > 0 ? route->active_waypoint_index - 1 : 0;
+    if (data->active_waypoint_index < 0)
+    {
+        data->active_waypoint_index = 0;
+    }
 
     if (via_to_list == NULL)
     {
@@ -1033,7 +1603,12 @@ int fmc_data_apply_planned_route(FMC_Data *data, const SimPlannedRoute *route)
     for (int i = 1; i < route->point_count && data->route_count < FMC_MAX_ROUTE_POINTS; ++i)
     {
         const SimRoutePoint *point = &route->points[i];
-        add_route_point_geo(data, point->ident, point->latitude, point->longitude, point->has_position);
+        FMC_CoordinateSource source = fmc_coordinate_source_from_name(point->coordinate_source);
+        if (source == FMC_COORD_SOURCE_INVALID && point->has_position)
+        {
+            source = FMC_COORD_SOURCE_ROUTE;
+        }
+        add_route_point_geo_source(data, point->ident, point->latitude, point->longitude, point->has_position, source);
         if (via_to_list != NULL && via_to_list_count < MAX_VIATO_NUM)
         {
             set_text(via_to_list[via_to_list_count].VIA, sizeof(via_to_list[via_to_list_count].VIA), "DIRECT");
@@ -1042,7 +1617,15 @@ int fmc_data_apply_planned_route(FMC_Data *data, const SimPlannedRoute *route)
         }
     }
 
+    if (data->active_waypoint_index >= data->route_count)
+    {
+        data->active_waypoint_index = data->route_count > 0 ? 0 : -1;
+    }
+
     sync_library_route_fields(data);
+    data->route_mod_pending = 0;
+    data->route_clear_pending = 0;
+    data->route_delete_pending = 0;
     snprintf(data->message, sizeof(data->message), "UNIFIED RTE %s-%s", data->origin, data->destination);
     return data->route_count > 0;
 }
@@ -1062,20 +1645,24 @@ int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route)
                         ? data->route_source
                         : (data->route_loaded_from_file ? SIM_ROUTE_SOURCE_FMC_FMS_FILE : SIM_ROUTE_SOURCE_FMC_FALLBACK);
     route->loaded_from_file = data->route_loaded_from_file;
-    route->active_waypoint_index = data->active_waypoint_index + 1;
+    route->active_waypoint_index = -1;
 
     int coordinate_count = 0;
     if (route->point_count < SIM_ROUTE_MAX_POINTS && data->origin[0] != '\0')
     {
-        Airport *origin_airport = fmc_query_airport_by_icao(data->origin);
-        const int has_position = origin_airport != NULL && fmc_valid_position(origin_airport->datum_lat, origin_airport->datum_lon);
+        const FMC_ResolvedCoordinate coord = fmc_resolve_airport_coordinate(data->origin,
+                                                                            data->origin_has_position,
+                                                                            data->origin_latitude,
+                                                                            data->origin_longitude,
+                                                                            data->origin_coordinate_source);
         set_sim_route_point(&route->points[route->point_count++],
                             data->origin,
                             "AIRPORT",
-                            has_position ? origin_airport->datum_lat : 0.0,
-                            has_position ? origin_airport->datum_lon : 0.0,
-                            has_position);
-        if (has_position)
+                            coord.has_position ? coord.latitude : 0.0,
+                            coord.has_position ? coord.longitude : 0.0,
+                            coord.has_position,
+                            coord.source);
+        if (coord.has_position)
         {
             coordinate_count++;
         }
@@ -1083,23 +1670,323 @@ int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route)
 
     for (int i = 0; i < data->route_count && route->point_count < SIM_ROUTE_MAX_POINTS; ++i)
     {
-        const int has_position = data->route_has_position[i] &&
+        const int is_destination_airport = strcmp(data->route_points[i], data->destination) == 0;
+        FMC_ResolvedCoordinate coord;
+        if (is_destination_airport)
+        {
+            coord = fmc_resolve_airport_coordinate(data->route_points[i],
+                                                   data->route_has_position[i],
+                                                   data->route_latitudes[i],
+                                                   data->route_longitudes[i],
+                                                   data->route_coordinate_sources[i]);
+        }
+        else
+        {
+            coord.latitude = data->route_latitudes[i];
+            coord.longitude = data->route_longitudes[i];
+            coord.has_position = data->route_has_position[i] &&
                                  fmc_valid_position(data->route_latitudes[i], data->route_longitudes[i]);
+            coord.source = coord.has_position ? data->route_coordinate_sources[i] : FMC_COORD_SOURCE_INVALID;
+            if (coord.source == FMC_COORD_SOURCE_INVALID && coord.has_position)
+            {
+                coord.source = FMC_COORD_SOURCE_ROUTE;
+            }
+        }
         set_sim_route_point(&route->points[route->point_count++],
                             data->route_points[i],
-                            strcmp(data->route_points[i], data->destination) == 0 ? "AIRPORT" : "FIX",
-                            has_position ? data->route_latitudes[i] : 0.0,
-                            has_position ? data->route_longitudes[i] : 0.0,
-                            has_position);
-        if (has_position)
+                            is_destination_airport ? "AIRPORT" : "FIX",
+                            coord.has_position ? coord.latitude : 0.0,
+                            coord.has_position ? coord.longitude : 0.0,
+                            coord.has_position,
+                            coord.source);
+        if (coord.has_position)
         {
             coordinate_count++;
         }
     }
 
-    route->valid = route->point_count > 0;
+    /* Origin is not a navigation target. Select the first later point that can be drawn. */
+    for (int i = 1; i < route->point_count; ++i)
+    {
+        if (route->points[i].has_position)
+        {
+            route->active_waypoint_index = i;
+            break;
+        }
+    }
+
+    route->valid = route->origin[0] != '\0' &&
+                   route->destination[0] != '\0' &&
+                   route->point_count >= 2;
     route->has_coordinates = route->point_count > 0 && coordinate_count == route->point_count;
     return route->valid;
+}
+
+static int path_exists(const char *path)
+{
+    return path != NULL && path[0] != '\0' && FMC_ACCESS(path) == 0;
+}
+
+static int ensure_directory_exists(const char *path)
+{
+    char temp[SIM_ROUTE_PATH_LEN * 2];
+    size_t len = 0;
+
+    if (path == NULL || path[0] == '\0')
+    {
+        return 0;
+    }
+
+    snprintf(temp, sizeof(temp), "%s", path);
+    len = strlen(temp);
+    while (len > 0 && (temp[len - 1] == '\\' || temp[len - 1] == '/'))
+    {
+        temp[--len] = '\0';
+    }
+
+    for (char *p = temp + 1; *p != '\0'; ++p)
+    {
+        if (*p == '\\' || *p == '/')
+        {
+            char saved = *p;
+            *p = '\0';
+            if (!path_exists(temp) && FMC_MKDIR(temp) != 0 && errno != EEXIST)
+            {
+                return 0;
+            }
+            *p = saved;
+        }
+    }
+
+    if (!path_exists(temp) && FMC_MKDIR(temp) != 0 && errno != EEXIST)
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+static int resolve_xplane_fms_plans_dir(char *dest, int dest_size)
+{
+    const char *direct = getenv("XPLANE_FMS_PLANS_DIR");
+    const char *root = getenv("XPLANE_ROOT");
+    const char *candidates[] = {
+        "D:\\X-Plane 11\\Output\\FMS plans",
+        "C:\\X-Plane 11\\Output\\FMS plans",
+        "D:\\X-Plane 12\\Output\\FMS plans",
+        "C:\\X-Plane 12\\Output\\FMS plans"};
+
+    if (dest == NULL || dest_size <= 0)
+    {
+        return 0;
+    }
+
+    if (direct != NULL && direct[0] != '\0')
+    {
+        snprintf(dest, (size_t)dest_size, "%s", direct);
+        return ensure_directory_exists(dest);
+    }
+
+    if (root != NULL && root[0] != '\0')
+    {
+        snprintf(dest, (size_t)dest_size, "%s\\Output\\FMS plans", root);
+        return ensure_directory_exists(dest);
+    }
+
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i)
+    {
+        if (path_exists(candidates[i]))
+        {
+            snprintf(dest, (size_t)dest_size, "%s", candidates[i]);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int xplane_fms_point_type(const SimRoutePoint *point, int index, int count)
+{
+    if (point == NULL)
+    {
+        return 11;
+    }
+    if (index == 0 || index == count - 1 || strcmp(point->type, "AIRPORT") == 0)
+    {
+        return 1;
+    }
+    if (strcmp(point->type, "VOR") == 0)
+    {
+        return 3;
+    }
+    if (strcmp(point->type, "NDB") == 0)
+    {
+        return 2;
+    }
+    return 11;
+}
+
+static int fmc_export_route_to_xplane_fms(const FMC_Data *data, char *route_name, int route_name_size)
+{
+    SimPlannedRoute route;
+    char dir[SIM_ROUTE_PATH_LEN * 2];
+    char path[SIM_ROUTE_PATH_LEN * 3];
+    FILE *fp = NULL;
+
+    if (route_name != NULL && route_name_size > 0)
+    {
+        route_name[0] = '\0';
+    }
+
+    if (!fmc_data_export_planned_route(data, &route) || !route.has_coordinates)
+    {
+        return 0;
+    }
+
+    if (!resolve_xplane_fms_plans_dir(dir, sizeof(dir)))
+    {
+        return 0;
+    }
+
+    snprintf(route_name, (size_t)route_name_size, "%s%s", route.origin, route.destination);
+    snprintf(path, sizeof(path), "%s\\%s.fms", dir, route_name);
+
+    fp = fopen(path, "w");
+    if (fp == NULL)
+    {
+        return 0;
+    }
+
+    fprintf(fp, "I\n");
+    fprintf(fp, "3 version\n");
+    fprintf(fp, "0\n");
+    fprintf(fp, "%d\n", route.point_count);
+    for (int i = 0; i < route.point_count; ++i)
+    {
+        const SimRoutePoint *point = &route.points[i];
+        fprintf(fp,
+                "%d %s %.0f %.6f %.6f\n",
+                xplane_fms_point_type(point, i, route.point_count),
+                point->ident,
+                point->altitude,
+                point->latitude,
+                point->longitude);
+    }
+
+    fclose(fp);
+    printf("FMC Route: exported X-Plane FMS plan %s.\n", path);
+    fflush(stdout);
+    return 1;
+}
+
+static int sync_route_fields_to_xplane_fmc(const FMC_Data *data, const char *fms_route_name)
+{
+    const char *co_route_text = NULL;
+    int sent_any = 0;
+
+    if (data == NULL)
+    {
+        return -1;
+    }
+
+    if (!fmc_xplane_connect_is_ready())
+    {
+        fmc_xplane_connect_init(NULL, 0);
+    }
+
+    if (data->origin[0] != '\0')
+    {
+        if (fmc_xplane_set_origin(data->origin) < 0)
+        {
+            return -1;
+        }
+        sent_any = 1;
+    }
+
+    if (data->destination[0] != '\0')
+    {
+        if (fmc_xplane_set_destination(data->destination) < 0)
+        {
+            return -1;
+        }
+        sent_any = 1;
+    }
+
+    co_route_text = (fms_route_name != NULL && fms_route_name[0] != '\0')
+                        ? fms_route_name
+                        : data->company_route;
+    if (co_route_text != NULL && co_route_text[0] != '\0')
+    {
+        if (fmc_xplane_set_co_route(co_route_text) < 0)
+        {
+            return -1;
+        }
+        sent_any = 1;
+    }
+
+    if (data->flight_no[0] != '\0')
+    {
+        if (fmc_xplane_set_flt_no(data->flight_no) < 0)
+        {
+            return -1;
+        }
+        sent_any = 1;
+    }
+
+    if (sent_any && fmc_xplane_set_exec() < 0)
+    {
+        return -1;
+    }
+
+    if (sent_any)
+    {
+        printf("FMC Route: synced route fields to X-Plane FMC origin=%s destination=%s co_route=%s flight_no=%s.\n",
+               data->origin[0] != '\0' ? data->origin : "----",
+               data->destination[0] != '\0' ? data->destination : "----",
+               co_route_text != NULL && co_route_text[0] != '\0' ? co_route_text : "----",
+               data->flight_no[0] != '\0' ? data->flight_no : "----");
+        fflush(stdout);
+    }
+
+    return sent_any ? 1 : 0;
+}
+
+int fmc_data_sync_route_to_xplane(FMC_Data *data)
+{
+    char fms_route_name[2 * FMC_TEXT_LEN] = {0};
+    int fms_exported;
+    int xplane_synced;
+
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    fms_exported = fmc_export_route_to_xplane_fms(data, fms_route_name, sizeof(fms_route_name));
+    xplane_synced = sync_route_fields_to_xplane_fmc(data, fms_exported ? fms_route_name : NULL);
+
+    if (xplane_synced > 0)
+    {
+        if (fms_exported && fms_route_name[0] != '\0')
+        {
+            snprintf(data->message, sizeof(data->message), "CO RTE %s SENT", fms_route_name);
+        }
+        else
+        {
+            snprintf(data->message, sizeof(data->message), "RTE %s-%s SENT", data->origin, data->destination);
+        }
+        return 1;
+    }
+
+    if (fms_exported && fms_route_name[0] != '\0')
+    {
+        snprintf(data->message, sizeof(data->message), "CO RTE %s READY", fms_route_name);
+        return 1;
+    }
+
+    set_text(data->message, sizeof(data->message),
+             fmc_xplane_connect_is_connected() ? "XPLANE SEND FAIL" : "XPLANE NOT CONNECT");
+    return 0;
 }
 
 int fmc_data_exec_route_selection(FMC_Data *data)
@@ -1127,11 +2014,34 @@ int fmc_data_exec_route_selection(FMC_Data *data)
         return 0;
     }
 
-    setOrigin(data->origin);
-    setDestination(data->destination);
-    setFlt_no(data->flight_no);
-    setExec();
+    if (!fmc_data_sync_route_to_xplane(data))
+    {
+        return 0;
+    }
+
     data->origin_exec_pending = 0;
-    snprintf(data->message, sizeof(data->message), "RTE %s-%s SENT", data->origin, data->destination);
     return 1;
+}
+
+int fmc_data_route_has_uncommitted_changes(const FMC_Data *data)
+{
+    return data != NULL && data->route_mod_pending;
+}
+
+int fmc_data_route_clear_pending(const FMC_Data *data)
+{
+    return data != NULL && data->route_clear_pending;
+}
+
+void fmc_data_mark_route_committed(FMC_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->route_mod_pending = 0;
+    data->route_clear_pending = 0;
+    data->route_delete_pending = 0;
+    data->origin_exec_pending = 0;
 }

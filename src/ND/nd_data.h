@@ -1,6 +1,7 @@
 #ifndef ND_DATA_H
 #define ND_DATA_H
 
+#include "../Data/sim_route.h"
 #include "../Util/xplaneConnect.h"
 
 #define MAX_TOTAL_WAYPOINTS 240000
@@ -13,6 +14,7 @@
 #define ND_MAX_VISIBLE_FIX_POINTS 80
 #define ND_MAX_VISIBLE_NAV_POINTS 28
 #define ND_MAX_VISIBLE_AIRPORT_POINTS 18
+#define ND_MAX_ROUTE_POINTS SIM_ROUTE_MAX_POINTS
 #define ND_NAME_LEN 32
 
 typedef enum ND_PointType
@@ -24,6 +26,14 @@ typedef enum ND_PointType
     ND_POINT_NDB,
     ND_POINT_ILS
 } ND_PointType;
+
+typedef enum ND_MapLayer
+{
+    ND_MAP_LAYER_WPT,
+    ND_MAP_LAYER_ARPT,
+    ND_MAP_LAYER_STA,
+    ND_MAP_LAYER_COUNT
+} ND_MapLayer;
 
 typedef struct ND_NavPoint
 {
@@ -54,6 +64,14 @@ typedef struct ND_DataFrame
     float active_waypoint_eta_min;
     unsigned int fields;
 } ND_DataFrame;
+
+typedef struct ND_RoutePoint
+{
+    char ident[ND_NAME_LEN];
+    double latitude;
+    double longitude;
+    int has_position;
+} ND_RoutePoint;
 
 typedef struct NDData
 {
@@ -138,6 +156,16 @@ typedef struct ND_Data
     int apt_loaded;
     int apt_airport_count;
     int apt_tower_count;
+
+    int map_layer_visible[ND_MAP_LAYER_COUNT];
+    int map_labels_visible;
+
+    ND_RoutePoint route_points[ND_MAX_ROUTE_POINTS];
+    int route_point_count;
+    int route_segment_count;
+    int route_active_index;
+    int route_cached_revision;
+    int route_valid;
 } ND_Data;
 
 extern int waypoint_total_count;
@@ -154,5 +182,12 @@ void nd_data_init(ND_Data *data);
 void nd_data_update_mock(ND_Data *data, float delta_time);
 void nd_data_recalculate_nav_points(ND_Data *data);
 void nd_data_set_range(ND_Data *data, float range_nm);
+int nd_data_get_map_layer_visible(const ND_Data *data, ND_MapLayer layer);
+void nd_data_set_map_layer_visible(ND_Data *data, ND_MapLayer layer, int visible);
+void nd_data_toggle_map_layer_visible(ND_Data *data, ND_MapLayer layer);
+int nd_data_get_map_labels_visible(const ND_Data *data);
+void nd_data_set_map_labels_visible(ND_Data *data, int visible);
+void nd_data_toggle_map_labels_visible(ND_Data *data);
+int nd_data_sync_planned_route(ND_Data *data, const SimPlannedRoute *route, int route_revision, int force_check);
 
 #endif

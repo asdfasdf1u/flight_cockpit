@@ -295,6 +295,57 @@ static void set_nav_point(
     point->active = active;
 }
 
+static int nd_valid_route_position(double latitude, double longitude)
+{
+    return latitude >= -90.0 && latitude <= 90.0 &&
+           longitude >= -180.0 && longitude <= 180.0 &&
+           !(latitude == 0.0 && longitude == 0.0);
+}
+
+static void nd_clear_route_cache(ND_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    memset(data->route_points, 0, sizeof(data->route_points));
+    data->route_point_count = 0;
+    data->route_segment_count = 0;
+    data->route_active_index = -1;
+    data->route_valid = 0;
+}
+
+static void nd_route_distance_bearing(
+    const ND_Data *data,
+    double latitude,
+    double longitude,
+    float *distance_nm,
+    float *bearing_deg)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    const float aircraft_lat_rad = (float)data->latitude * ND_DEG_TO_RAD;
+    const float lon_scale = cosf(aircraft_lat_rad);
+    const double delta_lat = latitude - data->latitude;
+    const double delta_lon = longitude - data->longitude;
+    const float north_nm = (float)(delta_lat * 60.0);
+    const float east_nm = (float)(delta_lon * 60.0 * (double)lon_scale);
+    const float bearing = atan2f(east_nm, north_nm) * ND_RAD_TO_DEG;
+
+    if (distance_nm != NULL)
+    {
+        *distance_nm = sqrtf(north_nm * north_nm + east_nm * east_nm);
+    }
+    if (bearing_deg != NULL)
+    {
+        *bearing_deg = normalize_degrees(bearing);
+    }
+}
+
 static int add_nav_point(
     ND_Data *data,
     const char *ident,
@@ -1410,20 +1461,29 @@ static void update_active_waypoint_info(ND_Data *data)
     data->active_waypoint_bearing_deg = 0.0f;
     data->active_waypoint_eta_min = 0.0f;
 
-    if (data->active_point_index < 0 || data->active_point_index >= data->nav_point_count)
+    snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "----");
+
+    if (data->route_valid &&
+        data->route_active_index >= 0 &&
+        data->route_active_index < data->route_point_count)
     {
-        snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "----");
+        const ND_RoutePoint *active_route_point = &data->route_points[data->route_active_index];
+        if (!active_route_point->has_position)
+        {
+            return;
+        }
+
+        snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "%s", active_route_point->ident);
+        nd_route_distance_bearing(data,
+                                  active_route_point->latitude,
+                                  active_route_point->longitude,
+                                  &data->active_waypoint_distance_nm,
+                                  &data->active_waypoint_bearing_deg);
+        if (data->ground_speed > 1.0f)
+        {
+            data->active_waypoint_eta_min = data->active_waypoint_distance_nm / data->ground_speed * 60.0f;
+        }
         return;
-    }
-
-    const ND_NavPoint *active = &data->nav_points[data->active_point_index];
-    snprintf(data->active_waypoint_name, sizeof(data->active_waypoint_name), "%s", active->ident);
-    data->active_waypoint_distance_nm = active->distance_nm;
-    data->active_waypoint_bearing_deg = active->bearing_deg;
-
-    if (data->ground_speed > 1.0f)
-    {
-        data->active_waypoint_eta_min = active->distance_nm / data->ground_speed * 60.0f;
     }
 }
 
@@ -1531,6 +1591,72 @@ void nd_data_recalculate_nav_points(ND_Data *data)
     update_active_waypoint_info(data);
 }
 
+int nd_data_sync_planned_route(ND_Data *data, const SimPlannedRoute *route, int route_revision, int force_check)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    if (data->route_cached_revision == route_revision)
+    {
+        if (force_check)
+        {
+            printf("ND route sync: current route revision=%d cached route revision=%d route unchanged; displayed waypoint count=%d displayed segment count=%d.\n",
+                   route_revision,
+                   data->route_cached_revision,
+                   data->route_point_count,
+                   data->route_segment_count);
+        }
+        return 0;
+    }
+
+    const int previous_revision = data->route_cached_revision;
+    nd_clear_route_cache(data);
+    data->route_cached_revision = route_revision;
+
+    if (route != NULL && route->valid)
+    {
+        for (int i = 0; i < route->point_count && data->route_point_count < ND_MAX_ROUTE_POINTS; ++i)
+        {
+            const SimRoutePoint *source = &route->points[i];
+            if (source->ident[0] == '\0')
+            {
+                continue;
+            }
+
+            ND_RoutePoint *target = &data->route_points[data->route_point_count++];
+            snprintf(target->ident, sizeof(target->ident), "%.*s", ND_NAME_LEN - 1, source->ident);
+            target->has_position = source->has_position &&
+                                   nd_valid_route_position(source->latitude, source->longitude);
+            target->latitude = target->has_position ? source->latitude : 0.0;
+            target->longitude = target->has_position ? source->longitude : 0.0;
+            if (i == route->active_waypoint_index)
+            {
+                data->route_active_index = data->route_point_count - 1;
+            }
+        }
+    }
+
+    data->route_valid = data->route_point_count > 0;
+    data->route_segment_count = 0;
+    for (int i = 1; i < data->route_point_count; ++i)
+    {
+        if (data->route_points[i - 1].has_position && data->route_points[i].has_position)
+        {
+            data->route_segment_count++;
+        }
+    }
+
+    printf("ND route sync: current route revision=%d cached route revision=%d route refreshed; displayed waypoint count=%d displayed segment count=%d.\n",
+           route_revision,
+           previous_revision,
+           data->route_point_count,
+           data->route_segment_count);
+    update_active_waypoint_info(data);
+    return previous_revision != route_revision;
+}
+
 void nd_data_set_range(ND_Data *data, float range_nm)
 {
     if (data == NULL)
@@ -1544,6 +1670,71 @@ void nd_data_set_range(ND_Data *data, float range_nm)
     }
 
     data->range_nm = range_nm;
+}
+
+static int map_layer_is_valid(ND_MapLayer layer)
+{
+    return layer >= 0 && layer < ND_MAP_LAYER_COUNT;
+}
+
+int nd_data_get_map_layer_visible(const ND_Data *data, ND_MapLayer layer)
+{
+    if (data == NULL || !map_layer_is_valid(layer))
+    {
+        return 0;
+    }
+
+    return data->map_layer_visible[layer] != 0;
+}
+
+void nd_data_set_map_layer_visible(ND_Data *data, ND_MapLayer layer, int visible)
+{
+    if (data == NULL || !map_layer_is_valid(layer))
+    {
+        return;
+    }
+
+    data->map_layer_visible[layer] = visible != 0;
+}
+
+void nd_data_toggle_map_layer_visible(ND_Data *data, ND_MapLayer layer)
+{
+    if (data == NULL || !map_layer_is_valid(layer))
+    {
+        return;
+    }
+
+    data->map_layer_visible[layer] = !data->map_layer_visible[layer];
+}
+
+int nd_data_get_map_labels_visible(const ND_Data *data)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    return data->map_labels_visible != 0;
+}
+
+void nd_data_set_map_labels_visible(ND_Data *data, int visible)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->map_labels_visible = visible != 0;
+}
+
+void nd_data_toggle_map_labels_visible(ND_Data *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->map_labels_visible = !data->map_labels_visible;
 }
 
 static void apply_data_frame(ND_Data *data, const ND_DataFrame *frame, float delta_time)
@@ -1596,14 +1787,6 @@ static void apply_data_frame(ND_Data *data, const ND_DataFrame *frame, float del
 
     nd_data_recalculate_nav_points(data);
 
-    if (frame->fields & ND_FRAME_ACTIVE_DISTANCE)
-    {
-        data->active_waypoint_distance_nm = frame->active_waypoint_distance_nm;
-    }
-    if (frame->fields & ND_FRAME_ACTIVE_ETA)
-    {
-        data->active_waypoint_eta_min = frame->active_waypoint_eta_min;
-    }
 }
 
 static void update_from_data_file(ND_Data *data, float delta_time)
@@ -1664,11 +1847,17 @@ void nd_data_init(ND_Data *data)
     data->track = 3.0f;
     data->ground_speed = 262.0f;
     data->true_air_speed = 262.0f;
-    data->range_nm = 60.0f;
+    data->range_nm = 80.0f;
     data->nav_point_count = 8;
     data->active_point_index = 0;
     data->simulation_time = 0.0f;
     data->data_frame_step_sec = ND_DATA_DEFAULT_STEP_SEC;
+    data->route_cached_revision = -1;
+    data->route_active_index = -1;
+    nd_data_set_map_layer_visible(data, ND_MAP_LAYER_WPT, 1);
+    nd_data_set_map_layer_visible(data, ND_MAP_LAYER_ARPT, 1);
+    nd_data_set_map_layer_visible(data, ND_MAP_LAYER_STA, 1);
+    nd_data_set_map_labels_visible(data, 0);
 
     set_nav_point(&data->nav_points[0], "WPT01", ND_POINT_WAYPOINT, 40.664200, 116.427400, 1);
     set_nav_point(&data->nav_points[1], "WPT02", ND_POINT_WAYPOINT, 40.524200, 116.667400, 0);

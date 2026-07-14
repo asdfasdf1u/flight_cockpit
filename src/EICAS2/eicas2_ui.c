@@ -10,6 +10,8 @@ static void draw_eicas2_page(SDL_Renderer *renderer, TTF_Font *font, const EICAS
 {
     const AircraftSystems_EngineData *left = &data->engine_left;
     const AircraftSystems_EngineData *right = &data->engine_right;
+    const float left_fuel_flow = left->eicas2_fuel_flow_display_valid ? left->eicas2_fuel_flow_display : left->fuel_flow / 350.0f;
+    const float right_fuel_flow = right->eicas2_fuel_flow_display_valid ? right->eicas2_fuel_flow_display : right->fuel_flow / 350.0f;
 
     eicas_ui_draw_percent_gauge_with_needle(renderer, font, canvas, 165.0f, 89.0f, left->n2, EICAS_COLOR_WHITE);
     eicas_ui_draw_percent_gauge_with_needle(renderer, font, canvas, 389.0f, 89.0f, right->n2, EICAS_COLOR_WHITE);
@@ -19,8 +21,8 @@ static void draw_eicas2_page(SDL_Renderer *renderer, TTF_Font *font, const EICAS
     eicas_ui_draw_value_box(renderer, font, canvas, 418.0f, 66.0f, 78.0f, 23.0f, "%.1f", right->n2);
     eicas_ui_draw_centered_text(renderer, font, canvas, EICAS_COLOR_CYAN, 268.0f, 156.0f, "N2");
 
-    eicas_ui_draw_value_box(renderer, font, canvas, 140.0f, 220.0f, 48.0f, 25.0f, "%.1f", left->fuel_flow / 350.0f);
-    eicas_ui_draw_value_box(renderer, font, canvas, 363.0f, 220.0f, 48.0f, 25.0f, "%.1f", right->fuel_flow / 350.0f);
+    eicas_ui_draw_value_box(renderer, font, canvas, 140.0f, 220.0f, 48.0f, 25.0f, "%.1f", left_fuel_flow);
+    eicas_ui_draw_value_box(renderer, font, canvas, 363.0f, 220.0f, 48.0f, 25.0f, "%.1f", right_fuel_flow);
     eicas_ui_draw_centered_text(renderer, font, canvas, EICAS_COLOR_CYAN, 268.0f, 231.0f, "FF");
 
     eicas_ui_draw_vertical_scale_with_limit(renderer, canvas, 209.0f, 290.0f, 345.0f, left->oil_pressure, 100.0f, 0, 0.22f, 2);

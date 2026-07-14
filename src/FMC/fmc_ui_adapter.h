@@ -42,6 +42,14 @@ typedef enum FMC_RouteField
     FMC_ROUTE_FIELD_TO_FIX
 } FMC_RouteField;
 
+typedef enum FMC_CoordinateSource
+{
+    FMC_COORD_SOURCE_INVALID = 0,
+    FMC_COORD_SOURCE_ROUTE,
+    FMC_COORD_SOURCE_OVERRIDE,
+    FMC_COORD_SOURCE_APT_DAT
+} FMC_CoordinateSource;
+
 typedef struct FMC_Data
 {
     FMC_Page current_page;
@@ -55,9 +63,14 @@ typedef struct FMC_Data
     char route_via[FMC_TEXT_LEN];
     char flight_no[FMC_TEXT_LEN];
     char route_points[FMC_MAX_ROUTE_POINTS][FMC_TEXT_LEN];
+    double origin_latitude;
+    double origin_longitude;
+    int origin_has_position;
+    FMC_CoordinateSource origin_coordinate_source;
     double route_latitudes[FMC_MAX_ROUTE_POINTS];
     double route_longitudes[FMC_MAX_ROUTE_POINTS];
     int route_has_position[FMC_MAX_ROUTE_POINTS];
+    FMC_CoordinateSource route_coordinate_sources[FMC_MAX_ROUTE_POINTS];
     int route_count;
     int configured_route_page;
     int route_loaded_from_file;
@@ -107,6 +120,9 @@ typedef struct FMC_Data
     float current_wind_direction;
     float current_fuel_kg;
     int live_data_active;
+    int route_mod_pending;
+    int route_clear_pending;
+    int route_delete_pending;
 } FMC_Data;
 
 void fmc_data_init(FMC_Data *data);
@@ -131,7 +147,11 @@ int fmc_data_set_legs_parameter(FMC_Data *data, int field_index);
 int fmc_data_set_hold_parameter(FMC_Data *data, int field_index);
 int fmc_data_activate_current_phase(FMC_Data *data);
 int fmc_data_exec_route_selection(FMC_Data *data);
+int fmc_data_sync_route_to_xplane(FMC_Data *data);
 int fmc_data_apply_planned_route(FMC_Data *data, const SimPlannedRoute *route);
 int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route);
+int fmc_data_route_has_uncommitted_changes(const FMC_Data *data);
+int fmc_data_route_clear_pending(const FMC_Data *data);
+void fmc_data_mark_route_committed(FMC_Data *data);
 
 #endif

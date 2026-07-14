@@ -16,6 +16,7 @@ typedef struct SimRoutePoint
 {
     char ident[SIM_ROUTE_TEXT_LEN];
     char type[SIM_ROUTE_TEXT_LEN];
+    char coordinate_source[SIM_ROUTE_TEXT_LEN];
     double latitude;
     double longitude;
     double altitude;

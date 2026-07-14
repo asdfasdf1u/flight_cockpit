@@ -9,6 +9,8 @@
 #define SIM_EICAS_LOWER_FF_SCALE 350.0f
 #define SIM_FUEL_CENTER_DISPLAY_SCALE 60.9f
 #define SIM_FUEL_SIDE_DISPLAY_SCALE 48.7f
+#define SIM_EARTH_RADIUS_NM 3440.065
+#define SIM_FLIGHT_PHASE_STABLE_FRAMES 8
 
 static float clamp_float(float value, float min_value, float max_value)
 {
@@ -43,6 +45,99 @@ static void copy_text(char *dest, int dest_size, const char *src)
         return;
     }
     snprintf(dest, (size_t)dest_size, "%s", src != NULL ? src : "");
+}
+
+static int sim_valid_route_position(double latitude, double longitude)
+{
+    return latitude >= -90.0 && latitude <= 90.0 &&
+           longitude >= -180.0 && longitude <= 180.0 &&
+           (latitude != 0.0 || longitude != 0.0);
+}
+
+static double sim_route_distance_nm(double lat1, double lon1, double lat2, double lon2)
+{
+    const double dlat = (lat2 - lat1) * (double)SIM_DEG_TO_RAD;
+    const double dlon = (lon2 - lon1) * (double)SIM_DEG_TO_RAD;
+    const double lat1_rad = lat1 * (double)SIM_DEG_TO_RAD;
+    const double lat2_rad = lat2 * (double)SIM_DEG_TO_RAD;
+    const double sin_dlat = sin(dlat * 0.5);
+    const double sin_dlon = sin(dlon * 0.5);
+    const double a = sin_dlat * sin_dlat + cos(lat1_rad) * cos(lat2_rad) * sin_dlon * sin_dlon;
+    const double c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+    return SIM_EARTH_RADIUS_NM * c;
+}
+
+static const SimRoutePoint *sim_find_route_point(const SimPlannedRoute *route, const char *ident)
+{
+    if (route == NULL || ident == NULL || ident[0] == '\0')
+    {
+        return NULL;
+    }
+
+    for (int i = 0; i < route->point_count; ++i)
+    {
+        if (strcmp(route->points[i].ident, ident) == 0)
+        {
+            return &route->points[i];
+        }
+    }
+
+    return NULL;
+}
+
+static void sim_data_center_log_route_diagnostics(const SimDataCenter *center)
+{
+    if (center == NULL || !center->planned_route.valid)
+    {
+        return;
+    }
+
+    const SimPlannedRoute *route = &center->planned_route;
+    const SimRoutePoint *zbbb = sim_find_route_point(route, "ZBBB");
+    const SimRoutePoint *zuuu = sim_find_route_point(route, "ZUUU");
+    const char *zbbb_source = (zbbb != NULL && zbbb->coordinate_source[0] != '\0')
+                                  ? zbbb->coordinate_source
+                                  : "INVALID";
+    const char *zuuu_source = (zuuu != NULL && zuuu->coordinate_source[0] != '\0')
+                                  ? zuuu->coordinate_source
+                                  : "INVALID";
+
+    printf("FMC Route Diagnostic: aircraft lat=%.6f lon=%.6f.\n",
+           center->nd_latitude,
+           center->nd_longitude);
+
+    if (zbbb != NULL && zbbb->has_position && sim_valid_route_position(zbbb->latitude, zbbb->longitude))
+    {
+        printf("FMC Route Diagnostic: ZBBB lat=%.6f lon=%.6f source=%s aircraft_distance=%.1fNM.\n",
+               zbbb->latitude,
+               zbbb->longitude,
+               zbbb_source,
+               sim_route_distance_nm(center->nd_latitude, center->nd_longitude, zbbb->latitude, zbbb->longitude));
+    }
+    else
+    {
+        printf("FMC Route Diagnostic: ZBBB lat=INVALID lon=INVALID source=%s aircraft_distance=INVALID.\n",
+               zbbb_source);
+    }
+
+    if (zuuu != NULL && zuuu->has_position && sim_valid_route_position(zuuu->latitude, zuuu->longitude))
+    {
+        printf("FMC Route Diagnostic: ZUUU lat=%.6f lon=%.6f source=%s.\n",
+               zuuu->latitude,
+               zuuu->longitude,
+               zuuu_source);
+    }
+    else
+    {
+        printf("FMC Route Diagnostic: ZUUU lat=INVALID lon=INVALID source=%s.\n",
+               zuuu_source);
+    }
+
+    printf("FMC Route Diagnostic: planned_route origin=%s destination=%s point_count=%d revision=%d.\n",
+           route->origin[0] != '\0' ? route->origin : "----",
+           route->destination[0] != '\0' ? route->destination : "----",
+           route->point_count,
+           center->route_revision);
 }
 
 static int sample_index_from_time(float sim_time, int count)
@@ -163,6 +258,93 @@ static void update_warnings(SimSnapshot *snapshot)
     }
 }
 
+static int snapshot_has_warning(const SimSnapshot *snapshot)
+{
+    if (snapshot == NULL)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < snapshot->warning_count; ++i)
+    {
+        if (snapshot->warnings[i].active && snapshot->warnings[i].level == SIM_WARNING_WARNING)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static SimFlightPhase sim_data_center_classify_flight_phase(const SimSnapshot *snapshot)
+{
+    if (snapshot == NULL || !snapshot->data_valid)
+    {
+        return SIM_FLIGHT_PHASE_UNKNOWN;
+    }
+    if (snapshot_has_warning(snapshot))
+    {
+        return SIM_FLIGHT_PHASE_EMERGENCY;
+    }
+    if (snapshot->agl_altitude < 100.0f && snapshot->ground_speed < 40.0f)
+    {
+        return SIM_FLIGHT_PHASE_GROUND;
+    }
+    if (snapshot->agl_altitude < 2000.0f && snapshot->vertical_speed < -300.0f)
+    {
+        return SIM_FLIGHT_PHASE_LANDING;
+    }
+    if (snapshot->agl_altitude < 3000.0f && snapshot->ground_speed >= 80.0f && snapshot->vertical_speed >= 300.0f)
+    {
+        return SIM_FLIGHT_PHASE_TAKEOFF;
+    }
+    if (snapshot->vertical_speed >= 300.0f)
+    {
+        return SIM_FLIGHT_PHASE_CLIMB;
+    }
+    if (snapshot->vertical_speed <= -300.0f)
+    {
+        return SIM_FLIGHT_PHASE_DESCENT;
+    }
+    return SIM_FLIGHT_PHASE_CRUISE;
+}
+
+static void sim_data_center_update_flight_phase(SimDataCenter *center)
+{
+    SimSnapshot *snapshot;
+    SimFlightPhase candidate;
+
+    if (center == NULL)
+    {
+        return;
+    }
+
+    snapshot = &center->snapshot;
+    candidate = sim_data_center_classify_flight_phase(snapshot);
+    if (candidate == SIM_FLIGHT_PHASE_EMERGENCY || candidate == SIM_FLIGHT_PHASE_UNKNOWN)
+    {
+        center->flight_phase = candidate;
+        center->flight_phase_candidate = candidate;
+        center->flight_phase_candidate_frames = 0;
+    }
+    else if (candidate == center->flight_phase)
+    {
+        center->flight_phase_candidate = candidate;
+        center->flight_phase_candidate_frames = 0;
+    }
+    else if (candidate != center->flight_phase_candidate)
+    {
+        center->flight_phase_candidate = candidate;
+        center->flight_phase_candidate_frames = 1;
+    }
+    else if (++center->flight_phase_candidate_frames >= SIM_FLIGHT_PHASE_STABLE_FRAMES)
+    {
+        center->flight_phase = candidate;
+        center->flight_phase_candidate_frames = 0;
+    }
+
+    snapshot->flight_phase = center->flight_phase;
+}
+
 static void init_snapshot_defaults(SimSnapshot *snapshot)
 {
     if (snapshot == NULL)
@@ -172,7 +354,10 @@ static void init_snapshot_defaults(SimSnapshot *snapshot)
 
     memset(snapshot, 0, sizeof(*snapshot));
     snapshot->current_frame = -1;
+    snapshot->updated_frame = -1;
     snapshot->playback_speed = 1.0f;
+    snapshot->source = SIM_SNAPSHOT_SOURCE_NONE;
+    snapshot->flight_phase = SIM_FLIGHT_PHASE_UNKNOWN;
 
     snapshot->pitch = 0.0f;
     snapshot->roll = 0.0f;
@@ -196,6 +381,8 @@ static void init_snapshot_defaults(SimSnapshot *snapshot)
     snapshot->total_air_temperature = 11.9f;
     snapshot->n1_left = 63.0f;
     snapshot->n1_right = 67.0f;
+    snapshot->engine_left_running = 1;
+    snapshot->engine_right_running = 1;
     snapshot->n2_left = 70.5f;
     snapshot->n2_right = 73.0f;
     snapshot->egt_left = 663.0f;
@@ -239,6 +426,36 @@ const char *sim_data_center_route_source_name(SimRouteSource source)
     }
 }
 
+const char *sim_snapshot_source_name(SimSnapshotSource source)
+{
+    switch (source)
+    {
+    case SIM_SNAPSHOT_SOURCE_DATA_FILES:
+        return "DATA_FILES";
+    case SIM_SNAPSHOT_SOURCE_XPLANE:
+        return "XPLANE";
+    case SIM_SNAPSHOT_SOURCE_NONE:
+    default:
+        return "NONE";
+    }
+}
+
+const char *sim_flight_phase_name(SimFlightPhase phase)
+{
+    switch (phase)
+    {
+    case SIM_FLIGHT_PHASE_GROUND: return "GROUND";
+    case SIM_FLIGHT_PHASE_TAKEOFF: return "TAKEOFF";
+    case SIM_FLIGHT_PHASE_CLIMB: return "CLIMB";
+    case SIM_FLIGHT_PHASE_CRUISE: return "CRUISE";
+    case SIM_FLIGHT_PHASE_DESCENT: return "DESCENT";
+    case SIM_FLIGHT_PHASE_LANDING: return "LANDING";
+    case SIM_FLIGHT_PHASE_EMERGENCY: return "EMERGENCY";
+    case SIM_FLIGHT_PHASE_UNKNOWN:
+    default: return "UNKNOWN";
+    }
+}
+
 static void set_route_point(SimRoutePoint *point, const char *ident, const char *type, double latitude, double longitude)
 {
     if (point == NULL)
@@ -249,6 +466,7 @@ static void set_route_point(SimRoutePoint *point, const char *ident, const char 
     memset(point, 0, sizeof(*point));
     copy_text(point->ident, sizeof(point->ident), ident);
     copy_text(point->type, sizeof(point->type), type);
+    copy_text(point->coordinate_source, sizeof(point->coordinate_source), "ROUTE");
     point->latitude = latitude;
     point->longitude = longitude;
     point->altitude = 0.0;
@@ -283,19 +501,12 @@ static void init_planned_route(SimDataCenter *center)
         return;
     }
 
-    if (!sim_data_loader_load_fms_route(&center->planned_route, "assets/KSEAKBFI.fms"))
-    {
-        init_fallback_route(&center->planned_route);
-    }
-    center->route_initialized = center->planned_route.valid;
+    memset(&center->planned_route, 0, sizeof(center->planned_route));
+    center->planned_route.source = SIM_ROUTE_SOURCE_NONE;
+    center->route_initialized = 0;
+    center->route_revision = 0;
 
-    printf("SimDataCenter route: source=%s origin=%s destination=%s points=%d first=%s last=%s.\n",
-           sim_data_center_route_source_name(center->planned_route.source),
-           center->planned_route.origin,
-           center->planned_route.destination,
-           center->planned_route.point_count,
-           center->planned_route.point_count > 0 ? center->planned_route.points[0].ident : "----",
-           center->planned_route.point_count > 0 ? center->planned_route.points[center->planned_route.point_count - 1].ident : "----");
+    printf("SimDataCenter route: empty at startup; waiting for FMC input.\n");
     fflush(stdout);
 }
 
@@ -495,6 +706,16 @@ static void rebuild_snapshot(SimDataCenter *center, float delta_time)
     apply_eicas_upper_frame(center);
     apply_eicas_lower_frame(center);
     update_warnings(&center->snapshot);
+    center->snapshot.engine_left_running = center->snapshot.n1_left > 20.0f;
+    center->snapshot.engine_right_running = center->snapshot.n1_right > 20.0f;
+    center->snapshot.source = center->initialized ? SIM_SNAPSHOT_SOURCE_DATA_FILES : SIM_SNAPSHOT_SOURCE_NONE;
+    center->snapshot.data_valid = center->initialized && center->snapshot.has_pfd && center->snapshot.has_nd &&
+                                  isfinite(center->snapshot.altitude) && isfinite(center->snapshot.ground_speed) &&
+                                  isfinite(center->snapshot.latitude) && isfinite(center->snapshot.longitude);
+    center->snapshot.updated_frame = center->snapshot.current_frame;
+    sim_data_center_update_flight_phase(center);
+    alert_manager_update(&center->alert_manager, &center->snapshot);
+    alert_manager_append_sim_warnings(alert_manager_snapshot(&center->alert_manager), &center->snapshot);
 }
 
 int sim_data_center_init(SimDataCenter *center)
@@ -505,6 +726,7 @@ int sim_data_center_init(SimDataCenter *center)
     }
 
     memset(center, 0, sizeof(*center));
+    alert_manager_init(&center->alert_manager);
     center->playback_speed = 1.0f;
     center->nd_latitude = 39.904200;
     center->nd_longitude = 116.407400;
@@ -588,6 +810,31 @@ void sim_data_center_set_route(SimDataCenter *center, const SimPlannedRoute *rou
 
     center->planned_route = *route;
     center->route_initialized = 1;
+    center->route_revision++;
+    printf("SimDataCenter route: committed revision=%d origin=%s destination=%s points=%d.\n",
+           center->route_revision,
+           center->planned_route.origin,
+           center->planned_route.destination,
+           center->planned_route.point_count);
+    sim_data_center_log_route_diagnostics(center);
+}
+
+void sim_data_center_clear_route(SimDataCenter *center)
+{
+    if (center == NULL)
+    {
+        return;
+    }
+
+    memset(&center->planned_route, 0, sizeof(center->planned_route));
+    center->route_initialized = 0;
+    center->route_revision++;
+    printf("SimDataCenter route: cleared revision=%d.\n", center->route_revision);
+}
+
+int sim_data_center_route_revision(const SimDataCenter *center)
+{
+    return center != NULL ? center->route_revision : 0;
 }
 
 const SimSnapshot *sim_data_center_snapshot(const SimDataCenter *center)
@@ -597,6 +844,11 @@ const SimSnapshot *sim_data_center_snapshot(const SimDataCenter *center)
         return NULL;
     }
     return &center->snapshot;
+}
+
+const AlertSnapshot *sim_data_center_alerts(const SimDataCenter *center)
+{
+    return center != NULL ? alert_manager_snapshot(&center->alert_manager) : NULL;
 }
 
 const SimPlannedRoute *sim_data_center_route(const SimDataCenter *center)
@@ -660,4 +912,41 @@ int sim_data_center_has_eicas_lower_data(const SimDataCenter *center)
 int sim_data_center_has_eicas_data(const SimDataCenter *center)
 {
     return sim_data_center_has_eicas_upper_data(center) || sim_data_center_has_eicas_lower_data(center);
+}
+
+void sim_data_center_acknowledge_alert(SimDataCenter *center, AlertType type)
+{
+    if (center != NULL)
+    {
+        alert_manager_acknowledge(&center->alert_manager, type);
+    }
+}
+
+void sim_data_center_set_demo_alert(SimDataCenter *center, AlertType type, int active)
+{
+    const AlertSnapshot *alerts;
+
+    if (center == NULL)
+    {
+        return;
+    }
+    alert_manager_set_demo(&center->alert_manager, type, active);
+    alert_manager_update(&center->alert_manager, &center->snapshot);
+    alerts = alert_manager_snapshot(&center->alert_manager);
+    printf("Alert demo: %s=%d active=%d revision=%d.\n", alert_type_name(type), active != 0,
+           alerts->active_count, alerts->revision);
+}
+
+void sim_data_center_clear_demo_alerts(SimDataCenter *center)
+{
+    const AlertSnapshot *alerts;
+
+    if (center == NULL)
+    {
+        return;
+    }
+    alert_manager_clear_demo(&center->alert_manager);
+    alert_manager_update(&center->alert_manager, &center->snapshot);
+    alerts = alert_manager_snapshot(&center->alert_manager);
+    printf("Alert demo: cleared active=%d revision=%d.\n", alerts->active_count, alerts->revision);
 }

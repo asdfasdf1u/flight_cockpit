@@ -17,6 +17,10 @@ typedef struct AircraftSystems_EngineData
     float n2;
     float egt;
     float fuel_flow;
+    float eicas1_fuel_flow_display;
+    int eicas1_fuel_flow_display_valid;
+    float eicas2_fuel_flow_display;
+    int eicas2_fuel_flow_display_valid;
     float oil_pressure;
     float oil_temp;
     float oil_quantity;
@@ -38,6 +42,11 @@ typedef struct AircraftSystems_Data
 
     float total_air_temperature;
     float fuel_quantity;
+    float fuel_left_quantity;
+    float fuel_center_quantity;
+    float fuel_right_quantity;
+    float fuel_total_quantity;
+    int fuel_tank_quantities_valid;
     float hydraulic_pressure;
     float cabin_pressure;
     float battery_voltage;

@@ -11,6 +11,25 @@ typedef enum SimWarningLevel
     SIM_WARNING_WARNING
 } SimWarningLevel;
 
+typedef enum SimSnapshotSource
+{
+    SIM_SNAPSHOT_SOURCE_NONE = 0,
+    SIM_SNAPSHOT_SOURCE_DATA_FILES,
+    SIM_SNAPSHOT_SOURCE_XPLANE
+} SimSnapshotSource;
+
+typedef enum SimFlightPhase
+{
+    SIM_FLIGHT_PHASE_UNKNOWN = 0,
+    SIM_FLIGHT_PHASE_GROUND,
+    SIM_FLIGHT_PHASE_TAKEOFF,
+    SIM_FLIGHT_PHASE_CLIMB,
+    SIM_FLIGHT_PHASE_CRUISE,
+    SIM_FLIGHT_PHASE_DESCENT,
+    SIM_FLIGHT_PHASE_LANDING,
+    SIM_FLIGHT_PHASE_EMERGENCY
+} SimFlightPhase;
+
 typedef struct SimWarning
 {
     char text[SIM_SNAPSHOT_WARNING_TEXT_LEN];
@@ -24,6 +43,10 @@ typedef struct SimSnapshot
     float delta_time;
     float playback_speed;
     int current_frame;
+    int data_valid;
+    SimSnapshotSource source;
+    SimFlightPhase flight_phase;
+    int updated_frame;
 
     int has_pfd;
     int has_nd;
@@ -57,6 +80,8 @@ typedef struct SimSnapshot
     float total_air_temperature;
     float n1_left;
     float n1_right;
+    int engine_left_running;
+    int engine_right_running;
     float n2_left;
     float n2_right;
     float egt_left;
