@@ -2,6 +2,7 @@
 #define SIM_DATA_CENTER_H
 
 #include "sim_data_loader.h"
+#include "sim_xplane_live_frame.h"
 #include "sim_snapshot.h"
 #include "alert_manager.h"
 
@@ -18,6 +19,9 @@ typedef struct SimDataCenter
     int initialized;
     int route_initialized;
     int route_revision;
+    int xplane_recovery_frames;
+    int source_log_initialized;
+    SimSnapshotSource last_logged_source;
     SimFlightPhase flight_phase;
     SimFlightPhase flight_phase_candidate;
     int flight_phase_candidate_frames;
@@ -32,6 +36,7 @@ void sim_data_center_destroy(SimDataCenter *center);
 void sim_data_center_update(SimDataCenter *center, float delta_time);
 void sim_data_center_set_playback_speed(SimDataCenter *center, float playback_speed);
 void sim_data_center_set_position(SimDataCenter *center, double latitude, double longitude);
+int sim_data_center_apply_xplane_live_frame(SimDataCenter *center, const SimXPlaneLiveFrame *frame);
 void sim_data_center_set_route(SimDataCenter *center, const SimPlannedRoute *route);
 void sim_data_center_clear_route(SimDataCenter *center);
 int sim_data_center_route_revision(const SimDataCenter *center);

@@ -43,6 +43,13 @@ typedef struct SimSnapshot
     float delta_time;
     float playback_speed;
     int current_frame;
+    int frame_id;
+    float timestamp;
+    float last_valid_timestamp;
+    int timed_out;
+    int xplane_connected;
+    int fallback_active;
+    float last_valid_xplane_timestamp;
     int data_valid;
     SimSnapshotSource source;
     SimFlightPhase flight_phase;

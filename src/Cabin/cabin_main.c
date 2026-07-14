@@ -12,6 +12,7 @@
 #include "cabin_data.h"
 #include "cabin_ui.h"
 #include "../Data/sim_data_center.h"
+#include "../Util/xplane_live_data.h"
 
 #define CABIN_WINDOW_WIDTH 1600
 #define CABIN_WINDOW_HEIGHT 900
@@ -630,8 +631,22 @@ static void destroy_assets(Cabin_Assets *assets)
     }
 }
 
-static int cabin_main_run_internal(SimDataCenter *sim_data_center, int shared_mode)
+typedef enum Cabin_Run_Mode
 {
+    CABIN_RUN_STANDALONE = 0,
+    CABIN_RUN_SHARED_SIM_CENTER,
+    CABIN_RUN_SHARED_RUNTIME
+} Cabin_Run_Mode;
+
+static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedRuntime *runtime, Cabin_Run_Mode run_mode)
+{
+    const int shared_mode = run_mode != CABIN_RUN_STANDALONE;
+
+    if (runtime != NULL)
+    {
+        sim_data_center = xplane_shared_runtime_data_center(runtime);
+    }
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
     {
         printf("Cabin: SDL_Init failed: %s\n", SDL_GetError());
@@ -786,8 +801,11 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, int shared_mo
         const Uint32 now = SDL_GetTicks();
         float delta_time = (float)(now - last_ticks) / 1000.0f;
         last_ticks = now;
-        /* Launcher runs views sequentially, so the active view is the sole updater. */
-        if (sim_data_center != NULL)
+        if (run_mode == CABIN_RUN_SHARED_RUNTIME)
+        {
+            xplane_shared_runtime_update(runtime, delta_time);
+        }
+        else if (sim_data_center != NULL)
         {
             sim_data_center_update(sim_data_center, delta_time);
         }
@@ -863,7 +881,7 @@ int cabin_main_run(void)
     }
 
     sim_data_center_init(sim_data_center);
-    const int result = cabin_main_run_internal(sim_data_center, 0);
+    const int result = cabin_main_run_internal(sim_data_center, NULL, CABIN_RUN_STANDALONE);
     sim_data_center_destroy(sim_data_center);
     free(sim_data_center);
     return result;
@@ -876,5 +894,19 @@ int cabin_main_run_with_sim_data_center(SimDataCenter *sim_data_center)
         printf("Cabin SHARED: SimDataCenter unavailable.\n");
         return -1;
     }
-    return cabin_main_run_internal(sim_data_center, 1);
+    return cabin_main_run_internal(sim_data_center, NULL, CABIN_RUN_SHARED_SIM_CENTER);
+}
+
+int cabin_main_run_with_shared_runtime(XPlaneSharedRuntime *runtime)
+{
+    SimDataCenter *sim_data_center = xplane_shared_runtime_data_center(runtime);
+
+    if (!xplane_shared_runtime_initialized(runtime) ||
+        sim_data_center == NULL ||
+        !sim_data_center_is_ready(sim_data_center))
+    {
+        printf("Cabin SHARED: runtime unavailable.\n");
+        return -1;
+    }
+    return cabin_main_run_internal(sim_data_center, runtime, CABIN_RUN_SHARED_RUNTIME);
 }
