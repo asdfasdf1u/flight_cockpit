@@ -1,4 +1,4 @@
-//在屏幕上的显示模块
+// FMC display module
 #include "fmc_display.h"
 
 #include "fmc_key.h"
@@ -212,12 +212,12 @@ static SDL_Rect expand_rect(SDL_Rect rect, int amount)
 
 static void draw_button_highlight(SDL_Renderer *renderer, const FMC_Layout *layout, const FMC_Button *button, SDL_Color color)
 {
-    if (button == NULL || button->id == FMC_BUTTON_NONE)
+    if (button == NULL || button->key == FMC_BUTTON_NONE)
     {
         return;
     }
 
-    if (button->shape == FMC_BUTTON_SHAPE_RECT)
+    if (button->shape == FMC_SHAPE_RECT)
     {
         for (int i = 0; i < 3; ++i)
         {
@@ -229,13 +229,38 @@ static void draw_button_highlight(SDL_Renderer *renderer, const FMC_Layout *layo
 
     for (int i = 0; i < 3; ++i)
     {
-        draw_scaled_circle_outline(renderer, layout, button->center, button->radius + i, color);
+        draw_scaled_circle_outline(renderer, layout, (SDL_Point){button->rect.x, button->rect.y}, button->rect.w + i, color);
     }
 }
 
 static void draw_hover_outline(SDL_Renderer *renderer, const FMC_Layout *layout, const FMC_Button *button)
 {
-    draw_button_highlight(renderer, layout, button, COLOR_WHITE);
+    if (button == NULL || button->key == FMC_BUTTON_NONE)
+    {
+        return;
+    }
+
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    if (button->shape == FMC_SHAPE_RECT)
+    {
+        SDL_Rect dest = scale_rect(layout, &button->rect);
+        SDL_RenderDrawRect(renderer, &dest);
+        return;
+    }
+
+    if (button->shape == FMC_SHAPE_CIRCLE)
+    {
+        const int center_x = layout->viewport.x + (int)((float)button->rect.x * layout->scale + 0.5f);
+        const int center_y = layout->viewport.y + (int)((float)button->rect.y * layout->scale + 0.5f);
+        int radius = (int)((float)button->rect.w * layout->scale + 0.5f);
+        if (radius < 1)
+        {
+            radius = 1;
+        }
+
+        circleRGBA(renderer, center_x, center_y, radius, 255, 255, 255, 255);
+        circleRGBA(renderer, center_x, center_y, radius + 1, 255, 255, 255, 255);
+    }
 }
 
 static void draw_text(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, SDL_Color color, int x, int y, const char *format, ...)
@@ -919,7 +944,7 @@ static void draw_exec_light(SDL_Renderer *renderer, const FMC_Layout *layout, co
     for (int i = 0; i < count; ++i)
     {
         const FMC_Button *button = fmc_key_button_at(i);
-        if (button != NULL && button->id == FMC_BUTTON_EXEC)
+        if (button != NULL && button->key == FMC_BUTTON_EXEC)
         {
             const SDL_Rect exec_light = {
                 button->rect.x + 8,

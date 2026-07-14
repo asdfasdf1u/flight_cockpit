@@ -1088,10 +1088,10 @@ static int handle_cockpit_fmc_panel_button(
             if (state != NULL)
             {
                 state->hovered_button_index = i;
-                state->hovered_button = button->id;
+                state->hovered_button = button->key;
             }
 
-            if (button->id == FMC_BUTTON_EXEC)
+            if (button->key == FMC_BUTTON_EXEC)
             {
                 const int committed = submit_fmc_route_to_sim_center(data, sim_data_center);
                 if (fmc_uses_unified_route != NULL)
