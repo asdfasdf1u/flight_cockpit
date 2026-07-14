@@ -22,6 +22,8 @@ typedef struct PFDData
     int using_file_data;
     int file_sample_index;
     float file_sample_accumulator;
+    int snapshot_frame_id;
+    int data_valid;
 } PFDData;
 
 typedef PFDData PFD_Data;

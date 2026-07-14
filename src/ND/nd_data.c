@@ -1854,6 +1854,8 @@ void nd_data_init(ND_Data *data)
     data->data_frame_step_sec = ND_DATA_DEFAULT_STEP_SEC;
     data->route_cached_revision = -1;
     data->route_active_index = -1;
+    data->snapshot_frame_id = 0;
+    data->data_valid = 1;
     nd_data_set_map_layer_visible(data, ND_MAP_LAYER_WPT, 1);
     nd_data_set_map_layer_visible(data, ND_MAP_LAYER_ARPT, 1);
     nd_data_set_map_layer_visible(data, ND_MAP_LAYER_STA, 1);
