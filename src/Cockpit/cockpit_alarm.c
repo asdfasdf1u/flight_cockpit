@@ -239,7 +239,7 @@ static void service_continuous_audio(CockpitAlarmState *state)
         return;
     }
 
-    if (state->fire_active && !state->fire_acknowledged)
+    if (state->engine_fire_active && !state->fire_acknowledged)
     {
         wanted_mode = COCKPIT_ALARM_AUDIO_MASTER_WARNING;
     }
