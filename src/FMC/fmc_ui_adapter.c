@@ -3,8 +3,22 @@
 #include "fmc_connect.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#define FMC_ACCESS(path) _access((path), 0)
+#define FMC_MKDIR(path) _mkdir((path))
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#define FMC_ACCESS(path) access((path), F_OK)
+#define FMC_MKDIR(path) mkdir((path), 0755)
+#endif
 
 static void set_text(char *dest, int dest_size, const char *text)
 {
@@ -1687,6 +1701,163 @@ int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route)
     return route->valid;
 }
 
+static int path_exists(const char *path)
+{
+    return path != NULL && path[0] != '\0' && FMC_ACCESS(path) == 0;
+}
+
+static int ensure_directory_exists(const char *path)
+{
+    char temp[SIM_ROUTE_PATH_LEN * 2];
+    size_t len = 0;
+
+    if (path == NULL || path[0] == '\0')
+    {
+        return 0;
+    }
+
+    snprintf(temp, sizeof(temp), "%s", path);
+    len = strlen(temp);
+    while (len > 0 && (temp[len - 1] == '\\' || temp[len - 1] == '/'))
+    {
+        temp[--len] = '\0';
+    }
+
+    for (char *p = temp + 1; *p != '\0'; ++p)
+    {
+        if (*p == '\\' || *p == '/')
+        {
+            char saved = *p;
+            *p = '\0';
+            if (!path_exists(temp) && FMC_MKDIR(temp) != 0 && errno != EEXIST)
+            {
+                return 0;
+            }
+            *p = saved;
+        }
+    }
+
+    if (!path_exists(temp) && FMC_MKDIR(temp) != 0 && errno != EEXIST)
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+static int resolve_xplane_fms_plans_dir(char *dest, int dest_size)
+{
+    const char *direct = getenv("XPLANE_FMS_PLANS_DIR");
+    const char *root = getenv("XPLANE_ROOT");
+    const char *candidates[] = {
+        "D:\\X-Plane 11\\Output\\FMS plans",
+        "C:\\X-Plane 11\\Output\\FMS plans",
+        "D:\\X-Plane 12\\Output\\FMS plans",
+        "C:\\X-Plane 12\\Output\\FMS plans"};
+
+    if (dest == NULL || dest_size <= 0)
+    {
+        return 0;
+    }
+
+    if (direct != NULL && direct[0] != '\0')
+    {
+        snprintf(dest, (size_t)dest_size, "%s", direct);
+        return ensure_directory_exists(dest);
+    }
+
+    if (root != NULL && root[0] != '\0')
+    {
+        snprintf(dest, (size_t)dest_size, "%s\\Output\\FMS plans", root);
+        return ensure_directory_exists(dest);
+    }
+
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i)
+    {
+        if (path_exists(candidates[i]))
+        {
+            snprintf(dest, (size_t)dest_size, "%s", candidates[i]);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int xplane_fms_point_type(const SimRoutePoint *point, int index, int count)
+{
+    if (point == NULL)
+    {
+        return 11;
+    }
+    if (index == 0 || index == count - 1 || strcmp(point->type, "AIRPORT") == 0)
+    {
+        return 1;
+    }
+    if (strcmp(point->type, "VOR") == 0)
+    {
+        return 3;
+    }
+    if (strcmp(point->type, "NDB") == 0)
+    {
+        return 2;
+    }
+    return 11;
+}
+
+static int fmc_export_route_to_xplane_fms(const FMC_Data *data, char *route_name, int route_name_size)
+{
+    SimPlannedRoute route;
+    char dir[SIM_ROUTE_PATH_LEN * 2];
+    char path[SIM_ROUTE_PATH_LEN * 3];
+    FILE *fp = NULL;
+
+    if (route_name != NULL && route_name_size > 0)
+    {
+        route_name[0] = '\0';
+    }
+
+    if (!fmc_data_export_planned_route(data, &route) || !route.has_coordinates)
+    {
+        return 0;
+    }
+
+    if (!resolve_xplane_fms_plans_dir(dir, sizeof(dir)))
+    {
+        return 0;
+    }
+
+    snprintf(route_name, (size_t)route_name_size, "%s%s", route.origin, route.destination);
+    snprintf(path, sizeof(path), "%s\\%s.fms", dir, route_name);
+
+    fp = fopen(path, "w");
+    if (fp == NULL)
+    {
+        return 0;
+    }
+
+    fprintf(fp, "I\n");
+    fprintf(fp, "3 version\n");
+    fprintf(fp, "0\n");
+    fprintf(fp, "%d\n", route.point_count);
+    for (int i = 0; i < route.point_count; ++i)
+    {
+        const SimRoutePoint *point = &route.points[i];
+        fprintf(fp,
+                "%d %s %.0f %.6f %.6f\n",
+                xplane_fms_point_type(point, i, route.point_count),
+                point->ident,
+                point->altitude,
+                point->latitude,
+                point->longitude);
+    }
+
+    fclose(fp);
+    printf("FMC Route: exported X-Plane FMS plan %s.\n", path);
+    fflush(stdout);
+    return 1;
+}
+
 int fmc_data_exec_route_selection(FMC_Data *data)
 {
     if (data == NULL)
@@ -1712,7 +1883,10 @@ int fmc_data_exec_route_selection(FMC_Data *data)
         return 0;
     }
 
-    if (setExec() < 0)
+    char fms_route_name[2 * FMC_TEXT_LEN] = {0};
+    const int fms_exported = fmc_export_route_to_xplane_fms(data, fms_route_name, sizeof(fms_route_name));
+
+    if (setExec() < 0 && !fms_exported)
     {
         set_text(data->message, sizeof(data->message),
                  fmc_xplane_connect_is_connected() ? "XPLANE SEND FAIL" : "XPLANE NOT CONNECT");
@@ -1720,7 +1894,18 @@ int fmc_data_exec_route_selection(FMC_Data *data)
     }
 
     data->origin_exec_pending = 0;
-    snprintf(data->message, sizeof(data->message), "RTE %s-%s SENT", data->origin, data->destination);
+    if (fms_exported)
+    {
+        snprintf(data->message, sizeof(data->message), "CO RTE %s READY", fms_route_name);
+    }
+    else if (!fmc_xplane_connect_is_connected())
+    {
+        snprintf(data->message, sizeof(data->message), "SET XPLANE_ROOT");
+    }
+    else
+    {
+        snprintf(data->message, sizeof(data->message), "RTE %s-%s SENT", data->origin, data->destination);
+    }
     return 1;
 }
 

@@ -4,7 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FMC_COMMAND_DELAY_MS 25
+#define FMC_COMMAND_DELAY_MS 60
+#define FMC_SCRATCHPAD_CLEAR_REPEATS 32
 
 static XPCSocket g_sock;
 static int g_sock_ready = 0;
@@ -14,6 +15,7 @@ static int g_plugin_connected = 0;
 static const char *FMC1_KEY_RTE = "sim/FMS/fpln";
 static const char *FMC1_KEY_EXEC = "sim/FMS/exec";
 static const char *FMC1_KEY_CLEAR = "sim/FMS/clear";
+static const char *FMC1_KEY_DELETE = "sim/FMS/delete";
 static const char *FMC1_KEY_LSK_L1 = "sim/FMS/ls_1l";
 static const char *FMC1_KEY_LSK_R1 = "sim/FMS/ls_1r";
 static const char *FMC1_KEY_LSK_R3 = "sim/FMS/ls_3r";
@@ -125,8 +127,8 @@ static int fmc_send_command(const char *command, const char *context)
     }
     if (!g_plugin_connected && !fmc_xplane_probe_connection())
     {
-        printf("FMC X-Plane send skipped: X-Plane Connect is not responding.\n");
-        return -1;
+        printf("FMC X-Plane send warning: X-Plane Connect is not confirmed; sending command anyway.\n");
+        fflush(stdout);
     }
 
     result = sendCOMM(g_sock, command);
@@ -268,29 +270,38 @@ void initXpc(XPCSocket xpc)
     fmc_xplane_probe_connection();
 }
 
-static int fmc1_send_seq_with_input(const char *input_str, const char *confirm_key, const char *func_name)
+static int fmc1_clear_scratchpad(const char *func_name)
 {
     int flag = 0;
-    size_t len = 0;
 
-    if (input_str == NULL || input_str[0] == '\0')
-    {
-        printf("%s failed: empty input.\n", func_name);
-        return -1;
-    }
-
-    flag = fmc_send_command(FMC1_KEY_RTE, func_name);
-    if (flag >= 0)
+    for (int i = 0; i < FMC_SCRATCHPAD_CLEAR_REPEATS; ++i)
     {
         flag = fmc_send_command(FMC1_KEY_CLEAR, func_name);
+        if (flag < 0)
+        {
+            return -1;
+        }
     }
+
+    flag = fmc_send_command(FMC1_KEY_DELETE, func_name);
     if (flag < 0)
     {
-        printf("%s failed: previous command error.\n", func_name);
         return -1;
     }
 
-    len = strlen(input_str);
+    flag = fmc_send_command(FMC1_KEY_CLEAR, func_name);
+    if (flag < 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int fmc1_type_text(const char *input_str, const char *func_name)
+{
+    const size_t len = strlen(input_str);
+
     for (size_t i = 0; i < len; i++)
     {
         const char *cmd = get_char_key(input_str[i]);
@@ -300,12 +311,42 @@ static int fmc1_send_seq_with_input(const char *input_str, const char *confirm_k
             return -1;
         }
 
-        flag = fmc_send_command(cmd, func_name);
-        if (flag < 0)
+        if (fmc_send_command(cmd, func_name) < 0)
         {
             printf("%s failed while sending '%c'.\n", func_name, input_str[i]);
             return -1;
         }
+    }
+
+    return 0;
+}
+
+static int fmc1_send_seq_with_input(const char *input_str, const char *confirm_key, const char *func_name)
+{
+    int flag = 0;
+
+    if (input_str == NULL || input_str[0] == '\0')
+    {
+        printf("%s failed: empty input.\n", func_name);
+        return -1;
+    }
+
+    if (fmc1_clear_scratchpad(func_name) < 0)
+    {
+        printf("%s failed: scratchpad clear error.\n", func_name);
+        return -1;
+    }
+
+    flag = fmc_send_command(FMC1_KEY_RTE, func_name);
+    if (flag < 0)
+    {
+        printf("%s failed: route page command error.\n", func_name);
+        return -1;
+    }
+
+    if (fmc1_type_text(input_str, func_name) < 0)
+    {
+        return -1;
     }
 
     flag = fmc_send_command(confirm_key, func_name);
