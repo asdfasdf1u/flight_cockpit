@@ -211,9 +211,21 @@ static void cabin_data_build_map_cache_path(Cabin_Data *data)
         }
         cabin_data_append_safe_cache_part(route_name, sizeof(route_name), data->destination_airport);
     }
+    else if (cabin_data_valid_geo(data->latitude, data->longitude))
+    {
+        const int lat_tenths = (int)(fabs(data->latitude) * 10.0 + 0.5);
+        const int lon_tenths = (int)(fabs(data->longitude) * 10.0 + 0.5);
+        snprintf(route_name,
+                 sizeof(route_name),
+                 "position_%c%04d_%c%04d",
+                 data->latitude >= 0.0 ? 'N' : 'S',
+                 lat_tenths,
+                 data->longitude >= 0.0 ? 'E' : 'W',
+                 lon_tenths);
+    }
     else
     {
-        copy_text(route_name, sizeof(route_name), "beijing_chengdu");
+        copy_text(route_name, sizeof(route_name), "position");
     }
 
     if (route_name[0] == '\0')
@@ -423,6 +435,7 @@ static void cabin_data_fit_map_bounds_to_position(Cabin_Data *data)
     data->map_top_left_lon = data->longitude - longitude_span * 0.5;
     data->map_bottom_right_lon = data->longitude + longitude_span * 0.5;
     data->map_zoom = 10;
+    cabin_data_build_map_cache_path(data);
 }
 
 #if 0 /* Retired helpers for synthetic Cabin position updates. */
@@ -1031,6 +1044,14 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
         if (!data->route_valid)
         {
             cabin_data_fit_map_bounds_to_position(data);
+            data->flown_track_count = 0;
+            data->flown_track_next_sequence = 0;
+            data->flown_track_last_progress = data->progress;
+            data->flown_track_time_since_append = 0.0f;
+        }
+        else
+        {
+            cabin_data_update_flown_track(data, delta_time > 0.0f ? delta_time : 0.0f, 0);
         }
         if (data->current_place.status == CABIN_PLACE_VALID)
         {
@@ -1044,7 +1065,6 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
             copy_text(data->current_district, sizeof(data->current_district), data->flight_phase);
             copy_text(data->current_town, sizeof(data->current_town), data->active_waypoint[0] != '\0' ? data->active_waypoint : "----");
         }
-        cabin_data_update_flown_track(data, delta_time > 0.0f ? delta_time : 0.0f, 0);
     }
 
     if (previous_valid != data->snapshot_valid)

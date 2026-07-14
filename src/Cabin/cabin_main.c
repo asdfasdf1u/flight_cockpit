@@ -572,6 +572,13 @@ static SDL_Texture *load_cabin_map_texture(SDL_Renderer *renderer, Cabin_Data *d
         printf("Cabin Map: cached/API map failed to load as SDL texture, fallback to local map.\n");
     }
 
+    if (!data->route_valid)
+    {
+        snprintf(data->map_source, sizeof(data->map_source), "%s", "FALLBACK");
+        printf("Cabin Map: no route-specific cache/API map for current position; using drawn map background.\n");
+        return NULL;
+    }
+
     printf("Cabin Map: using local fallback map for Beijing-Chengdu mock route.\n");
     texture = load_texture(renderer, CABIN_MAP_PATH, "local map background");
     if (texture != NULL)
