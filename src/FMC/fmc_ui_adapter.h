@@ -133,6 +133,7 @@ int fmc_data_set_legs_parameter(FMC_Data *data, int field_index);
 int fmc_data_set_hold_parameter(FMC_Data *data, int field_index);
 int fmc_data_activate_current_phase(FMC_Data *data);
 int fmc_data_exec_route_selection(FMC_Data *data);
+int fmc_data_sync_route_to_xplane(FMC_Data *data);
 int fmc_data_apply_planned_route(FMC_Data *data, const SimPlannedRoute *route);
 int fmc_data_export_planned_route(const FMC_Data *data, SimPlannedRoute *route);
 int fmc_data_route_has_uncommitted_changes(const FMC_Data *data);

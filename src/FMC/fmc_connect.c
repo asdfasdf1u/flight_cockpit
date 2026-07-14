@@ -1,26 +1,69 @@
 #include "fmc_connect.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#define FMC_XPLANE_DEFAULT_IP "127.0.0.1"
+#define FMC_XPLANE_DEFAULT_PORT 49009
 #define FMC_COMMAND_DELAY_MS 60
 #define FMC_SCRATCHPAD_CLEAR_REPEATS 32
+
+int fmc_xplane_probe_connection(void);
 
 static XPCSocket g_sock;
 static int g_sock_ready = 0;
 static int g_owns_sock = 0;
 static int g_plugin_connected = 0;
 
-static const char *FMC1_KEY_RTE = "sim/FMS/fpln";
-static const char *FMC1_KEY_EXEC = "sim/FMS/exec";
-static const char *FMC1_KEY_CLEAR = "sim/FMS/clear";
-static const char *FMC1_KEY_DELETE = "sim/FMS/delete";
-static const char *FMC1_KEY_LSK_L1 = "sim/FMS/ls_1l";
-static const char *FMC1_KEY_LSK_R1 = "sim/FMS/ls_1r";
-static const char *FMC1_KEY_LSK_R3 = "sim/FMS/ls_3r";
+static void fmc_xplane_log(const char *format, ...)
+{
+    FILE *fp = fopen("build/fmc_xplane_sync.log", "a");
+    if (fp == NULL)
+    {
+        fp = fopen("fmc_xplane_sync.log", "a");
+    }
+    if (fp == NULL)
+    {
+        return;
+    }
 
-static const char *FMC1_ALPHA_KEYS[] = {
+    va_list args;
+    va_start(args, format);
+    vfprintf(fp, format, args);
+    va_end(args);
+    fputc('\n', fp);
+    fclose(fp);
+}
+
+const char *FMC1_KEY_INIT = "sim/FMS/init";
+const char *FMC1_KEY_RTE = "sim/FMS/fpln";
+const char *FMC1_KEY_LEG = "sim/FMS/legs";
+const char *FMC1_KEY_CLB = "sim/FMS/clb";
+const char *FMC1_KEY_CRZ = "sim/FMS/crz";
+const char *FMC1_KEY_DES = "sim/FMS/des";
+const char *FMC1_KEY_EXEC = "sim/FMS/exec";
+const char *FMC1_KEY_CLEAR = "sim/FMS/clear";
+const char *FMC1_KEY_DELETE = "sim/FMS/delete";
+const char *FMC1_KEY_PROG = "sim/FMS/prog";
+const char *FMC1_KEY_MENU = "sim/FMS/index";
+
+const char *FMC1_KEY_LSK_L1 = "sim/FMS/ls_1l";
+const char *FMC1_KEY_LSK_L2 = "sim/FMS/ls_2l";
+const char *FMC1_KEY_LSK_L3 = "sim/FMS/ls_3l";
+const char *FMC1_KEY_LSK_L4 = "sim/FMS/ls_4l";
+const char *FMC1_KEY_LSK_L5 = "sim/FMS/ls_5l";
+const char *FMC1_KEY_LSK_L6 = "sim/FMS/ls_6l";
+
+const char *FMC1_KEY_LSK_R1 = "sim/FMS/ls_1r";
+const char *FMC1_KEY_LSK_R2 = "sim/FMS/ls_2r";
+const char *FMC1_KEY_LSK_R3 = "sim/FMS/ls_3r";
+const char *FMC1_KEY_LSK_R4 = "sim/FMS/ls_4r";
+const char *FMC1_KEY_LSK_R5 = "sim/FMS/ls_5r";
+const char *FMC1_KEY_LSK_R6 = "sim/FMS/ls_6r";
+
+const char *FMC1_ALPHA_KEYS[] = {
     "sim/FMS/key_A", "sim/FMS/key_B", "sim/FMS/key_C", "sim/FMS/key_D", "sim/FMS/key_E",
     "sim/FMS/key_F", "sim/FMS/key_G", "sim/FMS/key_H", "sim/FMS/key_I", "sim/FMS/key_J",
     "sim/FMS/key_K", "sim/FMS/key_L", "sim/FMS/key_M", "sim/FMS/key_N", "sim/FMS/key_O",
@@ -28,11 +71,11 @@ static const char *FMC1_ALPHA_KEYS[] = {
     "sim/FMS/key_U", "sim/FMS/key_V", "sim/FMS/key_W", "sim/FMS/key_X", "sim/FMS/key_Y",
     "sim/FMS/key_Z"};
 
-static const char *FMC1_NUM_SYM_KEYS[] = {
+const char *FMC1_NUM_SYM_KEYS[] = {
     "sim/FMS/key_0", "sim/FMS/key_1", "sim/FMS/key_2", "sim/FMS/key_3", "sim/FMS/key_4",
     "sim/FMS/key_5", "sim/FMS/key_6", "sim/FMS/key_7", "sim/FMS/key_8", "sim/FMS/key_9",
     "sim/FMS/key_period", "sim/FMS/key_minus", "sim/FMS/key_slash"};
-static const char *FMC1_KEY_SPACE = "sim/FMS/key_space";
+const char *FMC1_KEY_SPACE = "sim/FMS/key_space";
 
 static unsigned short parse_port_env(const char *text, unsigned short fallback)
 {
@@ -78,7 +121,7 @@ static unsigned short resolve_xplane_port(unsigned short xp_port)
     return parse_port_env(getenv("XPLANE_PORT"), FMC_XPLANE_DEFAULT_PORT);
 }
 
-static const char *get_char_key(char c)
+const char *get_char_key(char c)
 {
     if (c >= 'A' && c <= 'Z')
     {
@@ -118,16 +161,19 @@ static int fmc_send_command(const char *command, const char *context)
     if (command == NULL || command[0] == '\0')
     {
         printf("FMC X-Plane send failed: empty command in %s.\n", context != NULL ? context : "unknown");
+        fmc_xplane_log("send failed empty command context=%s", context != NULL ? context : "unknown");
         return -1;
     }
     if (!g_sock_ready)
     {
         printf("FMC X-Plane send skipped: UDP socket is not initialized.\n");
+        fmc_xplane_log("send skipped socket_not_ready command=%s context=%s", command, context != NULL ? context : "unknown");
         return -1;
     }
     if (!g_plugin_connected && !fmc_xplane_probe_connection())
     {
         printf("FMC X-Plane send warning: X-Plane Connect is not confirmed; sending command anyway.\n");
+        fmc_xplane_log("send warning plugin_not_confirmed command=%s context=%s", command, context != NULL ? context : "unknown");
         fflush(stdout);
     }
 
@@ -135,9 +181,11 @@ static int fmc_send_command(const char *command, const char *context)
     if (result < 0)
     {
         printf("FMC X-Plane send failed in %s: %s.\n", context != NULL ? context : "unknown", command);
+        fmc_xplane_log("send failed result=%d command=%s context=%s", result, command, context != NULL ? context : "unknown");
         return result;
     }
 
+    fmc_xplane_log("send ok command=%s context=%s", command, context != NULL ? context : "unknown");
     SDL_Delay(FMC_COMMAND_DELAY_MS);
     return result;
 }
@@ -157,13 +205,16 @@ int fmc_xplane_connect_init(const char *xp_ip, unsigned short xp_port)
     g_owns_sock = 1;
 
     printf("FMC X-Plane: UDP command socket ready for %s:%u.\n", ip, port);
+    fmc_xplane_log("socket ready ip=%s port=%u", ip, port);
     if (fmc_xplane_probe_connection())
     {
         printf("FMC X-Plane: X-Plane Connect plugin responded.\n");
+        fmc_xplane_log("probe ok");
     }
     else
     {
         printf("FMC X-Plane: no X-Plane Connect response yet. Check plugin and port.\n");
+        fmc_xplane_log("probe failed initial");
     }
     fflush(stdout);
     return 1;
@@ -218,6 +269,7 @@ int fmc_xplane_probe_connection(void)
                 char message[] = "FMC CONNECTED";
                 printf("FMC X-Plane: connected to X-Plane Connect.\n");
                 sendTEXT(g_sock, message, 20, 20);
+                fmc_xplane_log("probe connected running_time=%.3f", running_time[0]);
                 fflush(stdout);
             }
             g_plugin_connected = 1;
@@ -233,9 +285,11 @@ int fmc_xplane_probe_connection(void)
     if (g_plugin_connected)
     {
         printf("FMC X-Plane: X-Plane Connect response lost.\n");
+        fmc_xplane_log("probe lost");
         fflush(stdout);
     }
     g_plugin_connected = 0;
+    fmc_xplane_log("probe failed");
     return 0;
 }
 
@@ -331,16 +385,17 @@ static int fmc1_send_seq_with_input(const char *input_str, const char *confirm_k
         return -1;
     }
 
-    if (fmc1_clear_scratchpad(func_name) < 0)
-    {
-        printf("%s failed: scratchpad clear error.\n", func_name);
-        return -1;
-    }
-
     flag = fmc_send_command(FMC1_KEY_RTE, func_name);
     if (flag < 0)
     {
         printf("%s failed: route page command error.\n", func_name);
+        return -1;
+    }
+
+    flag = fmc_send_command(FMC1_KEY_CLEAR, func_name);
+    if (flag < 0)
+    {
+        printf("%s failed: scratchpad clear error.\n", func_name);
         return -1;
     }
 
@@ -360,22 +415,27 @@ static int fmc1_send_seq_with_input(const char *input_str, const char *confirm_k
     return 0;
 }
 
-int setOrigin(const char *origin)
+int fmc_xplane_set_origin(const char *origin)
 {
     return fmc1_send_seq_with_input(origin, FMC1_KEY_LSK_L1, "setOrigin");
 }
 
-int setDestination(const char *destination)
+int fmc_xplane_set_destination(const char *destination)
 {
     return fmc1_send_seq_with_input(destination, FMC1_KEY_LSK_R1, "setDestination");
 }
 
-int setFlt_no(const char *flt_no)
+int fmc_xplane_set_co_route(const char *co_route)
+{
+    return fmc1_send_seq_with_input(co_route, FMC1_KEY_LSK_L2, "setCo_route");
+}
+
+int fmc_xplane_set_flt_no(const char *flt_no)
 {
     return fmc1_send_seq_with_input(flt_no, FMC1_KEY_LSK_R3, "setFlt_no");
 }
 
-int setExec(void)
+int fmc_xplane_set_exec(void)
 {
     const int flag = fmc_send_command(FMC1_KEY_EXEC, "setExec");
     if (flag < 0)
@@ -386,4 +446,24 @@ int setExec(void)
 
     printf("setExec success.\n");
     return 0;
+}
+
+void setOrigin(char *origin)
+{
+    (void)fmc_xplane_set_origin(origin);
+}
+
+void setDestination(char *destination)
+{
+    (void)fmc_xplane_set_destination(destination);
+}
+
+void setFlt_no(char *flt_no)
+{
+    (void)fmc_xplane_set_flt_no(flt_no);
+}
+
+void setExec(void)
+{
+    (void)fmc_xplane_set_exec();
 }

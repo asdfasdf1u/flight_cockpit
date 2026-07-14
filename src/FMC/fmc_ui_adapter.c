@@ -8,6 +8,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef MAX_VIATO_NUM
+#define MAX_VIATO_NUM 20
+#endif
+
+extern int rte_index;
+extern int dep_arr_index;
+extern int dep_arr_type;
+extern char show_ariport[20];
+
+int is_string_in_range(const char *str, int min_val, int max_val, int *result);
+int is_string_in_range_f(const char *str, float min_val, float max_val, float *result);
+int fmc_xplane_connect_init(const char *xp_ip, unsigned short xp_port);
+void fmc_xplane_connect_shutdown(void);
+int fmc_xplane_connect_is_ready(void);
+int fmc_xplane_connect_is_connected(void);
+int fmc_xplane_set_origin(const char *origin);
+int fmc_xplane_set_destination(const char *destination);
+int fmc_xplane_set_co_route(const char *co_route);
+int fmc_xplane_set_flt_no(const char *flt_no);
+int fmc_xplane_set_exec(void);
+
 #ifdef _WIN32
 #include <direct.h>
 #include <io.h>
@@ -948,7 +969,7 @@ int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field)
         {
             return 0;
         }
-        if (setOrigin(data->origin) < 0)
+        if (fmc_xplane_set_origin(data->origin) < 0)
         {
             set_text(data->message, sizeof(data->message),
                      fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
@@ -960,7 +981,7 @@ int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field)
         {
             return 0;
         }
-        if (setDestination(data->destination) < 0)
+        if (fmc_xplane_set_destination(data->destination) < 0)
         {
             set_text(data->message, sizeof(data->message),
                      fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
@@ -974,7 +995,7 @@ int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field)
         {
             return 0;
         }
-        if (setFlt_no(data->flight_no) < 0)
+        if (fmc_xplane_set_flt_no(data->flight_no) < 0)
         {
             set_text(data->message, sizeof(data->message),
                      fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
@@ -1858,6 +1879,116 @@ static int fmc_export_route_to_xplane_fms(const FMC_Data *data, char *route_name
     return 1;
 }
 
+static int sync_route_fields_to_xplane_fmc(const FMC_Data *data, const char *fms_route_name)
+{
+    const char *co_route_text = NULL;
+    int sent_any = 0;
+
+    if (data == NULL)
+    {
+        return -1;
+    }
+
+    if (!fmc_xplane_connect_is_ready())
+    {
+        fmc_xplane_connect_init(NULL, 0);
+    }
+
+    if (data->origin[0] != '\0')
+    {
+        if (fmc_xplane_set_origin(data->origin) < 0)
+        {
+            return -1;
+        }
+        sent_any = 1;
+    }
+
+    if (data->destination[0] != '\0')
+    {
+        if (fmc_xplane_set_destination(data->destination) < 0)
+        {
+            return -1;
+        }
+        sent_any = 1;
+    }
+
+    co_route_text = (fms_route_name != NULL && fms_route_name[0] != '\0')
+                        ? fms_route_name
+                        : data->company_route;
+    if (co_route_text != NULL && co_route_text[0] != '\0')
+    {
+        if (fmc_xplane_set_co_route(co_route_text) < 0)
+        {
+            return -1;
+        }
+        sent_any = 1;
+    }
+
+    if (data->flight_no[0] != '\0')
+    {
+        if (fmc_xplane_set_flt_no(data->flight_no) < 0)
+        {
+            return -1;
+        }
+        sent_any = 1;
+    }
+
+    if (sent_any && fmc_xplane_set_exec() < 0)
+    {
+        return -1;
+    }
+
+    if (sent_any)
+    {
+        printf("FMC Route: synced route fields to X-Plane FMC origin=%s destination=%s co_route=%s flight_no=%s.\n",
+               data->origin[0] != '\0' ? data->origin : "----",
+               data->destination[0] != '\0' ? data->destination : "----",
+               co_route_text != NULL && co_route_text[0] != '\0' ? co_route_text : "----",
+               data->flight_no[0] != '\0' ? data->flight_no : "----");
+        fflush(stdout);
+    }
+
+    return sent_any ? 1 : 0;
+}
+
+int fmc_data_sync_route_to_xplane(FMC_Data *data)
+{
+    char fms_route_name[2 * FMC_TEXT_LEN] = {0};
+    int fms_exported;
+    int xplane_synced;
+
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    fms_exported = fmc_export_route_to_xplane_fms(data, fms_route_name, sizeof(fms_route_name));
+    xplane_synced = sync_route_fields_to_xplane_fmc(data, fms_exported ? fms_route_name : NULL);
+
+    if (xplane_synced > 0)
+    {
+        if (fms_exported && fms_route_name[0] != '\0')
+        {
+            snprintf(data->message, sizeof(data->message), "CO RTE %s SENT", fms_route_name);
+        }
+        else
+        {
+            snprintf(data->message, sizeof(data->message), "RTE %s-%s SENT", data->origin, data->destination);
+        }
+        return 1;
+    }
+
+    if (fms_exported && fms_route_name[0] != '\0')
+    {
+        snprintf(data->message, sizeof(data->message), "CO RTE %s READY", fms_route_name);
+        return 1;
+    }
+
+    set_text(data->message, sizeof(data->message),
+             fmc_xplane_connect_is_connected() ? "XPLANE SEND FAIL" : "XPLANE NOT CONNECT");
+    return 0;
+}
+
 int fmc_data_exec_route_selection(FMC_Data *data)
 {
     if (data == NULL)
@@ -1883,29 +2014,12 @@ int fmc_data_exec_route_selection(FMC_Data *data)
         return 0;
     }
 
-    char fms_route_name[2 * FMC_TEXT_LEN] = {0};
-    const int fms_exported = fmc_export_route_to_xplane_fms(data, fms_route_name, sizeof(fms_route_name));
-
-    if (setExec() < 0 && !fms_exported)
+    if (!fmc_data_sync_route_to_xplane(data))
     {
-        set_text(data->message, sizeof(data->message),
-                 fmc_xplane_connect_is_connected() ? "XPLANE SEND FAIL" : "XPLANE NOT CONNECT");
         return 0;
     }
 
     data->origin_exec_pending = 0;
-    if (fms_exported)
-    {
-        snprintf(data->message, sizeof(data->message), "CO RTE %s READY", fms_route_name);
-    }
-    else if (!fmc_xplane_connect_is_connected())
-    {
-        snprintf(data->message, sizeof(data->message), "SET XPLANE_ROOT");
-    }
-    else
-    {
-        snprintf(data->message, sizeof(data->message), "RTE %s-%s SENT", data->origin, data->destination);
-    }
     return 1;
 }
 

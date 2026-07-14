@@ -442,7 +442,7 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef TEST_MODULE_COCKPIT
-    return cockpit_main_run();
+    return cockpit_main_run_with_args(argc, argv);
 #endif
 
 #ifdef TEST_MODULE_CABIN

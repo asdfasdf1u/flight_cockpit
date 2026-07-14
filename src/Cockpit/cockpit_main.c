@@ -41,6 +41,8 @@
 
 #include "../Util/xplane_live_data.h"
 
+int fmc_xplane_send_command(const char *command);
+
 #define COCKPIT_WINDOW_WIDTH 1600
 #define COCKPIT_WINDOW_HEIGHT 900
 #define COCKPIT_TARGET_FRAME_MS 16
@@ -58,6 +60,105 @@
 
 #define COCKPIT_MIN_SCALE 0.5f
 #define COCKPIT_MAX_SCALE 3.0f
+
+typedef struct Cockpit_XPlaneConfig
+{
+    char ip[16];
+    unsigned short port;
+} Cockpit_XPlaneConfig;
+
+static unsigned short cockpit_parse_xplane_port(const char *text, unsigned short fallback)
+{
+    char *end = NULL;
+    long value;
+
+    if (text == NULL || text[0] == '\0')
+    {
+        return fallback;
+    }
+
+    value = strtol(text, &end, 10);
+    if (end == text || *end != '\0' || value <= 0 || value > 65535)
+    {
+        printf("Cockpit X-Plane: invalid port '%s'; using %u.\n", text, fallback);
+        return fallback;
+    }
+
+    return (unsigned short)value;
+}
+
+static void cockpit_xplane_config_set_ip(Cockpit_XPlaneConfig *config, const char *ip)
+{
+    if (config == NULL || ip == NULL || ip[0] == '\0')
+    {
+        return;
+    }
+
+    snprintf(config->ip, sizeof(config->ip), "%s", ip);
+}
+
+static void cockpit_xplane_config_init(Cockpit_XPlaneConfig *config, int argc, char *argv[])
+{
+    int i;
+    const char *env_ip = getenv("XPLANE_IP");
+    const char *env_port = getenv("XPLANE_PORT");
+
+    if (config == NULL)
+    {
+        return;
+    }
+
+    snprintf(config->ip, sizeof(config->ip), "%s", XPLANE_LIVE_DEFAULT_IP);
+    config->port = XPLANE_LIVE_DEFAULT_PORT;
+
+    cockpit_xplane_config_set_ip(config, env_ip);
+    config->port = cockpit_parse_xplane_port(env_port, config->port);
+
+    for (i = 1; i < argc; ++i)
+    {
+        const char *arg = argv[i];
+
+        if (arg == NULL)
+        {
+            continue;
+        }
+        if (strncmp(arg, "--xplane-ip=", 12) == 0)
+        {
+            cockpit_xplane_config_set_ip(config, arg + 12);
+        }
+        else if (strcmp(arg, "--xplane-ip") == 0 && i + 1 < argc)
+        {
+            cockpit_xplane_config_set_ip(config, argv[++i]);
+        }
+        else if (strncmp(arg, "--xplane-port=", 15) == 0)
+        {
+            config->port = cockpit_parse_xplane_port(arg + 15, config->port);
+        }
+        else if (strcmp(arg, "--xplane-port") == 0 && i + 1 < argc)
+        {
+            config->port = cockpit_parse_xplane_port(argv[++i], config->port);
+        }
+    }
+}
+
+static void cockpit_xplane_config_apply_env(const Cockpit_XPlaneConfig *config)
+{
+    char port_text[16];
+
+    if (config == NULL)
+    {
+        return;
+    }
+
+    snprintf(port_text, sizeof(port_text), "%u", config->port);
+#ifdef _WIN32
+    _putenv_s("XPLANE_IP", config->ip);
+    _putenv_s("XPLANE_PORT", port_text);
+#else
+    setenv("XPLANE_IP", config->ip, 1);
+    setenv("XPLANE_PORT", port_text, 1);
+#endif
+}
 
 typedef struct Cockpit_RenderTargets
 {
@@ -836,6 +937,7 @@ static int submit_fmc_route_to_sim_center(FMC_Data *data, SimDataCenter *sim_dat
 
     sim_data_center_set_route(sim_data_center, &route);
     fmc_data_mark_route_committed(data);
+    fmc_data_sync_route_to_xplane(data);
     snprintf(data->message, sizeof(data->message), "RTE %s-%s EXEC", route.origin, route.destination);
     printf("FMC Route: EXEC committed; origin=%s destination=%s planned_route points=%d revision=%d pending_mod=%d.\n",
            route.origin,
@@ -1044,12 +1146,22 @@ static void render_window(
     SDL_RenderPresent(renderer);
 }
 
-static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
+static int cockpit_main_run_internal(SimDataCenter *sim_data_center, const Cockpit_XPlaneConfig *xplane_config)
 {
+    Cockpit_XPlaneConfig resolved_xplane_config;
+
     if (sim_data_center == NULL)
     {
         return -1;
     }
+
+    if (xplane_config == NULL)
+    {
+        cockpit_xplane_config_init(&resolved_xplane_config, 0, NULL);
+        xplane_config = &resolved_xplane_config;
+    }
+    cockpit_xplane_config_apply_env(xplane_config);
+    printf("Cockpit X-Plane: using %s:%u.\n", xplane_config->ip, xplane_config->port);
 
     // 使用最近邻缩放，避免纹理缩放时产生模糊
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
@@ -1237,7 +1349,7 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
     nd_data_init(&nd_data);
     aircraft_systems_data_init(&systems_data);
     eicas_data_init(&eicas_data);
-    xplane_live_data_init(&xplane_live_data, XPLANE_LIVE_DEFAULT_IP, XPLANE_LIVE_DEFAULT_PORT);
+    xplane_live_data_init(&xplane_live_data, xplane_config->ip, xplane_config->port);
     if (sim_data_ready && sim_snapshot != NULL)
     {
         eicas_data_loaded = sim_data_center_has_eicas_data(sim_data_center);
@@ -1673,12 +1785,18 @@ int cockpit_main_run_with_sim_data_center(SimDataCenter *sim_data_center)
     printf("Cockpit SHARED: SimDataCenter=%p planned_route=%p revision=%d.\n",
            (void *)sim_data_center, (void *)&sim_data_center->planned_route,
            sim_data_center_route_revision(sim_data_center));
-    return cockpit_main_run_internal(sim_data_center);
+    return cockpit_main_run_internal(sim_data_center, NULL);
 }
 
 int cockpit_main_run(void)
 {
+    return cockpit_main_run_with_args(0, NULL);
+}
+
+int cockpit_main_run_with_args(int argc, char *argv[])
+{
     SimDataCenter *sim_data_center = (SimDataCenter *)malloc(sizeof(*sim_data_center));
+    Cockpit_XPlaneConfig xplane_config;
     int result;
 
     if (sim_data_center == NULL)
@@ -1697,7 +1815,8 @@ int cockpit_main_run(void)
     printf("Cockpit STANDALONE: SimDataCenter=%p planned_route=%p revision=%d.\n",
            (void *)sim_data_center, (void *)&sim_data_center->planned_route,
            sim_data_center_route_revision(sim_data_center));
-    result = cockpit_main_run_internal(sim_data_center);
+    cockpit_xplane_config_init(&xplane_config, argc, argv);
+    result = cockpit_main_run_internal(sim_data_center, &xplane_config);
     sim_data_center_destroy(sim_data_center);
     free(sim_data_center);
     return result;
