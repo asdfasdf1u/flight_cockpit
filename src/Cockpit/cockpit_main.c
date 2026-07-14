@@ -41,11 +41,15 @@
 
 #include "../Util/xplane_live_data.h"
 
+int fmc_xplane_send_command(const char *command);
+
 #define COCKPIT_WINDOW_WIDTH 1600
 #define COCKPIT_WINDOW_HEIGHT 900
 #define COCKPIT_TARGET_FRAME_MS 16
-#define COCKPIT_PFD_TARGET_FRAME_MS 33
+#define COCKPIT_PFD_TARGET_FRAME_MS COCKPIT_TARGET_FRAME_MS
 #define COCKPIT_SYNC_CHECK_LOG_MS 5000
+#define COCKPIT_PFD_PERF_LOG_MS 2000
+#define COCKPIT_SCENE_TEXTURE_MAX_WIDTH 2048
 
 #define COCKPIT_PFD_TEXTURE_WIDTH 900
 #define COCKPIT_PFD_TEXTURE_HEIGHT 800
@@ -58,6 +62,105 @@
 
 #define COCKPIT_MIN_SCALE 0.5f
 #define COCKPIT_MAX_SCALE 3.0f
+
+typedef struct Cockpit_XPlaneConfig
+{
+    char ip[16];
+    unsigned short port;
+} Cockpit_XPlaneConfig;
+
+static unsigned short cockpit_parse_xplane_port(const char *text, unsigned short fallback)
+{
+    char *end = NULL;
+    long value;
+
+    if (text == NULL || text[0] == '\0')
+    {
+        return fallback;
+    }
+
+    value = strtol(text, &end, 10);
+    if (end == text || *end != '\0' || value <= 0 || value > 65535)
+    {
+        printf("Cockpit X-Plane: invalid port '%s'; using %u.\n", text, fallback);
+        return fallback;
+    }
+
+    return (unsigned short)value;
+}
+
+static void cockpit_xplane_config_set_ip(Cockpit_XPlaneConfig *config, const char *ip)
+{
+    if (config == NULL || ip == NULL || ip[0] == '\0')
+    {
+        return;
+    }
+
+    snprintf(config->ip, sizeof(config->ip), "%s", ip);
+}
+
+static void cockpit_xplane_config_init(Cockpit_XPlaneConfig *config, int argc, char *argv[])
+{
+    int i;
+    const char *env_ip = getenv("XPLANE_IP");
+    const char *env_port = getenv("XPLANE_PORT");
+
+    if (config == NULL)
+    {
+        return;
+    }
+
+    snprintf(config->ip, sizeof(config->ip), "%s", XPLANE_LIVE_DEFAULT_IP);
+    config->port = XPLANE_LIVE_DEFAULT_PORT;
+
+    cockpit_xplane_config_set_ip(config, env_ip);
+    config->port = cockpit_parse_xplane_port(env_port, config->port);
+
+    for (i = 1; i < argc; ++i)
+    {
+        const char *arg = argv[i];
+
+        if (arg == NULL)
+        {
+            continue;
+        }
+        if (strncmp(arg, "--xplane-ip=", 12) == 0)
+        {
+            cockpit_xplane_config_set_ip(config, arg + 12);
+        }
+        else if (strcmp(arg, "--xplane-ip") == 0 && i + 1 < argc)
+        {
+            cockpit_xplane_config_set_ip(config, argv[++i]);
+        }
+        else if (strncmp(arg, "--xplane-port=", 15) == 0)
+        {
+            config->port = cockpit_parse_xplane_port(arg + 15, config->port);
+        }
+        else if (strcmp(arg, "--xplane-port") == 0 && i + 1 < argc)
+        {
+            config->port = cockpit_parse_xplane_port(argv[++i], config->port);
+        }
+    }
+}
+
+static void cockpit_xplane_config_apply_env(const Cockpit_XPlaneConfig *config)
+{
+    char port_text[16];
+
+    if (config == NULL)
+    {
+        return;
+    }
+
+    snprintf(port_text, sizeof(port_text), "%u", config->port);
+#ifdef _WIN32
+    _putenv_s("XPLANE_IP", config->ip);
+    _putenv_s("XPLANE_PORT", port_text);
+#else
+    setenv("XPLANE_IP", config->ip, 1);
+    setenv("XPLANE_PORT", port_text, 1);
+#endif
+}
 
 typedef struct Cockpit_RenderTargets
 {
@@ -201,9 +304,36 @@ static SDL_Texture *create_target_texture(SDL_Renderer *renderer, int width, int
     return texture;
 }
 
+static void cockpit_scene_texture_dimensions(int world_width, int world_height, int *texture_width, int *texture_height)
+{
+    float scale;
+
+    if (texture_width == NULL || texture_height == NULL || world_width <= 0 || world_height <= 0)
+    {
+        return;
+    }
+
+    scale = (float)COCKPIT_SCENE_TEXTURE_MAX_WIDTH / (float)world_width;
+    if (scale > 1.0f)
+    {
+        scale = 1.0f;
+    }
+    *texture_width = (int)((float)world_width * scale + 0.5f);
+    *texture_height = (int)((float)world_height * scale + 0.5f);
+}
+
 static int create_render_targets(SDL_Renderer *renderer, Cockpit_RenderTargets *targets, int world_width, int world_height)
 {
+    int scene_width = 0;
+    int scene_height = 0;
+
     if (renderer == NULL || targets == NULL)
+    {
+        return 0;
+    }
+
+    cockpit_scene_texture_dimensions(world_width, world_height, &scene_width, &scene_height);
+    if (scene_width <= 0 || scene_height <= 0)
     {
         return 0;
     }
@@ -213,7 +343,7 @@ static int create_render_targets(SDL_Renderer *renderer, Cockpit_RenderTargets *
     targets->eicas1_texture = create_target_texture(renderer, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
     targets->eicas2_texture = create_target_texture(renderer, COCKPIT_EICAS_TEXTURE_WIDTH, COCKPIT_EICAS_TEXTURE_HEIGHT);
     targets->fmc_texture = create_target_texture(renderer, COCKPIT_FMC_TEXTURE_WIDTH, COCKPIT_FMC_TEXTURE_HEIGHT);
-    targets->scene_texture = create_target_texture(renderer, world_width, world_height);
+    targets->scene_texture = create_target_texture(renderer, scene_width, scene_height);
 
     return targets->pfd_texture != NULL &&
            targets->nd_texture != NULL &&
@@ -321,25 +451,29 @@ static void apply_sim_snapshot_to_aircraft_systems(AircraftSystems_Data *data, c
     data->engine_left.n2 = snapshot->n2_left;
     data->engine_left.egt = snapshot->egt_left;
     data->engine_left.fuel_flow = snapshot->fuel_flow_left;
-    data->engine_left.eicas1_fuel_flow_display_valid = 0;
-    data->engine_left.eicas2_fuel_flow_display_valid = 0;
+    data->engine_left.eicas1_fuel_flow_display = snapshot->fuel_flow_left / 1000.0f;
+    data->engine_left.eicas1_fuel_flow_display_valid = snapshot->source == SIM_SNAPSHOT_SOURCE_XPLANE;
+    data->engine_left.eicas2_fuel_flow_display = snapshot->fuel_flow_left / 1000.0f;
+    data->engine_left.eicas2_fuel_flow_display_valid = snapshot->source == SIM_SNAPSHOT_SOURCE_XPLANE;
     data->engine_left.oil_pressure = snapshot->oil_pressure_left;
     data->engine_left.oil_temp = snapshot->oil_temperature_left;
     data->engine_left.oil_quantity = snapshot->oil_quantity_left;
     data->engine_left.vibration = snapshot->vibration_left;
-    data->engine_left.running = snapshot->n1_left > 20.0f || snapshot->n2_left > 20.0f;
+    data->engine_left.running = snapshot->engine_left_running;
 
     data->engine_right.n1 = snapshot->n1_right;
     data->engine_right.n2 = snapshot->n2_right;
     data->engine_right.egt = snapshot->egt_right;
     data->engine_right.fuel_flow = snapshot->fuel_flow_right;
-    data->engine_right.eicas1_fuel_flow_display_valid = 0;
-    data->engine_right.eicas2_fuel_flow_display_valid = 0;
+    data->engine_right.eicas1_fuel_flow_display = snapshot->fuel_flow_right / 1000.0f;
+    data->engine_right.eicas1_fuel_flow_display_valid = snapshot->source == SIM_SNAPSHOT_SOURCE_XPLANE;
+    data->engine_right.eicas2_fuel_flow_display = snapshot->fuel_flow_right / 1000.0f;
+    data->engine_right.eicas2_fuel_flow_display_valid = snapshot->source == SIM_SNAPSHOT_SOURCE_XPLANE;
     data->engine_right.oil_pressure = snapshot->oil_pressure_right;
     data->engine_right.oil_temp = snapshot->oil_temperature_right;
     data->engine_right.oil_quantity = snapshot->oil_quantity_right;
     data->engine_right.vibration = snapshot->vibration_right;
-    data->engine_right.running = snapshot->n1_right > 20.0f || snapshot->n2_right > 20.0f;
+    data->engine_right.running = snapshot->engine_right_running;
 
     data->total_air_temperature = snapshot->total_air_temperature;
     data->fuel_quantity = snapshot->fuel_quantity;
@@ -355,6 +489,8 @@ static void apply_sim_snapshot_to_aircraft_systems(AircraftSystems_Data *data, c
     data->flaps_level = snapshot->flaps_level;
     data->parking_brake_on = snapshot->parking_brake_on;
     data->simulation_time = snapshot->sim_time;
+    data->snapshot_frame_id = snapshot->frame_id;
+    data->data_valid = snapshot->data_valid;
 
     data->warning_count = 0;
     for (int i = 0; i < snapshot->warning_count && i < AIRCRAFT_SYSTEMS_MAX_WARNINGS; ++i)
@@ -406,11 +542,21 @@ static void update_module_textures(
     const AircraftSystems_Data *systems_data,
     const FMC_Display_Assets *fmc_assets,
     const FMC_Event_State *fmc_state,
-    const FMC_Data *fmc_data)
+    const FMC_Data *fmc_data,
+    Uint32 *pfd_render_elapsed_ms)
 {
+    if (pfd_render_elapsed_ms != NULL)
+    {
+        *pfd_render_elapsed_ms = 0;
+    }
     if (refresh_pfd)
     {
+        const Uint32 pfd_render_start = SDL_GetTicks();
         render_to_texture(renderer, targets->pfd_texture, render_pfd_adapter, font, pfd_data);
+        if (pfd_render_elapsed_ms != NULL)
+        {
+            *pfd_render_elapsed_ms = SDL_GetTicks() - pfd_render_start;
+        }
     }
     render_to_texture(renderer, targets->nd_texture, render_nd_adapter, font, nd_data);
     render_to_texture(renderer, targets->eicas1_texture, render_eicas1_adapter, font, systems_data);
@@ -429,8 +575,24 @@ static void update_scene_texture(
     const CockpitAlarmState *alarm_state,
     Uint32 ticks)
 {
+    int scene_width = 0;
+    int scene_height = 0;
+    float scene_scale = 1.0f;
+
+    if (renderer == NULL || targets == NULL || targets->scene_texture == NULL || layout == NULL)
+    {
+        return;
+    }
+    if (SDL_QueryTexture(targets->scene_texture, NULL, NULL, &scene_width, &scene_height) != 0 ||
+        scene_width <= 0 || scene_height <= 0)
+    {
+        return;
+    }
+    scene_scale = (float)scene_width / (float)layout->world_width;
+
     SDL_SetRenderTarget(renderer, targets->scene_texture);
     SDL_RenderSetViewport(renderer, NULL);
+    SDL_RenderSetScale(renderer, scene_scale, scene_scale);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
@@ -451,6 +613,7 @@ static void update_scene_texture(
 
     SDL_SetRenderTarget(renderer, NULL);
     SDL_RenderSetViewport(renderer, NULL);
+    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
 }
 
 static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapshot)
@@ -477,6 +640,8 @@ static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapsho
     data->using_file_data = 1;
     data->file_sample_index = snapshot->pfd_frame_index;
     data->file_sample_accumulator = 0.0f;
+    data->snapshot_frame_id = snapshot->frame_id;
+    data->data_valid = snapshot->data_valid;
     snprintf(data->flight_mode, sizeof(data->flight_mode), "%s", "SIM SNAP");
 }
 
@@ -496,6 +661,8 @@ static void apply_sim_snapshot_to_nd(ND_Data *data, const SimSnapshot *snapshot)
     data->simulation_time = snapshot->sim_time;
     data->data_frame_index = snapshot->nd_frame_index;
     data->data_frame_elapsed = snapshot->sim_time;
+    data->snapshot_frame_id = snapshot->frame_id;
+    data->data_valid = snapshot->data_valid;
     nd_data_recalculate_nav_points(data);
 }
 
@@ -561,7 +728,16 @@ static void print_cockpit_sync_check(
     const SimPlannedRoute *route = sim_data_center_route(sim_data_center);
     printf("[Cockpit Sync Check]\n");
     printf("sim_time=%.2f\n", snapshot != NULL ? snapshot->sim_time : 0.0f);
-    printf("pfd/nd/eicas source=%s\n", snapshot != NULL ? "SimSnapshot" : "fallback");
+    printf("pfd/nd/eicas source=%s snapshot_source=%s valid=%d frame_id=%d timestamp=%.2f last_xplane=%.2f connected=%d timeout=%d fallback=%d\n",
+           snapshot != NULL ? "SimSnapshot" : "fallback",
+           snapshot != NULL ? sim_snapshot_source_name(snapshot->source) : "NONE",
+           snapshot != NULL ? snapshot->data_valid : 0,
+           snapshot != NULL ? snapshot->frame_id : 0,
+           snapshot != NULL ? snapshot->timestamp : 0.0f,
+           snapshot != NULL ? snapshot->last_valid_xplane_timestamp : 0.0f,
+           snapshot != NULL ? snapshot->xplane_connected : 0,
+           snapshot != NULL ? snapshot->timed_out : 0,
+           snapshot != NULL ? snapshot->fallback_active : 0);
     if (route != NULL)
     {
         printf("route: source=%s, origin=%s, destination=%s, points=%d, first=%s, last=%s\n",
@@ -836,6 +1012,7 @@ static int submit_fmc_route_to_sim_center(FMC_Data *data, SimDataCenter *sim_dat
 
     sim_data_center_set_route(sim_data_center, &route);
     fmc_data_mark_route_committed(data);
+    fmc_data_sync_route_to_xplane(data);
     snprintf(data->message, sizeof(data->message), "RTE %s-%s EXEC", route.origin, route.destination);
     printf("FMC Route: EXEC committed; origin=%s destination=%s planned_route points=%d revision=%d pending_mod=%d.\n",
            route.origin,
@@ -1044,12 +1221,33 @@ static void render_window(
     SDL_RenderPresent(renderer);
 }
 
-static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
+static int cockpit_main_run_internal(
+    SimDataCenter *sim_data_center,
+    const Cockpit_XPlaneConfig *xplane_config,
+    XPlaneSharedRuntime *shared_runtime)
 {
+    XPlaneSharedRuntime local_runtime;
+    XPlaneSharedRuntime *runtime = shared_runtime;
+    int owns_runtime = 0;
+
+    if (runtime != NULL)
+    {
+        sim_data_center = xplane_shared_runtime_data_center(runtime);
+    }
+    Cockpit_XPlaneConfig resolved_xplane_config;
+
     if (sim_data_center == NULL)
     {
         return -1;
     }
+
+    if (xplane_config == NULL)
+    {
+        cockpit_xplane_config_init(&resolved_xplane_config, 0, NULL);
+        xplane_config = &resolved_xplane_config;
+    }
+    cockpit_xplane_config_apply_env(xplane_config);
+    printf("Cockpit X-Plane: using %s:%u.\n", xplane_config->ip, xplane_config->port);
 
     // 使用最近邻缩放，避免纹理缩放时产生模糊
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
@@ -1222,13 +1420,18 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
         }
         return -1;
     }
-    cockpit_startup_log(0, "Render targets created (%d x %d).", layout.world_width, layout.world_height);
+    {
+        int scene_width = 0;
+        int scene_height = 0;
+        SDL_QueryTexture(targets.scene_texture, NULL, NULL, &scene_width, &scene_height);
+        cockpit_startup_log(0, "Render targets created (world=%d x %d, scene=%d x %d).",
+                            layout.world_width, layout.world_height, scene_width, scene_height);
+    }
 
     PFD_Data pfd_data;
     ND_Data nd_data;
     AircraftSystems_Data systems_data;
     EICAS_Data eicas_data;
-    XPlaneLiveData xplane_live_data;
     FMC_Data fmc_data;
     int eicas_data_loaded = 0;
     const int sim_data_ready = sim_data_center_is_ready(sim_data_center);
@@ -1237,7 +1440,15 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
     nd_data_init(&nd_data);
     aircraft_systems_data_init(&systems_data);
     eicas_data_init(&eicas_data);
-    xplane_live_data_init(&xplane_live_data, XPLANE_LIVE_DEFAULT_IP, XPLANE_LIVE_DEFAULT_PORT);
+    if (runtime == NULL)
+    {
+        xplane_shared_runtime_init(&local_runtime,
+                                   sim_data_center,
+                                   xplane_config != NULL ? xplane_config->ip : NULL,
+                                   xplane_config != NULL ? xplane_config->port : 0);
+        runtime = &local_runtime;
+        owns_runtime = 1;
+    }
     if (sim_data_ready && sim_snapshot != NULL)
     {
         eicas_data_loaded = sim_data_center_has_eicas_data(sim_data_center);
@@ -1324,6 +1535,12 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
     Uint32 last_ticks = SDL_GetTicks();
     Uint32 last_pfd_render_ticks = 0;
     Uint32 last_sync_check_log_ticks = 0;
+    Uint32 pfd_perf_window_start_ticks = last_ticks;
+    unsigned int pfd_perf_render_count = 0;
+    unsigned int pfd_perf_skipped_count = 0;
+    Uint64 pfd_perf_total_render_ms = 0;
+    int last_module_frame_mismatch = -1;
+    int last_module_frame_source = -1;
 
     while (running)
     {
@@ -1582,18 +1799,37 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
             delta_time = 0.1f;
         }
 
-        const int live_data_active = xplane_live_data_update(&xplane_live_data, &pfd_data, &nd_data, &eicas_data, &systems_data, delta_time);
+        xplane_shared_runtime_update(runtime, delta_time);
         if (sim_data_ready)
         {
-            sim_data_center_update(sim_data_center, delta_time);
             sim_snapshot = sim_data_center_snapshot(sim_data_center);
         }
 
-        if (!live_data_active && sim_data_ready && sim_snapshot != NULL)
+        if (sim_data_ready && sim_snapshot != NULL)
         {
             apply_sim_snapshot_to_cockpit_modules(sim_snapshot, &pfd_data, &nd_data, &systems_data);
+            const int module_frame_mismatch =
+                pfd_data.snapshot_frame_id != sim_snapshot->frame_id ||
+                nd_data.snapshot_frame_id != sim_snapshot->frame_id ||
+                systems_data.snapshot_frame_id != sim_snapshot->frame_id;
+            if (module_frame_mismatch != last_module_frame_mismatch ||
+                last_module_frame_source != (int)sim_snapshot->source)
+            {
+                printf("Cockpit module frames: source=%s snapshot=%d pfd=%d nd=%d systems=%d valid=%d fallback=%d mismatch=%d\n",
+                       sim_snapshot_source_name(sim_snapshot->source),
+                       sim_snapshot->frame_id,
+                       pfd_data.snapshot_frame_id,
+                       nd_data.snapshot_frame_id,
+                       systems_data.snapshot_frame_id,
+                       sim_snapshot->data_valid,
+                       sim_snapshot->fallback_active,
+                       module_frame_mismatch);
+                fflush(stdout);
+                last_module_frame_mismatch = module_frame_mismatch;
+                last_module_frame_source = (int)sim_snapshot->source;
+            }
         }
-        else if (!live_data_active)
+        else
         {
             pfd_data_update_mock(&pfd_data, delta_time);
             nd_data_update_mock(&nd_data, delta_time);
@@ -1629,7 +1865,34 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
             last_pfd_render_ticks = current_ticks;
         }
 
-        update_module_textures(renderer, font, &targets, refresh_pfd, &pfd_data, &nd_data, &systems_data, &fmc_display_assets, &fmc_event_state, &fmc_data);
+        Uint32 pfd_render_elapsed_ms = 0;
+        update_module_textures(renderer, font, &targets, refresh_pfd, &pfd_data, &nd_data, &systems_data,
+                               &fmc_display_assets, &fmc_event_state, &fmc_data, &pfd_render_elapsed_ms);
+        if (refresh_pfd)
+        {
+            ++pfd_perf_render_count;
+            pfd_perf_total_render_ms += pfd_render_elapsed_ms;
+        }
+        else
+        {
+            ++pfd_perf_skipped_count;
+        }
+        if (current_ticks - pfd_perf_window_start_ticks >= COCKPIT_PFD_PERF_LOG_MS)
+        {
+            const float average_pfd_render_ms = pfd_perf_render_count > 0
+                                                    ? (float)pfd_perf_total_render_ms / (float)pfd_perf_render_count
+                                                    : 0.0f;
+            printf("Cockpit PFD Perf: interval=%ums renders=%u skipped=%u avg_render=%.2fms target=%dms.\n",
+                   current_ticks - pfd_perf_window_start_ticks,
+                   pfd_perf_render_count,
+                   pfd_perf_skipped_count,
+                   average_pfd_render_ms,
+                   COCKPIT_PFD_TARGET_FRAME_MS);
+            pfd_perf_window_start_ticks = current_ticks;
+            pfd_perf_render_count = 0;
+            pfd_perf_skipped_count = 0;
+            pfd_perf_total_render_ms = 0;
+        }
         update_scene_texture(renderer, font, &targets, &layout, background_texture, &cockpit_state.alarm, current_ticks);
         render_window(renderer, font, &targets, &layout, &camera, view_mode, selected_fmc, fmc_background_texture, show_fmc_debug, window_width, window_height);
 
@@ -1641,7 +1904,10 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
     }
 
     SDL_StopTextInput();
-    xplane_live_data_shutdown(&xplane_live_data);
+    if (owns_runtime)
+    {
+        xplane_shared_runtime_shutdown(runtime);
+    }
     cockpit_startup_log(0, "Cockpit event loop ended normally.");
     cockpit_alarm_destroy(&cockpit_state.alarm);
     fmc_data_destroy(&fmc_data);
@@ -1678,6 +1944,8 @@ static int cockpit_main_run_internal(SimDataCenter *sim_data_center)
 
 int cockpit_main_run_with_sim_data_center(SimDataCenter *sim_data_center)
 {
+    XPlaneSharedRuntime runtime;
+
     if (sim_data_center == NULL || !sim_data_center_is_ready(sim_data_center))
     {
         printf("Cockpit SHARED: SimDataCenter unavailable.\n");
@@ -1687,12 +1955,39 @@ int cockpit_main_run_with_sim_data_center(SimDataCenter *sim_data_center)
     printf("Cockpit SHARED: SimDataCenter=%p planned_route=%p revision=%d.\n",
            (void *)sim_data_center, (void *)&sim_data_center->planned_route,
            sim_data_center_route_revision(sim_data_center));
-    return cockpit_main_run_internal(sim_data_center);
+    xplane_shared_runtime_init(&runtime, sim_data_center, NULL, 0);
+    const int result = cockpit_main_run_internal(sim_data_center, NULL, &runtime);
+    xplane_shared_runtime_shutdown(&runtime);
+    return result;
+}
+
+int cockpit_main_run_with_shared_runtime(XPlaneSharedRuntime *runtime)
+{
+    SimDataCenter *sim_data_center = xplane_shared_runtime_data_center(runtime);
+
+    if (!xplane_shared_runtime_initialized(runtime) ||
+        sim_data_center == NULL ||
+        !sim_data_center_is_ready(sim_data_center))
+    {
+        printf("Cockpit SHARED: runtime unavailable.\n");
+        return -1;
+    }
+
+    printf("Cockpit SHARED RUNTIME: SimDataCenter=%p planned_route=%p revision=%d.\n",
+           (void *)sim_data_center, (void *)&sim_data_center->planned_route,
+           sim_data_center_route_revision(sim_data_center));
+    return cockpit_main_run_internal(sim_data_center, NULL, runtime);
 }
 
 int cockpit_main_run(void)
 {
+    return cockpit_main_run_with_args(0, NULL);
+}
+
+int cockpit_main_run_with_args(int argc, char *argv[])
+{
     SimDataCenter *sim_data_center = (SimDataCenter *)malloc(sizeof(*sim_data_center));
+    Cockpit_XPlaneConfig xplane_config;
     int result;
 
     if (sim_data_center == NULL)
@@ -1711,7 +2006,8 @@ int cockpit_main_run(void)
     printf("Cockpit STANDALONE: SimDataCenter=%p planned_route=%p revision=%d.\n",
            (void *)sim_data_center, (void *)&sim_data_center->planned_route,
            sim_data_center_route_revision(sim_data_center));
-    result = cockpit_main_run_internal(sim_data_center);
+    cockpit_xplane_config_init(&xplane_config, argc, argv);
+    result = cockpit_main_run_internal(sim_data_center, &xplane_config, NULL);
     sim_data_center_destroy(sim_data_center);
     free(sim_data_center);
     return result;

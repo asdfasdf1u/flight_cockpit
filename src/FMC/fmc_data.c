@@ -7,6 +7,10 @@
 #include <limits.h>
 #include <math.h>
 
+#ifndef MAX_VIATO_NUM
+#define MAX_VIATO_NUM 20
+#endif
+
 // AVL树树根
 AirportAVLNode *airport_avl_root = NULL;
 WaypointAVLNode *waypoint_avl_root = NULL;

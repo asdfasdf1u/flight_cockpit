@@ -493,6 +493,15 @@ static const char *json_field_type_name(Cabin_Json_Field_Type type)
     }
 }
 
+static int cabin_api_is_municipality_province(const char *province)
+{
+    const size_t length = province != NULL ? strlen(province) : 0;
+    static const char city_suffix[] = "\xE5\xB8\x82";
+
+    return length >= sizeof(city_suffix) - 1 &&
+           memcmp(province + length - (sizeof(city_suffix) - 1), city_suffix, sizeof(city_suffix) - 1) == 0;
+}
+
 static int parse_amap_weather_json(Cabin_Data *data, const char *json, const char *requested_city, const char *requested_adcode)
 {
     if (data == NULL || json == NULL || json[0] == '\0')
@@ -617,6 +626,7 @@ int cabin_api_reverse_geocode(double latitude,
     char url[1024];
     char response[CABIN_HTTP_RESPONSE_MAX];
     char status[16];
+    char raw_city[256];
     Cabin_Json_Field_Type province_type;
     Cabin_Json_Field_Type city_type;
     Cabin_Json_Field_Type district_type;
@@ -630,6 +640,7 @@ int cabin_api_reverse_geocode(double latitude,
     province[0] = '\0';
     city[0] = '\0';
     district[0] = '\0';
+    raw_city[0] = '\0';
 
     if (!is_safe_api_key(api_key))
     {
@@ -651,20 +662,21 @@ int cabin_api_reverse_geocode(double latitude,
     district_type = json_get_field_type(response, "district");
     (void)json_get_string(response, "province", province, province_size);
     (void)json_get_string(response, "city", city, city_size);
+    snprintf(raw_city, sizeof(raw_city), "%s", city);
     (void)json_get_string(response, "district", district, district_size);
 
-    /* AMap may encode a municipality city as [] or an empty string. */
-    if (city[0] == '\0' && province[0] != '\0' &&
-        (city_type == CABIN_JSON_FIELD_ARRAY || city_type == CABIN_JSON_FIELD_STRING))
+    /* AMap may encode a municipality city as [], an empty string, or omit it. */
+    if (city[0] == '\0' && cabin_api_is_municipality_province(province))
     {
         snprintf(city, city_size, "%s", province);
     }
 
-    printf("Cabin Place: reverse lat=%.6f lon=%.6f province=%s(%s) city=%s(%s) district=%s(%s).\n",
+    printf("Cabin Place: reverse lat=%.6f lon=%.6f province=%s(%s) city=%s(%s) district=%s(%s) display_city=%s.\n",
            latitude, longitude,
            json_field_type_name(province_type), province[0] != '\0' ? province : "--",
-           json_field_type_name(city_type), city[0] != '\0' ? city : "--",
-           json_field_type_name(district_type), district[0] != '\0' ? district : "--");
+           json_field_type_name(city_type), raw_city[0] != '\0' ? raw_city : "--",
+           json_field_type_name(district_type), district[0] != '\0' ? district : "--",
+           city[0] != '\0' ? city : "--");
     return province[0] != '\0' || city[0] != '\0' || district[0] != '\0';
 }
 

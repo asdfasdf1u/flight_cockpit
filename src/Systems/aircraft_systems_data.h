@@ -58,6 +58,8 @@ typedef struct AircraftSystems_Data
     AircraftSystems_WarningItem warnings[AIRCRAFT_SYSTEMS_MAX_WARNINGS];
     int warning_count;
     float simulation_time;
+    int snapshot_frame_id;
+    int data_valid;
 } AircraftSystems_Data;
 
 void aircraft_systems_data_init(AircraftSystems_Data *data);

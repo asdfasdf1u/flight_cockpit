@@ -11,6 +11,7 @@
 #define SIM_FUEL_SIDE_DISPLAY_SCALE 48.7f
 #define SIM_EARTH_RADIUS_NM 3440.065
 #define SIM_FLIGHT_PHASE_STABLE_FRAMES 8
+#define SIM_XPLANE_RECOVERY_STABLE_FRAMES 2
 
 static float clamp_float(float value, float min_value, float max_value)
 {
@@ -713,6 +714,101 @@ static void rebuild_snapshot(SimDataCenter *center, float delta_time)
                                   isfinite(center->snapshot.altitude) && isfinite(center->snapshot.ground_speed) &&
                                   isfinite(center->snapshot.latitude) && isfinite(center->snapshot.longitude);
     center->snapshot.updated_frame = center->snapshot.current_frame;
+    center->snapshot.frame_id = center->snapshot.current_frame;
+    center->snapshot.timestamp = center->snapshot.sim_time;
+    center->snapshot.fallback_active = center->snapshot.source == SIM_SNAPSHOT_SOURCE_DATA_FILES;
+    sim_data_center_update_flight_phase(center);
+    alert_manager_update(&center->alert_manager, &center->snapshot);
+    alert_manager_append_sim_warnings(alert_manager_snapshot(&center->alert_manager), &center->snapshot);
+}
+
+static void rebuild_xplane_snapshot_from_frame(SimDataCenter *center, const SimXPlaneLiveFrame *frame)
+{
+    SimSnapshot previous_snapshot;
+    SimSnapshot *snapshot;
+
+    if (center == NULL || frame == NULL)
+    {
+        return;
+    }
+
+    previous_snapshot = center->snapshot;
+    snapshot = &center->snapshot;
+    init_snapshot_defaults(snapshot);
+    snapshot->source = SIM_SNAPSHOT_SOURCE_XPLANE;
+    snapshot->data_valid = frame->valid && frame->connected && !frame->timed_out;
+    snapshot->has_pfd = 1;
+    snapshot->has_nd = 1;
+    snapshot->has_eicas_upper = 1;
+    snapshot->has_eicas_lower = 1;
+    snapshot->sim_time = frame->timestamp;
+    snapshot->delta_time = frame->delta_time;
+    snapshot->timestamp = frame->timestamp;
+    snapshot->last_valid_timestamp = frame->last_valid_timestamp;
+    snapshot->frame_id = frame->frame_id;
+    snapshot->current_frame = frame->frame_id;
+    snapshot->updated_frame = frame->frame_id;
+    snapshot->pfd_frame_index = frame->frame_id;
+    snapshot->nd_frame_index = frame->frame_id;
+    snapshot->eicas_upper_frame_index = frame->frame_id;
+    snapshot->eicas_lower_frame_index = frame->frame_id;
+    snapshot->timed_out = frame->timed_out;
+    snapshot->xplane_connected = frame->connected;
+    snapshot->fallback_active = 0;
+    snapshot->last_valid_xplane_timestamp = frame->last_valid_timestamp;
+    snapshot->playback_speed = center->playback_speed;
+
+    snapshot->latitude = frame->latitude;
+    snapshot->longitude = frame->longitude;
+    snapshot->altitude = frame->altitude;
+    snapshot->altitude_target = frame->altitude_target;
+    snapshot->agl_altitude = frame->agl_altitude;
+    snapshot->airspeed = frame->airspeed;
+    snapshot->airspeed_target = frame->airspeed_target;
+    snapshot->true_air_speed = frame->true_air_speed;
+    snapshot->ground_speed = frame->ground_speed;
+    snapshot->heading = normalize_heading(frame->heading);
+    snapshot->heading_target = normalize_heading(frame->heading_target);
+    snapshot->track = normalize_heading(frame->track);
+    snapshot->pitch = frame->pitch;
+    snapshot->roll = frame->roll;
+    snapshot->yaw = frame->yaw;
+    snapshot->vertical_speed = frame->vertical_speed;
+    snapshot->throttle = clamp_float(frame->throttle, 0.0f, 100.0f);
+
+    snapshot->total_air_temperature = frame->total_air_temperature;
+    snapshot->n1_left = frame->n1_left;
+    snapshot->n1_right = frame->n1_right;
+    snapshot->engine_left_running = frame->engine_left_running;
+    snapshot->engine_right_running = frame->engine_right_running;
+    snapshot->n2_left = frame->n2_left;
+    snapshot->n2_right = frame->n2_right;
+    snapshot->egt_left = frame->egt_left;
+    snapshot->egt_right = frame->egt_right;
+    snapshot->fuel_flow_left = frame->fuel_flow_left;
+    snapshot->fuel_flow_right = frame->fuel_flow_right;
+    snapshot->lower_fuel_flow_left = frame->fuel_flow_left;
+    snapshot->lower_fuel_flow_right = frame->fuel_flow_right;
+    snapshot->oil_pressure_left = frame->oil_pressure_left;
+    snapshot->oil_pressure_right = frame->oil_pressure_right;
+    snapshot->oil_temperature_left = frame->oil_temperature_left;
+    snapshot->oil_temperature_right = frame->oil_temperature_right;
+    snapshot->oil_quantity_left = frame->oil_quantity_left;
+    snapshot->oil_quantity_right = frame->oil_quantity_right;
+    snapshot->vibration_left = frame->vibration_left;
+    snapshot->vibration_right = frame->vibration_right;
+    snapshot->fuel_quantity = frame->fuel_quantity;
+    snapshot->fuel_left_quantity = frame->fuel_left_quantity;
+    snapshot->fuel_center_quantity = frame->fuel_center_quantity;
+    snapshot->fuel_right_quantity = frame->fuel_right_quantity;
+    snapshot->hydraulic_pressure = previous_snapshot.hydraulic_pressure;
+    snapshot->cabin_pressure = previous_snapshot.cabin_pressure;
+    snapshot->battery_voltage = previous_snapshot.battery_voltage;
+    snapshot->gear_down = frame->gear_down;
+    snapshot->flaps_level = frame->flaps_level;
+    snapshot->parking_brake_on = frame->parking_brake_on;
+
+    update_warnings(snapshot);
     sim_data_center_update_flight_phase(center);
     alert_manager_update(&center->alert_manager, &center->snapshot);
     alert_manager_append_sim_warnings(alert_manager_snapshot(&center->alert_manager), &center->snapshot);
@@ -799,6 +895,109 @@ void sim_data_center_set_position(SimDataCenter *center, double latitude, double
     center->nd_position_initialized = 1;
     center->snapshot.latitude = latitude;
     center->snapshot.longitude = longitude;
+}
+
+static void sim_data_center_log_source_change(SimDataCenter *center, const char *reason)
+{
+    const SimSnapshotSource source = center != NULL ? center->snapshot.source : SIM_SNAPSHOT_SOURCE_NONE;
+
+    if (center == NULL)
+    {
+        return;
+    }
+
+    if (!center->source_log_initialized || center->last_logged_source != source)
+    {
+        printf("SimDataCenter source: %s frame_id=%d valid=%d fallback=%d xplane_connected=%d timeout=%d reason=%s\n",
+               sim_snapshot_source_name(source),
+               center->snapshot.frame_id,
+               center->snapshot.data_valid,
+               center->snapshot.fallback_active,
+               center->snapshot.xplane_connected,
+               center->snapshot.timed_out,
+               reason != NULL ? reason : "update");
+        fflush(stdout);
+        center->source_log_initialized = 1;
+        center->last_logged_source = source;
+    }
+}
+
+static int sim_data_center_rebuild_fallback_snapshot(
+    SimDataCenter *center,
+    const SimXPlaneLiveFrame *frame,
+    const char *reason)
+{
+    float delta_time;
+
+    if (center == NULL || !center->initialized)
+    {
+        return 0;
+    }
+
+    delta_time = frame != NULL ? frame->delta_time : center->delta_time;
+    if (delta_time < 0.0f)
+    {
+        delta_time = 0.0f;
+    }
+    if (delta_time > 0.1f)
+    {
+        delta_time = 0.1f;
+    }
+
+    center->delta_time = delta_time * center->playback_speed;
+    center->sim_time += center->delta_time;
+    rebuild_snapshot(center, center->delta_time);
+    center->snapshot.xplane_connected = frame != NULL ? frame->connected : 0;
+    center->snapshot.timed_out = frame != NULL ? frame->timed_out : 0;
+    center->snapshot.last_valid_xplane_timestamp = frame != NULL ? frame->last_valid_timestamp : center->snapshot.last_valid_xplane_timestamp;
+    center->snapshot.last_valid_timestamp = center->snapshot.last_valid_xplane_timestamp;
+    center->snapshot.fallback_active = center->snapshot.source == SIM_SNAPSHOT_SOURCE_DATA_FILES;
+    sim_data_center_log_source_change(center, reason);
+    return center->snapshot.data_valid;
+}
+
+int sim_data_center_apply_xplane_live_frame(SimDataCenter *center, const SimXPlaneLiveFrame *frame)
+{
+    int xplane_ready;
+
+    if (center == NULL || frame == NULL || !center->initialized)
+    {
+        return 0;
+    }
+
+    xplane_ready = frame->valid && frame->connected && !frame->timed_out;
+    if (xplane_ready)
+    {
+        center->xplane_recovery_frames++;
+        if (center->snapshot.source != SIM_SNAPSHOT_SOURCE_XPLANE &&
+            center->xplane_recovery_frames < SIM_XPLANE_RECOVERY_STABLE_FRAMES)
+        {
+            return sim_data_center_rebuild_fallback_snapshot(center, frame, "xplane_recovering");
+        }
+
+        rebuild_xplane_snapshot_from_frame(center, frame);
+        center->sim_time = frame->timestamp;
+        center->delta_time = frame->delta_time;
+        center->nd_latitude = frame->latitude;
+        center->nd_longitude = frame->longitude;
+        center->nd_position_initialized = 1;
+        sim_data_center_log_source_change(center, "xplane_valid");
+        return 1;
+    }
+
+    center->xplane_recovery_frames = 0;
+    center->snapshot.xplane_connected = frame->connected;
+    center->snapshot.timed_out = frame->timed_out;
+    center->snapshot.last_valid_xplane_timestamp = frame->last_valid_timestamp;
+    center->snapshot.last_valid_timestamp = frame->last_valid_timestamp;
+
+    if (!frame->connected || frame->timed_out || center->snapshot.source != SIM_SNAPSHOT_SOURCE_XPLANE)
+    {
+        return sim_data_center_rebuild_fallback_snapshot(center, frame, !frame->connected ? "xplane_disconnected" : (frame->timed_out ? "xplane_timeout" : "xplane_unavailable"));
+    }
+
+    sim_data_center_log_source_change(center, "xplane_transient_invalid");
+    return 0;
 }
 
 void sim_data_center_set_route(SimDataCenter *center, const SimPlannedRoute *route)

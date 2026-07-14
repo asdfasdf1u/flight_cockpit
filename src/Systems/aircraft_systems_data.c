@@ -169,6 +169,8 @@ void aircraft_systems_data_init(AircraftSystems_Data *data)
     data->flaps_level = 5;
     data->parking_brake_on = 0;
     data->simulation_time = 0.0f;
+    data->snapshot_frame_id = 0;
+    data->data_valid = 1;
 
     clear_warnings(data);
     update_warnings(data);

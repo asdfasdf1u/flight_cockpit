@@ -10,6 +10,8 @@
 #include "fmc_connect.h"
 #include "../Util/SDL_Util.h"
 
+int fmc_xplane_send_command(const char *command);
+
 #define LOGIC_WIDTH 638
 #define LOGIC_HEIGHT 998 // FMC 是竖长形的!
 #define FMC_TARGET_FRAME_MS 16

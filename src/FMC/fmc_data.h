@@ -6,8 +6,6 @@
 #include <string.h>
 #include <stdbool.h>
 
-#define MAX_VIATO_NUM 20
-
 #define MAX_ICAO_CODE_LEN 8     // 机场ICAO代码最大长度
 #define MAX_WAYPOINT_CODE_LEN 8 // 航路点代码最大长度
 #define MAX_LINE_BUF_LEN 256    // 读取文件行缓冲区长度
@@ -109,7 +107,6 @@ extern WaypointAVLNode *waypoint_avl_root;   // 航路点AVL树根
 // 航线和航路点列表
 extern VIATO *via_to_list;
 extern int via_to_list_count;
-extern int rte_index;
 // 目标速度与速度高度限制,分别表示爬升、巡航、降落
 extern TgtSpeed tgt_speed1;
 extern TgtSpeed tgt_speed2;
@@ -141,9 +138,6 @@ extern int proc_trans_count;
 
 // 选择的跑道、起飞程序和过渡点
 extern SelectDepArr select_dep_arr[3];
-extern int dep_arr_index;
-extern int dep_arr_type;
-extern char show_ariport[20];
 
 
 // 起飞机场
@@ -169,8 +163,6 @@ extern int waypoint_count;         // 实际加载的航路点数量
 // 速度与限制设置
 int setTgtSpeed(char *speed, TgtSpeed *target_speed);
 int setSpdAltLimit(const char *spd_alt_str, SpdAltLimit *spd_alt_limit);
-int is_string_in_range(const char *str, int min_val, int max_val, int *result);
-int is_string_in_range_f(const char *str, float min_val, float max_val, float *result);
 // 机场元素与关联关系 AAA
 void add_element(char *name, ElementType type, char *airport);
 void add_relation(char *airport, char *elem1, ElementType el1_type, char *elem2, ElementType el2_type);

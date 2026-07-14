@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <string.h>
 
+extern int rte_index;
+int fmc_xplane_send_command(const char *command);
+
 static void action_page(FMC_Data *data, const FMC_Button *button);
 static void action_lsk(FMC_Data *data, const FMC_Button *button);
 static void action_text(FMC_Data *data, const FMC_Button *button);

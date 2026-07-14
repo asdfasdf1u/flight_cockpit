@@ -9,6 +9,11 @@
 #include <stdio.h>
 #include <string.h>
 
+extern int rte_index;
+extern int dep_arr_index;
+extern int dep_arr_type;
+extern char show_ariport[20];
+
 #define FMC_BASE_WIDTH 638
 #define FMC_BASE_HEIGHT 998
 

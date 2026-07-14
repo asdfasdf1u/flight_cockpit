@@ -847,10 +847,10 @@ static void draw_flight_info_bar(SDL_Renderer *renderer, const Cabin_Assets *ass
                             data->origin_airport[0] != '\0' && data->destination_airport[0] != '\0' &&
                             strcmp(data->origin_airport, "----") != 0 && strcmp(data->destination_airport, "----") != 0;
     const int snapshot_ready = data != NULL && data->snapshot_valid;
-    const int origin_city_valid = route_ready && data->origin_place.status == CABIN_PLACE_VALID && data->origin_place.city[0] != '\0';
-    const int destination_city_valid = route_ready && data->destination_place.status == CABIN_PLACE_VALID && data->destination_place.city[0] != '\0';
-    const char *origin_display = origin_city_valid ? data->origin_place.city : (route_ready ? data->origin_airport : "");
-    const char *destination_display = destination_city_valid ? data->destination_place.city : (route_ready ? data->destination_airport : "");
+    const char *origin_place_name = route_ready ? cabin_place_display_name(&data->origin_place) : "";
+    const char *destination_place_name = route_ready ? cabin_place_display_name(&data->destination_place) : "";
+    const char *origin_display = origin_place_name[0] != '\0' ? origin_place_name : (route_ready ? data->origin_airport : "");
+    const char *destination_display = destination_place_name[0] != '\0' ? destination_place_name : (route_ready ? data->destination_airport : "");
 
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     fill_rect(renderer, &bar, COLOR_BLACK_OVERLAY);

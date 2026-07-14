@@ -7,6 +7,7 @@
 #define CABIN_FLOWN_TRACK_MAX_POINTS 160
 
 #include "../Data/alert_manager.h"
+#include "../Data/sim_snapshot.h"
 
 struct SimDataCenter;
 
@@ -89,6 +90,13 @@ typedef struct Cabin_Data
     int snapshot_valid;
     char data_source[CABIN_TEXT_LEN];
     int snapshot_frame;
+    int frame_id;
+    float timestamp;
+    SimSnapshotSource snapshot_source;
+    int fallback_active;
+    int xplane_connected;
+    int timed_out;
+    float last_valid_xplane_timestamp;
     float snapshot_time;
     int engine_left_running;
     int engine_right_running;
@@ -140,5 +148,6 @@ typedef struct Cabin_Data
 
 void cabin_data_init(Cabin_Data *data);
 int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCenter *center, float delta_time);
+const char *cabin_place_display_name(const Cabin_Place *place);
 
 #endif

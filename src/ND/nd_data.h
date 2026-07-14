@@ -166,6 +166,8 @@ typedef struct ND_Data
     int route_active_index;
     int route_cached_revision;
     int route_valid;
+    int snapshot_frame_id;
+    int data_valid;
 } ND_Data;
 
 extern int waypoint_total_count;
