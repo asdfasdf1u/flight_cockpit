@@ -126,12 +126,6 @@ static void draw_display_texture(SDL_Renderer *renderer, TTF_Font *font, const S
     draw_centered_text(renderer, font, COLOR_CYAN, &(SDL_Rect){bezel.x, bezel.y + bezel.h - 28, bezel.w, 22}, "%s", label);
 }
 
-static void draw_fmc_hotspot_hint(SDL_Renderer *renderer, TTF_Font *font, const SDL_Rect *rect, const char *label)
-{
-    draw_rect(renderer, rect, COLOR_AMBER);
-    draw_centered_text(renderer, font, COLOR_AMBER, &(SDL_Rect){rect->x, rect->y + rect->h - 44, rect->w, 28}, "%s - CLICK TO ZOOM", label);
-}
-
 static void draw_fallback_background(SDL_Renderer *renderer, TTF_Font *font, const Cockpit_Layout *layout)
 {
     fill_rect(renderer, &(SDL_Rect){0, 0, layout->world_width, layout->world_height}, (SDL_Color){5, 7, 9, 255});
@@ -177,8 +171,6 @@ void cockpit_ui_render_scene(
     draw_display_texture(renderer, font, &layout->eicas2_rect, eicas2_texture, "EICAS2", 0);
     draw_display_texture(renderer, font, &layout->right_fmc_rect, fmc_texture, "RIGHT FMC", 0);
 
-    draw_fmc_hotspot_hint(renderer, font, &layout->left_fmc_rect, "LEFT FMC");
-    draw_fmc_hotspot_hint(renderer, font, &layout->right_fmc_rect, "RIGHT FMC");
 }
 
 SDL_Rect cockpit_ui_fmc_zoom_rect(int window_width, int window_height)
