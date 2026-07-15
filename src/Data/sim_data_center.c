@@ -956,7 +956,7 @@ int sim_data_center_apply_xplane_live_frame(SimDataCenter *center, const SimXPla
     if (!frame->connected || frame->timed_out || center->snapshot.source != SIM_SNAPSHOT_SOURCE_XPLANE)
     {
         return sim_data_center_rebuild_fallback_snapshot(center, frame, !frame->connected ? "xplane_disconnected" : (frame->timed_out ? "xplane_timeout" : "xplane_unavailable"));
-    }
+    }//实时数据统一快照
 
     sim_data_center_log_source_change(center, "xplane_transient_invalid");
     return 0;

@@ -245,7 +245,7 @@ static int rref_write_dref_path(char *dest, int dest_size, const char *dref, int
 
     return written > 0 && written < dest_size;
 }
-
+//实时数据接入
 static int rref_send_subscription(XPlaneLiveData *live, int subscription_index, const char *dref, int element_index, int element_count, int frequency_hz)
 {
     char buffer[XPLANE_RREF_REQUEST_BYTES];
