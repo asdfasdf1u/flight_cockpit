@@ -312,7 +312,7 @@ static int rref_write_dref_path(char *dest, int dest_size, const char *dref, int
 
     return written > 0 && written < dest_size;
 }
-
+//向 X-Plane 申请实时数据
 static int rref_send_subscription(XPlaneLiveData *live, int subscription_index, const char *dref, int element_index, int element_count, int frequency_hz)
 {
     char buffer[XPLANE_RREF_REQUEST_BYTES];
@@ -396,7 +396,7 @@ static int rref_ensure_subscriptions(XPlaneLiveData *live, const char *drefs[], 
 
     return live->rref_subscribed;
 }
-
+//接收并解析 X-Plane 实时数据
 static void rref_drain_packets(XPlaneLiveData *live)
 {
     char buffer[4096];
@@ -470,7 +470,7 @@ static int rref_find_subscription(const XPlaneLiveData *live, int dref_index, in
 
     return -1;
 }
-
+//把收到的实时数据整理成程序内部可用的数值
 static void rref_copy_values(const XPlaneLiveData *live, float *values[], int dref_count, int sizes[])
 {
     if (live == NULL || values == NULL || sizes == NULL)
@@ -598,7 +598,7 @@ static void apply_frame_to_legacy_modules(
         fmc_data->live_data_active = 1;
     }
 }
-
+//把 X-Plane 的实时数据整理成一帧完整飞行状态
 static int poll_all_data(
     XPlaneLiveData *live,
     PFD_Data *pfd_data,
@@ -1291,7 +1291,7 @@ int xplane_live_data_update(
 {
     return xplane_live_data_update_internal(live, pfd_data, nd_data, eicas_data, systems_data, fmc_data, NULL, delta_time, 1, 0);
 }
-
+//把 X-Plane 实时数据送进统一数据中心
 int xplane_live_data_update_with_sim_data_center(
     XPlaneLiveData *live,
     PFD_Data *pfd_data,

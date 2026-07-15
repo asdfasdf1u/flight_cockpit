@@ -183,6 +183,85 @@ static void draw_thick_line(SDL_Renderer *renderer, int x1, int y1, int x2, int 
     }
 }
 
+static void plot_aa(SDL_Renderer *renderer, int x, int y, SDL_Color color, float coverage)
+{
+    if (coverage <= 0.0f)
+    {
+        return;
+    }
+    if (coverage > 1.0f)
+    {
+        coverage = 1.0f;
+    }
+
+    SDL_Color c = color;
+    c.a = (Uint8)lrintf((float)color.a * coverage);
+    // 反走样需要保持 alpha 混合，不能强制为 NONE
+    SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, c.a);
+    SDL_RenderDrawPoint(renderer, x, y);
+}
+
+static float frac_part(float value)
+{
+    return value - floorf(value);
+}
+
+static void draw_aa_line(SDL_Renderer *renderer, float x1, float y1, float x2, float y2, SDL_Color color)
+{
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    const int steep = fabsf(y2 - y1) > fabsf(x2 - x1);
+    if (steep)
+    {
+        float temp = x1;
+        x1 = y1;
+        y1 = temp;
+        temp = x2;
+        x2 = y2;
+        y2 = temp;
+    }
+
+    if (x1 > x2)
+    {
+        float temp = x1;
+        x1 = x2;
+        x2 = temp;
+        temp = y1;
+        y1 = y2;
+        y2 = temp;
+    }
+
+    const float dx = x2 - x1;
+    const float dy = y2 - y1;
+    if (fabsf(dx) < 0.001f)
+    {
+        draw_line(renderer, (int)lrintf(steep ? y1 : x1), (int)lrintf(steep ? x1 : y1),
+                  (int)lrintf(steep ? y2 : x2), (int)lrintf(steep ? x2 : y2), color);
+        return;
+    }
+
+    const float gradient = dy / dx;
+    float y = y1 + gradient * (ceilf(x1) - x1);
+    const int start_x = (int)ceilf(x1);
+    const int end_x = (int)floorf(x2);
+
+    for (int x = start_x; x <= end_x; ++x)
+    {
+        const int yi = (int)floorf(y);
+        const float frac = frac_part(y);
+        if (steep)
+        {
+            plot_aa(renderer, yi, x, color, 1.0f - frac);
+            plot_aa(renderer, yi + 1, x, color, frac);
+        }
+        else
+        {
+            plot_aa(renderer, x, yi, color, 1.0f - frac);
+            plot_aa(renderer, x, yi + 1, color, frac);
+        }
+        y += gradient;
+    }
+}
+
 static void draw_smooth_line(SDL_Renderer *renderer, int x1, int y1, int x2, int y2, int thickness, SDL_Color color)
 {
     // 统一使用非反走样粗线，保持界面锐利，避免运动时出现虚边
@@ -457,7 +536,7 @@ static void draw_right_pointer(SDL_Renderer *renderer, TTF_Font *font, SDL_Rect 
     draw_smooth_polygon_outline(renderer, inner, 7, 1, COLOR_BLACK);
     draw_text_center(renderer, font, COLOR_WHITE, (SDL_Rect){x + 18, y + 3, 84, 38}, "%05.0f", value);
 }
-
+//速度带动态绘制
 static void draw_speed_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     draw_panel(renderer, rect);
@@ -497,7 +576,7 @@ static void draw_speed_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Da
 
     draw_left_pointer(renderer, font, rect, center_y, data->airspeed_current);
 }
-
+//高度带动态绘制
 static void draw_altitude_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     draw_panel(renderer, rect);
@@ -563,7 +642,7 @@ static SDL_Point attitude_point(SDL_Rect rect, float roll_rad, float pitch_offse
     p.y = (int)lrintf(cy + x * sin_roll + local_y * cos_roll);
     return p;
 }
-
+//姿态仪动态绘制，绘制逻辑：同时处理俯仰偏移、滚转旋转、天空/地面多边形填充和裁剪区域
 static void draw_attitude(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     const int radius = 16;
@@ -801,7 +880,7 @@ static void draw_vertical_speed(SDL_Renderer *renderer, TTF_Font *font, const PF
                          "%.0f", -data->vertical_speed);
     }
 }
-
+//航向盘动态绘制
 static void draw_heading(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     fill_rect(renderer, rect, COLOR_BLACK);
@@ -892,6 +971,8 @@ static void draw_thrust_indicator(SDL_Renderer *renderer, TTF_Font *font, const 
     const int cx = rect.x + rect.w / 2;
     const int cy = rect.y + rect.h / 2 + 4;
     const int radius = rect.w / 2 - 10;
+    const float throttle = clamp_float(data->throttle, 0.0f, 100.0f);
+
     draw_arc(renderer, cx, cy, radius, 225, 450, COLOR_GRAY);
     for (int mark = 0; mark <= 100; mark += 20)
     {

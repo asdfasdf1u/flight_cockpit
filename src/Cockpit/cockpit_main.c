@@ -617,7 +617,7 @@ static void update_scene_texture(
     SDL_RenderSetViewport(renderer, NULL);
     SDL_RenderSetScale(renderer, 1.0f, 1.0f);
 }
-
+//把统一数据中心的数据转换成 PFD 能直接显示的数据
 static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapshot)
 {
     if (data == NULL || snapshot == NULL)
