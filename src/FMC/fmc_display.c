@@ -432,18 +432,6 @@ static void draw_fmc_softkeys(SDL_Renderer *renderer, TTF_Font *font, const FMC_
     }
 }
 
-static void draw_list_option(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, int x, int y, const char *value, const char *selected_value)
-{
-    if (selected_value != NULL && selected_value[0] != '\0' && strcmp(value, selected_value) == 0)
-    {
-        draw_text(renderer, font, layout, COLOR_WHITE, x, y, "%s <SEL>", value);
-    }
-    else
-    {
-        draw_text(renderer, font, layout, COLOR_WHITE, x, y, "%s", value);
-    }
-}
-
 static const char *airport_display_text(const char *airport)
 {
     return (airport != NULL && airport[0] != '\0') ? airport : "";
@@ -845,23 +833,6 @@ static void draw_hold_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Lay
     draw_text(renderer, font, layout, COLOR_WHITE, 126, 324, "%s", data->hold_leg_time[0] ? data->hold_leg_time : "----");
 
     draw_fmc_softkeys(renderer, font, layout, "", "");
-}
-
-static void draw_status_bar(SDL_Renderer *renderer, const FMC_Layout *layout, int x, int y, int width, int percent)
-{
-    if (percent < 0)
-    {
-        percent = 0;
-    }
-    if (percent > 100)
-    {
-        percent = 100;
-    }
-
-    const SDL_Rect outline = {x, y, width, 12};
-    const SDL_Rect fill = {x + 2, y + 2, (width - 4) * percent / 100, 8};
-    draw_scaled_outline(renderer, layout, &outline, COLOR_DIM);
-    draw_scaled_rect(renderer, layout, &fill, percent >= 80 ? COLOR_TEXT : COLOR_AMBER);
 }
 
 static void draw_status_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)

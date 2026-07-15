@@ -8,7 +8,6 @@
 #define FMC_XPLANE_DEFAULT_IP "127.0.0.1"
 #define FMC_XPLANE_DEFAULT_PORT 49009
 #define FMC_COMMAND_DELAY_MS 60
-#define FMC_SCRATCHPAD_CLEAR_REPEATS 32
 
 int fmc_xplane_probe_connection(void);
 
@@ -322,34 +321,6 @@ void initXpc(XPCSocket xpc)
     g_owns_sock = 0;
     g_plugin_connected = 0;
     fmc_xplane_probe_connection();
-}
-
-static int fmc1_clear_scratchpad(const char *func_name)
-{
-    int flag = 0;
-
-    for (int i = 0; i < FMC_SCRATCHPAD_CLEAR_REPEATS; ++i)
-    {
-        flag = fmc_send_command(FMC1_KEY_CLEAR, func_name);
-        if (flag < 0)
-        {
-            return -1;
-        }
-    }
-
-    flag = fmc_send_command(FMC1_KEY_DELETE, func_name);
-    if (flag < 0)
-    {
-        return -1;
-    }
-
-    flag = fmc_send_command(FMC1_KEY_CLEAR, func_name);
-    if (flag < 0)
-    {
-        return -1;
-    }
-
-    return 0;
 }
 
 static int fmc1_type_text(const char *input_str, const char *func_name)

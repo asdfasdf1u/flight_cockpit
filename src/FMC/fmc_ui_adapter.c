@@ -398,11 +398,6 @@ static int insert_route_point_before_destination(
     return 1;
 }
 
-static int add_route_point(FMC_Data *data, const char *ident)
-{
-    return add_route_point_geo(data, ident, 0.0, 0.0, 0);
-}
-
 static int add_viato_route_point(FMC_Data *data, const char *ident)
 {
     Waypoint *wpt = NULL;

@@ -457,44 +457,6 @@ const char *sim_flight_phase_name(SimFlightPhase phase)
     }
 }
 
-static void set_route_point(SimRoutePoint *point, const char *ident, const char *type, double latitude, double longitude)
-{
-    if (point == NULL)
-    {
-        return;
-    }
-
-    memset(point, 0, sizeof(*point));
-    copy_text(point->ident, sizeof(point->ident), ident);
-    copy_text(point->type, sizeof(point->type), type);
-    copy_text(point->coordinate_source, sizeof(point->coordinate_source), "ROUTE");
-    point->latitude = latitude;
-    point->longitude = longitude;
-    point->altitude = 0.0;
-    point->has_position = 1;
-}
-
-static void init_fallback_route(SimPlannedRoute *route)
-{
-    if (route == NULL)
-    {
-        return;
-    }
-
-    memset(route, 0, sizeof(*route));
-    route->valid = 1;
-    route->source = SIM_ROUTE_SOURCE_FMC_FALLBACK;
-    route->loaded_from_file = 0;
-    route->has_coordinates = 1;
-    route->active_waypoint_index = 1;
-    copy_text(route->origin, sizeof(route->origin), "KSEA");
-    copy_text(route->destination, sizeof(route->destination), "KBFI");
-    copy_text(route->source_path, sizeof(route->source_path), "fallback");
-    route->point_count = 2;
-    set_route_point(&route->points[0], "KSEA", "AIRPORT", 47.448900, -122.309400);
-    set_route_point(&route->points[1], "KBFI", "AIRPORT", 47.540100, -122.309400);
-}
-
 static void init_planned_route(SimDataCenter *center)
 {
     if (center == NULL)

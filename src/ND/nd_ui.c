@@ -546,55 +546,6 @@ static int nd_project_point_to_screen(
     return rect_contains_point_margin(&clip, *x, *y, ND_SYMBOL_MARGIN);
 }
 
-static int nd_project_latlon_to_screen(
-    const ND_Layout *layout,
-    const ND_Data *data,
-    double latitude,
-    double longitude,
-    int *x,
-    int *y)
-{
-    if (layout == NULL || data == NULL || x == NULL || y == NULL)
-    {
-        return 0;
-    }
-
-    const float range_nm = nd_map_range_nm(data);
-    if (range_nm <= 0.1f)
-    {
-        return 0;
-    }
-
-    const float aircraft_lat_rad = (float)data->latitude * ND_DEG_TO_RAD;
-    const float lon_scale = cosf(aircraft_lat_rad);
-    const double delta_lat = latitude - data->latitude;
-    const double delta_lon = longitude - data->longitude;
-    const float north_nm = (float)(delta_lat * 60.0);
-    const float east_nm = (float)(delta_lon * 60.0 * (double)lon_scale);
-    const float distance_nm = sqrtf(north_nm * north_nm + east_nm * east_nm);
-    if (distance_nm > range_nm)
-    {
-        return 0;
-    }
-
-    const float bearing = atan2f(east_nm, north_nm) / ND_DEG_TO_RAD;
-    const float relative_bearing = normalize_signed_degrees(bearing - data->track);
-    if (relative_bearing < -ND_MAP_FORWARD_SECTOR_DEG || relative_bearing > ND_MAP_FORWARD_SECTOR_DEG)
-    {
-        return 0;
-    }
-
-    const float relative_rad = relative_bearing * ND_DEG_TO_RAD;
-    const float distance_ratio = distance_nm / range_nm;
-    const float map_radius = nd_map_projection_radius(layout);
-
-    *x = layout->center_x + (int)(sinf(relative_rad) * distance_ratio * map_radius);
-    *y = layout->aircraft_y - (int)(cosf(relative_rad) * distance_ratio * map_radius);
-
-    const SDL_Rect clip = nd_map_clip_rect(layout);
-    return rect_contains_point_margin(&clip, *x, *y, ND_SYMBOL_MARGIN);
-}
-
 static void draw_waypoint_triangle(SDL_Renderer *renderer, int x, int y, SDL_Color color)
 {
     set_color(renderer, color);
