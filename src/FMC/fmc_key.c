@@ -119,14 +119,14 @@ int fmc_buttons_load(void)
     set_rect_button(index++, FMC_BUTTON_CRZ, 318, 477, FUNCTION_WIDTH, FUNCTION_HEIGHT, "CRZ", '\0', FMC_PAGE_CRUISE, FMC_LSK_NONE, action_page);
     set_rect_button(index++, FMC_BUTTON_DES, 401, 477, FUNCTION_WIDTH, FUNCTION_HEIGHT, "DES", '\0', FMC_PAGE_DESCENT, FMC_LSK_NONE, action_page);
 
-    set_rect_button(index++, FMC_BUTTON_DIR_INTC, 69, 536, FUNCTION_WIDTH, FUNCTION_HEIGHT, "DIR INTC", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, NULL);
+    set_rect_button(index++, FMC_BUTTON_DIR_INTC, 69, 536, FUNCTION_WIDTH, FUNCTION_HEIGHT, "DIR INTC", '\0', FMC_PAGE_DIR_INTC, FMC_LSK_NONE, action_page);
     set_rect_button(index++, FMC_BUTTON_LEGS, 153, 536, FUNCTION_WIDTH, FUNCTION_HEIGHT, "LEGS", '\0', FMC_PAGE_LEGS, FMC_LSK_NONE, action_page);
     set_rect_button(index++, FMC_BUTTON_DEP_ARR, 235, 536, FUNCTION_WIDTH, FUNCTION_HEIGHT, "DEP ARR", '\0', FMC_PAGE_DEP_ARR, FMC_LSK_NONE, action_page);
     set_rect_button(index++, FMC_BUTTON_HOLD, 318, 536, FUNCTION_WIDTH, FUNCTION_HEIGHT, "HOLD", '\0', FMC_PAGE_HOLD, FMC_LSK_NONE, action_page);
-    set_rect_button(index++, FMC_BUTTON_STATUS, 401, 536, FUNCTION_WIDTH, FUNCTION_HEIGHT, "PROG", '\0', FMC_PAGE_STATUS, FMC_LSK_NONE, action_page);
+    set_rect_button(index++, FMC_BUTTON_STATUS, 401, 536, FUNCTION_WIDTH, FUNCTION_HEIGHT, "PROG", '\0', FMC_PAGE_PROG, FMC_LSK_NONE, action_page);
 
-    set_rect_button(index++, FMC_BUTTON_FIX, 69, 595, FUNCTION_WIDTH, FUNCTION_HEIGHT, "FIX", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, NULL);
-    set_rect_button(index++, FMC_BUTTON_NAV_RAD, 153, 595, FUNCTION_WIDTH, FUNCTION_HEIGHT, "NAV RAD", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, NULL);
+    set_rect_button(index++, FMC_BUTTON_FIX, 69, 595, FUNCTION_WIDTH, FUNCTION_HEIGHT, "FIX", '\0', FMC_PAGE_FIX, FMC_LSK_NONE, action_page);
+    set_rect_button(index++, FMC_BUTTON_NAV_RAD, 153, 595, FUNCTION_WIDTH, FUNCTION_HEIGHT, "NAV RAD", '\0', FMC_PAGE_NAV_RAD, FMC_LSK_NONE, action_page);
 
     set_rect_button(index++, FMC_BUTTON_PREV_PAGE, 69, 655, FUNCTION_WIDTH, FUNCTION_HEIGHT, "PREV PAGE", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, action_prev_page);
     set_rect_button(index++, FMC_BUTTON_NEXT_PAGE, 153, 655, FUNCTION_WIDTH, FUNCTION_HEIGHT, "NEXT PAGE", '\0', FMC_PAGE_INDEX, FMC_LSK_NONE, action_next_page);
@@ -408,6 +408,28 @@ static void action_lsk(FMC_Data *data, const FMC_Button *button)
         else if (button->line_select == FMC_LSK_R6)
         {
             snprintf(data->message, sizeof(data->message), "DATABASE NOT AVAIL");
+        }
+    }
+
+    if (data->current_page == FMC_PAGE_PROG)
+    {
+        if (button->line_select == FMC_LSK_L6)
+        {
+            fmc_data_set_page(data, FMC_PAGE_HOME);
+        }
+        else if (button->line_select == FMC_LSK_R6)
+        {
+            fmc_data_set_page(data, FMC_PAGE_ROUTE);
+        }
+    }
+
+    if (data->current_page == FMC_PAGE_DIR_INTC ||
+        data->current_page == FMC_PAGE_FIX ||
+        data->current_page == FMC_PAGE_NAV_RAD)
+    {
+        if (button->line_select == FMC_LSK_L6)
+        {
+            fmc_data_set_page(data, FMC_PAGE_HOME);
         }
     }
 }

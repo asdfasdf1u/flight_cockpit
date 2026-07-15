@@ -994,21 +994,98 @@ static void draw_status_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_L
     draw_fmc_softkeys(renderer, font, layout, "<INDEX", "DATABASE>");
 }
 
+static void draw_prog_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
+{
+    char route_text[2 * FMC_TEXT_LEN + 2] = {0};
+    char next_text[FMC_TEXT_LEN] = "----";
+    char gs_text[24];
+    char alt_text[24];
+    char fuel_text[24];
+
+    if (data != NULL)
+    {
+        format_route_display_text(data, route_text, sizeof(route_text));
+        if (data->route_count > 0)
+        {
+            int index = data->active_waypoint_index;
+            if (index < 0)
+            {
+                index = 0;
+            }
+            if (index >= data->route_count)
+            {
+                index = data->route_count - 1;
+            }
+            snprintf(next_text, sizeof(next_text), "%s", data->route_points[index][0] != '\0' ? data->route_points[index] : "----");
+        }
+    }
+
+    snprintf(gs_text, sizeof(gs_text), "%.0f KT", data != NULL && data->current_ground_speed > 0.0f ? data->current_ground_speed : 0.0f);
+    snprintf(alt_text, sizeof(alt_text), "%.0f FT", data != NULL && data->current_altitude_ft > 0.0f ? data->current_altitude_ft : 0.0f);
+    snprintf(fuel_text, sizeof(fuel_text), "%.0f KG", data != NULL && data->current_fuel_kg > 0.0f ? data->current_fuel_kg : 0.0f);
+
+    draw_fmc_header(renderer, font, layout, "PROGRESS", data != NULL && data->route_mod_pending ? "MOD FPLN" : "ACT FPLN", "1/1");
+    draw_screen_lr_text(renderer, font, layout, 0, 0, "ROUTE", route_text[0] != '\0' ? route_text : "----");
+    draw_screen_lr_text(renderer, font, layout, 1, 0, "NEXT WPT", next_text);
+    draw_screen_lr_text(renderer, font, layout, 0, 1, "GROUND SPD", gs_text);
+    draw_screen_lr_text(renderer, font, layout, 1, 1, "ALTITUDE", alt_text);
+    draw_screen_lr_text(renderer, font, layout, 0, 2, "FUEL", fuel_text);
+    draw_screen_lr_text(renderer, font, layout, 1, 2, "ETA", "--:--");
+    draw_fmc_softkeys(renderer, font, layout, "<INDEX", "RTE>");
+}
+
+static void draw_dir_intc_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
+{
+    (void)data;
+    draw_fmc_header(renderer, font, layout, "DIR INTC", "ACT FPLN", "1/1");
+    draw_screen_lr_text(renderer, font, layout, 0, 0, "DIRECT TO", "----");
+    draw_screen_lr_text(renderer, font, layout, 1, 0, "INTC CRS", "----");
+    draw_screen_lr_text(renderer, font, layout, 0, 1, "WAYPOINT", "----");
+    draw_screen_lr_text(renderer, font, layout, 1, 1, "DISTANCE", "----");
+    draw_fmc_softkeys(renderer, font, layout, "<INDEX", "");
+}
+
+static void draw_fix_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
+{
+    (void)data;
+    draw_fmc_header(renderer, font, layout, "FIX INFO", "ACT FPLN", "1/1");
+    draw_screen_lr_text(renderer, font, layout, 0, 0, "FIX", "----");
+    draw_screen_lr_text(renderer, font, layout, 1, 0, "ABEAM", "----");
+    draw_screen_lr_text(renderer, font, layout, 0, 1, "RADIAL", "----");
+    draw_screen_lr_text(renderer, font, layout, 1, 1, "DIST", "----");
+    draw_fmc_softkeys(renderer, font, layout, "<INDEX", "");
+}
+
+static void draw_nav_rad_page(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data)
+{
+    (void)data;
+    draw_fmc_header(renderer, font, layout, "NAV RADIO", "ACT FPLN", "1/1");
+    draw_screen_lr_text(renderer, font, layout, 0, 0, "VOR L", "----");
+    draw_screen_lr_text(renderer, font, layout, 1, 0, "VOR R", "----");
+    draw_screen_lr_text(renderer, font, layout, 0, 1, "ILS", "----");
+    draw_screen_lr_text(renderer, font, layout, 1, 1, "CRS", "----");
+    draw_fmc_softkeys(renderer, font, layout, "<INDEX", "");
+}
+
 typedef void (*FMC_PageRenderFn)(SDL_Renderer *renderer, TTF_Font *font, const FMC_Layout *layout, const FMC_Data *data);
 
 static FMC_PageRenderFn page_renderer(FMC_Page page)
 {
     static const FMC_PageRenderFn renderers[FMC_PAGE_COUNT] = {
-        draw_home_page,
-        draw_route_page,
-        draw_dep_arr_page,
-        draw_perf_page,
-        draw_climb_page,
-        draw_cruise_page,
-        draw_descent_page,
-        draw_legs_page,
-        draw_hold_page,
-        draw_status_page};
+        [FMC_PAGE_HOME] = draw_home_page,
+        [FMC_PAGE_ROUTE] = draw_route_page,
+        [FMC_PAGE_DEP_ARR] = draw_dep_arr_page,
+        [FMC_PAGE_PERF] = draw_perf_page,
+        [FMC_PAGE_CLIMB] = draw_climb_page,
+        [FMC_PAGE_CRUISE] = draw_cruise_page,
+        [FMC_PAGE_DESCENT] = draw_descent_page,
+        [FMC_PAGE_LEGS] = draw_legs_page,
+        [FMC_PAGE_HOLD] = draw_hold_page,
+        [FMC_PAGE_PROG] = draw_prog_page,
+        [FMC_PAGE_STATUS] = draw_status_page,
+        [FMC_PAGE_DIR_INTC] = draw_dir_intc_page,
+        [FMC_PAGE_FIX] = draw_fix_page,
+        [FMC_PAGE_NAV_RAD] = draw_nav_rad_page};
 
     if (page < FMC_PAGE_HOME || page >= FMC_PAGE_COUNT || renderers[page] == NULL)
     {
