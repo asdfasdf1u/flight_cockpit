@@ -11,6 +11,13 @@
 #define MAX_VIATO_NUM 20
 #endif
 
+#define FMC_TGT_IAS_MIN 100
+#define FMC_TGT_IAS_MAX 399
+#define FMC_TGT_MACH_MIN 40
+#define FMC_TGT_MACH_MAX 95
+#define FMC_SPD_ALT_LIMIT_ALT_MIN 1000
+#define FMC_SPD_ALT_LIMIT_ALT_MAX 99990
+
 // AVL树树根
 AirportAVLNode *airport_avl_root = NULL;
 WaypointAVLNode *waypoint_avl_root = NULL;
@@ -712,10 +719,10 @@ int setSpdAltLimit(const char *spd_alt_str, SpdAltLimit *spd_alt_limit) {
 
     int speed = 0;
     int altitude = 0;
-    if (!is_string_in_range(speed_str, 100, 399, &speed)) {
+    if (!is_string_in_range(speed_str, FMC_TGT_IAS_MIN, FMC_TGT_IAS_MAX, &speed)) {
         return -2;
     }
-    if (!is_string_in_range(altitude_str, 1000, 99990, &altitude)) {
+    if (!is_string_in_range(altitude_str, FMC_SPD_ALT_LIMIT_ALT_MIN, FMC_SPD_ALT_LIMIT_ALT_MAX, &altitude)) {
         return -3;
     }
 
@@ -727,27 +734,55 @@ int setSpdAltLimit(const char *spd_alt_str, SpdAltLimit *spd_alt_limit) {
 
 // 设置目标速度
 int setTgtSpeed(char *speed, TgtSpeed *target_speed) {
+    char speed_part[16] = {0};
+    const char *mach_part = NULL;
+    char *slash_pos = NULL;
+
     if (speed == NULL || target_speed == NULL) {
         return -1;
     }
 
-    if (speed[0] == '/' && speed[1] == '.') {
+    slash_pos = strchr(speed, '/');
+    if (slash_pos != NULL) {
+        int spd = 0;
         int mach = 0;
-        if (!is_string_in_range(speed + 2, 40, 95, &mach)) {
-            return -3;
+        int changed = 0;
+
+        if (slash_pos > speed) {
+            int speed_len = slash_pos - speed;
+            if (speed_len >= (int)sizeof(speed_part)) {
+                return -2;
+            }
+            strncpy(speed_part, speed, speed_len);
+            speed_part[speed_len] = '\0';
+            if (!is_string_in_range(speed_part, FMC_TGT_IAS_MIN, FMC_TGT_IAS_MAX, &spd)) {
+                return -2;
+            }
+            target_speed->speed1 = spd;
+            changed = 1;
         }
-        target_speed->speed2 = mach;
-        return 2;
+
+        mach_part = slash_pos + 1;
+        if (mach_part[0] == '.') {
+            mach_part++;
+        }
+        if (mach_part[0] != '\0') {
+            if (!is_string_in_range(mach_part, FMC_TGT_MACH_MIN, FMC_TGT_MACH_MAX, &mach)) {
+                return -3;
+            }
+            target_speed->speed2 = mach;
+            changed = 1;
+        }
+
+        return changed ? 3 : -1;
     } else {
         int spd = 0;
-        if (!is_string_in_range(speed, 100, 399, &spd)) {
+        if (!is_string_in_range(speed, FMC_TGT_IAS_MIN, FMC_TGT_IAS_MAX, &spd)) {
             return -2;
         }
         target_speed->speed1 = spd;
         return 1;
     }
-
-    return 0;
 }
 
 // 添加元素AAA
@@ -876,6 +911,108 @@ void init_airport_data(void) {
     add_relation("ZUCK", "RW21", TYPE_RUNWAY, "GOVSA 1X", TYPE_TAKEOFF_PROC);
     add_relation("ZUCK", "RW21", TYPE_RUNWAY, "IDLUN 1X", TYPE_TAKEOFF_PROC);
     add_relation("ZUCK", "RW21", TYPE_RUNWAY, "NILOM 1X", TYPE_TAKEOFF_PROC);
+
+    // 初始化ZBAA（北京首都）机场元素
+    add_element("RW01", TYPE_RUNWAY, "ZBAA");
+    add_element("RW19", TYPE_RUNWAY, "ZBAA");
+    add_element("RW18L", TYPE_RUNWAY, "ZBAA");
+    add_element("RW36R", TYPE_RUNWAY, "ZBAA");
+    add_element("RW18R", TYPE_RUNWAY, "ZBAA");
+    add_element("RW36L", TYPE_RUNWAY, "ZBAA");
+    add_element("BTO 1D", TYPE_TAKEOFF_PROC, "ZBAA");
+    add_element("DUMAP 1D", TYPE_TAKEOFF_PROC, "ZBAA");
+    add_element("RENOB 1D", TYPE_TAKEOFF_PROC, "ZBAA");
+    add_element("VYK 1D", TYPE_TAKEOFF_PROC, "ZBAA");
+    add_element("YV 1D", TYPE_TAKEOFF_PROC, "ZBAA");
+    add_element("NIXAL 1D", TYPE_TAKEOFF_PROC, "ZBAA");
+    add_element("BTO", TYPE_WAYPOINT, "ZBAA");
+    add_element("DUMAP", TYPE_WAYPOINT, "ZBAA");
+    add_element("RENOB", TYPE_WAYPOINT, "ZBAA");
+    add_element("VYK", TYPE_WAYPOINT, "ZBAA");
+    add_element("YV", TYPE_WAYPOINT, "ZBAA");
+    add_element("NIXAL", TYPE_WAYPOINT, "ZBAA");
+
+    // 初始化关联关系（ZBAA跑道与程序）
+    add_relation("ZBAA", "RW01", TYPE_RUNWAY, "BTO 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW01", TYPE_RUNWAY, "DUMAP 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW19", TYPE_RUNWAY, "RENOB 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW19", TYPE_RUNWAY, "VYK 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW18L", TYPE_RUNWAY, "BTO 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW18L", TYPE_RUNWAY, "YV 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW36R", TYPE_RUNWAY, "DUMAP 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW36R", TYPE_RUNWAY, "NIXAL 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW18R", TYPE_RUNWAY, "RENOB 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW18R", TYPE_RUNWAY, "YV 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW36L", TYPE_RUNWAY, "VYK 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZBAA", "RW36L", TYPE_RUNWAY, "NIXAL 1D", TYPE_TAKEOFF_PROC);
+
+    // 初始化关联关系（ZBAA跑道与过渡点）
+    add_relation("ZBAA", "RW01", TYPE_RUNWAY, "BTO", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW01", TYPE_RUNWAY, "DUMAP", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW19", TYPE_RUNWAY, "RENOB", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW19", TYPE_RUNWAY, "VYK", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW18L", TYPE_RUNWAY, "BTO", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW18L", TYPE_RUNWAY, "YV", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW36R", TYPE_RUNWAY, "DUMAP", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW36R", TYPE_RUNWAY, "NIXAL", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW18R", TYPE_RUNWAY, "RENOB", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW18R", TYPE_RUNWAY, "YV", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW36L", TYPE_RUNWAY, "VYK", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RW36L", TYPE_RUNWAY, "NIXAL", TYPE_WAYPOINT);
+
+    // 初始化关联关系（ZBAA程序与过渡点）
+    add_relation("ZBAA", "BTO 1D", TYPE_TAKEOFF_PROC, "BTO", TYPE_WAYPOINT);
+    add_relation("ZBAA", "DUMAP 1D", TYPE_TAKEOFF_PROC, "DUMAP", TYPE_WAYPOINT);
+    add_relation("ZBAA", "RENOB 1D", TYPE_TAKEOFF_PROC, "RENOB", TYPE_WAYPOINT);
+    add_relation("ZBAA", "VYK 1D", TYPE_TAKEOFF_PROC, "VYK", TYPE_WAYPOINT);
+    add_relation("ZBAA", "YV 1D", TYPE_TAKEOFF_PROC, "YV", TYPE_WAYPOINT);
+    add_relation("ZBAA", "NIXAL 1D", TYPE_TAKEOFF_PROC, "NIXAL", TYPE_WAYPOINT);
+
+    // 初始化ZHCC（郑州新郑）机场元素
+    add_element("RW12L", TYPE_RUNWAY, "ZHCC");
+    add_element("RW12R", TYPE_RUNWAY, "ZHCC");
+    add_element("RW30L", TYPE_RUNWAY, "ZHCC");
+    add_element("RW30R", TYPE_RUNWAY, "ZHCC");
+    add_element("CGO 1D", TYPE_TAKEOFF_PROC, "ZHCC");
+    add_element("GOBIN 1D", TYPE_TAKEOFF_PROC, "ZHCC");
+    add_element("LKO 1D", TYPE_TAKEOFF_PROC, "ZHCC");
+    add_element("SOSIK 1D", TYPE_TAKEOFF_PROC, "ZHCC");
+    add_element("TYN 1D", TYPE_TAKEOFF_PROC, "ZHCC");
+    add_element("PIMOL 1D", TYPE_TAKEOFF_PROC, "ZHCC");
+    add_element("CGO", TYPE_WAYPOINT, "ZHCC");
+    add_element("GOBIN", TYPE_WAYPOINT, "ZHCC");
+    add_element("LKO", TYPE_WAYPOINT, "ZHCC");
+    add_element("SOSIK", TYPE_WAYPOINT, "ZHCC");
+    add_element("TYN", TYPE_WAYPOINT, "ZHCC");
+    add_element("PIMOL", TYPE_WAYPOINT, "ZHCC");
+
+    // 初始化关联关系（ZHCC跑道与程序）
+    add_relation("ZHCC", "RW12L", TYPE_RUNWAY, "CGO 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZHCC", "RW12L", TYPE_RUNWAY, "GOBIN 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZHCC", "RW12R", TYPE_RUNWAY, "LKO 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZHCC", "RW12R", TYPE_RUNWAY, "SOSIK 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZHCC", "RW30L", TYPE_RUNWAY, "TYN 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZHCC", "RW30L", TYPE_RUNWAY, "PIMOL 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZHCC", "RW30R", TYPE_RUNWAY, "CGO 1D", TYPE_TAKEOFF_PROC);
+    add_relation("ZHCC", "RW30R", TYPE_RUNWAY, "SOSIK 1D", TYPE_TAKEOFF_PROC);
+
+    // 初始化关联关系（ZHCC跑道与过渡点）
+    add_relation("ZHCC", "RW12L", TYPE_RUNWAY, "CGO", TYPE_WAYPOINT);
+    add_relation("ZHCC", "RW12L", TYPE_RUNWAY, "GOBIN", TYPE_WAYPOINT);
+    add_relation("ZHCC", "RW12R", TYPE_RUNWAY, "LKO", TYPE_WAYPOINT);
+    add_relation("ZHCC", "RW12R", TYPE_RUNWAY, "SOSIK", TYPE_WAYPOINT);
+    add_relation("ZHCC", "RW30L", TYPE_RUNWAY, "TYN", TYPE_WAYPOINT);
+    add_relation("ZHCC", "RW30L", TYPE_RUNWAY, "PIMOL", TYPE_WAYPOINT);
+    add_relation("ZHCC", "RW30R", TYPE_RUNWAY, "CGO", TYPE_WAYPOINT);
+    add_relation("ZHCC", "RW30R", TYPE_RUNWAY, "SOSIK", TYPE_WAYPOINT);
+
+    // 初始化关联关系（ZHCC程序与过渡点）
+    add_relation("ZHCC", "CGO 1D", TYPE_TAKEOFF_PROC, "CGO", TYPE_WAYPOINT);
+    add_relation("ZHCC", "GOBIN 1D", TYPE_TAKEOFF_PROC, "GOBIN", TYPE_WAYPOINT);
+    add_relation("ZHCC", "LKO 1D", TYPE_TAKEOFF_PROC, "LKO", TYPE_WAYPOINT);
+    add_relation("ZHCC", "SOSIK 1D", TYPE_TAKEOFF_PROC, "SOSIK", TYPE_WAYPOINT);
+    add_relation("ZHCC", "TYN 1D", TYPE_TAKEOFF_PROC, "TYN", TYPE_WAYPOINT);
+    add_relation("ZHCC", "PIMOL 1D", TYPE_TAKEOFF_PROC, "PIMOL", TYPE_WAYPOINT);
 }
 
 // 销毁机场数据

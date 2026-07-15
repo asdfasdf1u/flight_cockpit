@@ -41,8 +41,6 @@
 
 #include "../Util/xplane_live_data.h"
 
-int fmc_xplane_send_command(const char *command);
-
 #define COCKPIT_WINDOW_WIDTH 1600
 #define COCKPIT_WINDOW_HEIGHT 900
 #define COCKPIT_TARGET_FRAME_MS 16
@@ -825,7 +823,6 @@ static void handle_fmc_keydown(FMC_Data *data, SDL_Keycode key)
     if (key == SDLK_BACKSPACE)
     {
         fmc_data_backspace(data);
-        fmc_xplane_send_command("sim/FMS/clear");
     }
     else if ((key == SDLK_RETURN || key == SDLK_KP_ENTER) &&
              data->current_page == FMC_PAGE_ROUTE)
@@ -835,17 +832,14 @@ static void handle_fmc_keydown(FMC_Data *data, SDL_Keycode key)
     else if (key == SDLK_F1)
     {
         fmc_data_set_page(data, FMC_PAGE_INDEX);
-        fmc_xplane_send_command("sim/FMS/init");
     }
     else if (key == SDLK_F2)
     {
         fmc_data_set_page(data, FMC_PAGE_ROUTE);
-        fmc_xplane_send_command("sim/FMS/fpln");
     }
     else if (key == SDLK_F3)
     {
         fmc_data_set_page(data, FMC_PAGE_DEP_ARR);
-        fmc_xplane_send_command("sim/FMS/dep_arr");
     }
     else if (key == SDLK_F4)
     {
@@ -854,7 +848,6 @@ static void handle_fmc_keydown(FMC_Data *data, SDL_Keycode key)
     else if (key == SDLK_F5)
     {
         fmc_data_set_page(data, FMC_PAGE_LEGS);
-        fmc_xplane_send_command("sim/FMS/legs");
     }
 }
 
@@ -1088,10 +1081,10 @@ static int handle_cockpit_fmc_panel_button(
             if (state != NULL)
             {
                 state->hovered_button_index = i;
-                state->hovered_button = button->key;
+                state->hovered_button = button->id;
             }
 
-            if (button->key == FMC_BUTTON_EXEC)
+            if (button->id == FMC_BUTTON_EXEC)
             {
                 const int committed = submit_fmc_route_to_sim_center(data, sim_data_center);
                 if (fmc_uses_unified_route != NULL)

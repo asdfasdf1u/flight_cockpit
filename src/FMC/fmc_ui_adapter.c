@@ -12,6 +12,15 @@
 #define MAX_VIATO_NUM 20
 #endif
 
+#define FMC_TRANS_ALT_MIN 100
+#define FMC_TRANS_ALT_MAX 99000
+#define FMC_CRZ_ALT_MIN 100
+#define FMC_CRZ_ALT_MAX 99000
+#define FMC_TRANS_FL_MIN 1
+#define FMC_TRANS_FL_MAX 999
+#define FMC_VPA_MIN 0.0f
+#define FMC_VPA_MAX 90.0f
+
 extern int rte_index;
 extern int dep_arr_index;
 extern int dep_arr_type;
@@ -19,15 +28,6 @@ extern char show_ariport[20];
 
 int is_string_in_range(const char *str, int min_val, int max_val, int *result);
 int is_string_in_range_f(const char *str, float min_val, float max_val, float *result);
-int fmc_xplane_connect_init(const char *xp_ip, unsigned short xp_port);
-void fmc_xplane_connect_shutdown(void);
-int fmc_xplane_connect_is_ready(void);
-int fmc_xplane_connect_is_connected(void);
-int fmc_xplane_set_origin(const char *origin);
-int fmc_xplane_set_destination(const char *destination);
-int fmc_xplane_set_co_route(const char *co_route);
-int fmc_xplane_set_flt_no(const char *flt_no);
-int fmc_xplane_set_exec(void);
 
 #ifdef _WIN32
 #include <direct.h>
@@ -790,13 +790,11 @@ void fmc_data_init(FMC_Data *data)
     init_airport_data();
     load_airport_data();
     load_waypoint_data();
-    fmc_xplane_connect_init(NULL, 0);
 }
 
 void fmc_data_destroy(FMC_Data *data)
 {
     (void)data;
-    fmc_xplane_connect_shutdown();
     destroy_airport_data();
 }
 
@@ -965,43 +963,28 @@ int fmc_data_set_route_field(FMC_Data *data, FMC_RouteField field)
     switch (field)
     {
     case FMC_ROUTE_FIELD_ORIGIN:
-        if (!set_airport_field(data, data->origin, sizeof(data->origin), "ORIGIN"))
+        if (set_airport_field(data, data->origin, sizeof(data->origin), "ORIGIN"))
         {
-            return 0;
+            setOrigin(origin);
+            return 1;
         }
-        if (fmc_xplane_set_origin(data->origin) < 0)
-        {
-            set_text(data->message, sizeof(data->message),
-                     fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
-            return 0;
-        }
-        return 1;
+        return 0;
     case FMC_ROUTE_FIELD_DESTINATION:
-        if (!set_airport_field(data, data->destination, sizeof(data->destination), "DEST"))
+        if (set_airport_field(data, data->destination, sizeof(data->destination), "DEST"))
         {
-            return 0;
+            setDestination(dest);
+            return 1;
         }
-        if (fmc_xplane_set_destination(data->destination) < 0)
-        {
-            set_text(data->message, sizeof(data->message),
-                     fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
-            return 0;
-        }
-        return 1;
+        return 0;
     case FMC_ROUTE_FIELD_COMPANY_ROUTE:
         return set_scratchpad_text(data, data->company_route, sizeof(data->company_route), "CO ROUTE");
     case FMC_ROUTE_FIELD_FLIGHT_NO:
-        if (!set_scratchpad_text(data, data->flight_no, sizeof(data->flight_no), "FLT NO"))
+        if (set_scratchpad_text(data, data->flight_no, sizeof(data->flight_no), "FLT NO"))
         {
-            return 0;
+            setFlt_no(flt_no);
+            return 1;
         }
-        if (fmc_xplane_set_flt_no(data->flight_no) < 0)
-        {
-            set_text(data->message, sizeof(data->message),
-                     fmc_xplane_connect_is_connected() ? "XPLANE SYNC FAIL" : "XPLANE NOT CONNECT");
-            return 0;
-        }
-        return 1;
+        return 0;
     case FMC_ROUTE_FIELD_VIA:
         if (rte_index != 1)
         {
@@ -1091,7 +1074,7 @@ int fmc_data_set_phase_parameter(FMC_Data *data, int field_index)
         }
         if (field_index == 3)
         {
-            if (!is_string_in_range(data->scratchpad, 100, 99000, &trans_alt))
+            if (!is_string_in_range(data->scratchpad, FMC_TRANS_ALT_MIN, FMC_TRANS_ALT_MAX, &trans_alt))
             {
                 return set_phase_invalid(data);
             }
@@ -1110,7 +1093,7 @@ int fmc_data_set_phase_parameter(FMC_Data *data, int field_index)
         }
         if (field_index == 4)
         {
-            if (!is_string_in_range(data->scratchpad, 100, 99000, &crz_alt))
+            if (!is_string_in_range(data->scratchpad, FMC_CRZ_ALT_MIN, FMC_CRZ_ALT_MAX, &crz_alt))
             {
                 return set_phase_invalid(data);
             }
@@ -1133,7 +1116,7 @@ int fmc_data_set_phase_parameter(FMC_Data *data, int field_index)
         }
         if (field_index == 5)
         {
-            if (!is_string_in_range(data->scratchpad, 1, 999, &trans_fl))
+            if (!is_string_in_range(data->scratchpad, FMC_TRANS_FL_MIN, FMC_TRANS_FL_MAX, &trans_fl))
             {
                 return set_phase_invalid(data);
             }
@@ -1144,7 +1127,7 @@ int fmc_data_set_phase_parameter(FMC_Data *data, int field_index)
         }
         if (field_index == 6)
         {
-            if (!is_string_in_range_f(data->scratchpad, 0.0f, 90.0f, &vpa))
+            if (!is_string_in_range_f(data->scratchpad, FMC_VPA_MIN, FMC_VPA_MAX, &vpa))
             {
                 return set_phase_invalid(data);
             }
@@ -1217,6 +1200,7 @@ static void click_dep_arr_left(FMC_Data *data, int index)
         if (index >= start_index && index <= end_index)
         {
             set_text(sda->select_proc_trans, sizeof(sda->select_proc_trans), proc_trans[index - 2]);
+            dep_arr_index = 1;
         }
     }
     else if (strlen(sda->select_proc) > 0 && index == 1)
@@ -1230,8 +1214,10 @@ static void click_dep_arr_left(FMC_Data *data, int index)
         if (truely_selected < proc_count)
         {
             set_text(sda->select_proc, sizeof(sda->select_proc), proc[truely_selected]);
+            sda->select_proc_trans[0] = '\0';
             query_trans_by_proc(show_ariport, sda->select_proc);
             query_runway_by_proc(show_ariport, sda->select_proc);
+            dep_arr_index = 1;
         }
     }
 
@@ -1254,6 +1240,7 @@ static void click_dep_arr_right(FMC_Data *data, int index)
         if (index >= start_index && index <= end_index)
         {
             set_text(sda->select_runway_trans, sizeof(sda->select_runway_trans), runway_trans[index - 2]);
+            dep_arr_index = 1;
         }
     }
     else if (strlen(sda->select_runway) > 0 && index == 1)
@@ -1267,8 +1254,10 @@ static void click_dep_arr_right(FMC_Data *data, int index)
         if (truely_selected < runway_count)
         {
             set_text(sda->select_runway, sizeof(sda->select_runway), runway[truely_selected]);
+            sda->select_runway_trans[0] = '\0';
             query_trans_by_runway(show_ariport, sda->select_runway);
             query_proc_by_runway(show_ariport, sda->select_runway);
+            dep_arr_index = 1;
         }
     }
 
@@ -1881,7 +1870,6 @@ static int fmc_export_route_to_xplane_fms(const FMC_Data *data, char *route_name
 
 static int sync_route_fields_to_xplane_fmc(const FMC_Data *data, const char *fms_route_name)
 {
-    const char *co_route_text = NULL;
     int sent_any = 0;
 
     if (data == NULL)
@@ -1889,61 +1877,35 @@ static int sync_route_fields_to_xplane_fmc(const FMC_Data *data, const char *fms
         return -1;
     }
 
-    if (!fmc_xplane_connect_is_ready())
-    {
-        fmc_xplane_connect_init(NULL, 0);
-    }
-
     if (data->origin[0] != '\0')
     {
-        if (fmc_xplane_set_origin(data->origin) < 0)
-        {
-            return -1;
-        }
+        setOrigin((char *)data->origin);
         sent_any = 1;
     }
 
     if (data->destination[0] != '\0')
     {
-        if (fmc_xplane_set_destination(data->destination) < 0)
-        {
-            return -1;
-        }
-        sent_any = 1;
-    }
-
-    co_route_text = (fms_route_name != NULL && fms_route_name[0] != '\0')
-                        ? fms_route_name
-                        : data->company_route;
-    if (co_route_text != NULL && co_route_text[0] != '\0')
-    {
-        if (fmc_xplane_set_co_route(co_route_text) < 0)
-        {
-            return -1;
-        }
+        setDestination((char *)data->destination);
         sent_any = 1;
     }
 
     if (data->flight_no[0] != '\0')
     {
-        if (fmc_xplane_set_flt_no(data->flight_no) < 0)
-        {
-            return -1;
-        }
+        setFlt_no((char *)data->flight_no);
         sent_any = 1;
-    }
-
-    if (sent_any && fmc_xplane_set_exec() < 0)
-    {
-        return -1;
     }
 
     if (sent_any)
     {
-        printf("FMC Route: synced route fields to X-Plane FMC origin=%s destination=%s co_route=%s flight_no=%s.\n",
+        setExec();
+    }
+
+    if (sent_any)
+    {
+        printf("FMC Route: synced route fields with fmc_connect.c origin=%s destination=%s co_route=%s flight_no=%s.\n",
                data->origin[0] != '\0' ? data->origin : "----",
                data->destination[0] != '\0' ? data->destination : "----",
-               co_route_text != NULL && co_route_text[0] != '\0' ? co_route_text : "----",
+               fms_route_name != NULL && fms_route_name[0] != '\0' ? fms_route_name : "----",
                data->flight_no[0] != '\0' ? data->flight_no : "----");
         fflush(stdout);
     }
@@ -1985,7 +1947,7 @@ int fmc_data_sync_route_to_xplane(FMC_Data *data)
     }
 
     set_text(data->message, sizeof(data->message),
-             fmc_xplane_connect_is_connected() ? "XPLANE SEND FAIL" : "XPLANE NOT CONNECT");
+             "NO ROUTE TO SEND");
     return 0;
 }
 

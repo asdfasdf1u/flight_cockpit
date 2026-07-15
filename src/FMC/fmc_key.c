@@ -6,7 +6,6 @@
 #include <string.h>
 
 extern int rte_index;
-int fmc_xplane_send_command(const char *command);
 
 static void action_page(FMC_Data *data, const FMC_Button *button);
 static void action_lsk(FMC_Data *data, const FMC_Button *button);
@@ -18,6 +17,9 @@ static void action_prev_page(FMC_Data *data, const FMC_Button *button);
 static void action_next_page(FMC_Data *data, const FMC_Button *button);
 static int send_button_to_xplane(const FMC_Button *button);
 static int button_sync_deferred_until_data_success(const FMC_Data *data, const FMC_Button *button);
+static int action_vnav_lsk(FMC_Data *data, FMC_LineSelectKey line_select);
+static int fmc_page_prev_vnav(FMC_Data *data);
+static int fmc_page_next_vnav(FMC_Data *data);
 
 #define SCREEN_WIDTH 48
 #define SCREEN_HEIGHT 36
@@ -42,14 +44,16 @@ static void set_rect_button(int index,
                             FMC_LineSelectKey line_select,
                             FMC_ButtonAction action)
 {
-    fmc_buttons[index].key = id;
-    fmc_buttons[index].shape = FMC_SHAPE_RECT;
+    fmc_buttons[index].id = id;
+    fmc_buttons[index].shape = FMC_BUTTON_SHAPE_RECT;
     fmc_buttons[index].rect.x = x;
     fmc_buttons[index].rect.y = y;
     fmc_buttons[index].rect.w = w;
     fmc_buttons[index].rect.h = h;
+    fmc_buttons[index].center.x = x + w / 2;
+    fmc_buttons[index].center.y = y + h / 2;
+    fmc_buttons[index].radius = 0;
     fmc_buttons[index].label = label;
-    fmc_buttons[index].on_click = NULL;
     fmc_buttons[index].input_char = input_char;
     fmc_buttons[index].page = page;
     fmc_buttons[index].line_select = line_select;
@@ -63,14 +67,16 @@ static void set_circle_button(int index,
                               const char *label,
                               char input_char)
 {
-    fmc_buttons[index].key = FMC_BUTTON_TEXT;
-    fmc_buttons[index].shape = FMC_SHAPE_CIRCLE;
+    fmc_buttons[index].id = FMC_BUTTON_TEXT;
+    fmc_buttons[index].shape = FMC_BUTTON_SHAPE_CIRCLE;
     fmc_buttons[index].rect.x = x;
     fmc_buttons[index].rect.y = y;
     fmc_buttons[index].rect.w = radius;
     fmc_buttons[index].rect.h = radius;
+    fmc_buttons[index].center.x = x;
+    fmc_buttons[index].center.y = y;
+    fmc_buttons[index].radius = radius;
     fmc_buttons[index].label = label;
-    fmc_buttons[index].on_click = NULL;
     fmc_buttons[index].input_char = input_char;
     fmc_buttons[index].page = FMC_PAGE_INDEX;
     fmc_buttons[index].line_select = FMC_LSK_NONE;
@@ -188,6 +194,11 @@ static void action_lsk(FMC_Data *data, const FMC_Button *button)
         return;
     }
 
+    if (action_vnav_lsk(data, button->line_select))
+    {
+        return;
+    }
+
     if (data->current_page == FMC_PAGE_CLIMB)
     {
         if (button->line_select == FMC_LSK_L1)
@@ -266,23 +277,21 @@ static void action_lsk(FMC_Data *data, const FMC_Button *button)
 
     if (data->current_page == FMC_PAGE_HOME)
     {
-        if (button->line_select == FMC_LSK_L1 ||
-            button->line_select == FMC_LSK_R1 ||
-            button->line_select == FMC_LSK_R2)
+        if (button->line_select == FMC_LSK_L1)
         {
-            fmc_data_set_page(data, FMC_PAGE_DEP_ARR);
+            fmc_data_set_page(data, FMC_PAGE_STATUS);
         }
-        else if (button->line_select == FMC_LSK_L3)
+        else if (button->line_select == FMC_LSK_R1)
         {
             fmc_data_set_page(data, FMC_PAGE_ROUTE);
         }
-        else if (button->line_select == FMC_LSK_L4)
+        else if (button->line_select == FMC_LSK_R2)
         {
-            fmc_data_set_page(data, FMC_PAGE_PERF);
+            snprintf(data->message, sizeof(data->message), "DATABASE NOT AVAIL");
         }
-        else if (button->line_select == FMC_LSK_R4)
+        else if (button->line_select == FMC_LSK_R5)
         {
-            fmc_data_set_page(data, FMC_PAGE_LEGS);
+            snprintf(data->message, sizeof(data->message), "ARR DATA NOT AVAIL");
         }
         return;
     }
@@ -390,10 +399,62 @@ static void action_lsk(FMC_Data *data, const FMC_Button *button)
         return;
     }
 
-    if (data->current_page == FMC_PAGE_STATUS && button->line_select == FMC_LSK_L6)
+    if (data->current_page == FMC_PAGE_STATUS)
     {
-        fmc_data_clear_scratchpad(data);
+        if (button->line_select == FMC_LSK_L6)
+        {
+            fmc_data_set_page(data, FMC_PAGE_HOME);
+        }
+        else if (button->line_select == FMC_LSK_R6)
+        {
+            snprintf(data->message, sizeof(data->message), "DATABASE NOT AVAIL");
+        }
     }
+}
+
+static int action_vnav_lsk(FMC_Data *data, FMC_LineSelectKey line_select)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    if (data->current_page == FMC_PAGE_CLIMB)
+    {
+        if (line_select == FMC_LSK_L6)
+        {
+            fmc_data_set_page(data, FMC_PAGE_ROUTE);
+            return 1;
+        }
+        if (line_select == FMC_LSK_R6)
+        {
+            fmc_data_set_page(data, FMC_PAGE_CRUISE);
+            return 1;
+        }
+    }
+    else if (data->current_page == FMC_PAGE_CRUISE)
+    {
+        if (line_select == FMC_LSK_L6)
+        {
+            fmc_data_set_page(data, FMC_PAGE_CLIMB);
+            return 1;
+        }
+        if (line_select == FMC_LSK_R6)
+        {
+            fmc_data_set_page(data, FMC_PAGE_DESCENT);
+            return 1;
+        }
+    }
+    else if (data->current_page == FMC_PAGE_DESCENT)
+    {
+        if (line_select == FMC_LSK_L6)
+        {
+            fmc_data_set_page(data, FMC_PAGE_CRUISE);
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 static void action_text(FMC_Data *data, const FMC_Button *button)
@@ -445,7 +506,7 @@ static const char *xplane_command_for_button(const FMC_Button *button)
         return NULL;
     }
 
-    switch (button->key)
+    switch (button->id)
     {
     case FMC_BUTTON_INIT_REF:
         return "sim/FMS/init";
@@ -513,25 +574,8 @@ static const char *xplane_command_for_button(const FMC_Button *button)
 
 static int send_button_to_xplane(const FMC_Button *button)
 {
-    const char *command = NULL;
-
-    if (button == NULL)
-    {
-        return 0;
-    }
-
-    if (button->key == FMC_BUTTON_TEXT)
-    {
-        return 0;
-    }
-
-    command = xplane_command_for_button(button);
-    if (command == NULL)
-    {
-        return 0;
-    }
-
-    return fmc_xplane_send_command(command);
+    (void)button;
+    return 0;
 }
 
 static int button_sync_deferred_until_data_success(const FMC_Data *data, const FMC_Button *button)
@@ -550,6 +594,10 @@ static void action_prev_page(FMC_Data *data, const FMC_Button *button)
 {
     (void)button;
     printf("FMC event: action_prev_page\n");
+    if (fmc_page_prev_vnav(data))
+    {
+        return;
+    }
     if (data != NULL && data->current_page == FMC_PAGE_ROUTE)
     {
         fmc_data_route_prev_page(data);
@@ -564,6 +612,10 @@ static void action_next_page(FMC_Data *data, const FMC_Button *button)
 {
     (void)button;
     printf("FMC event: action_next_page\n");
+    if (fmc_page_next_vnav(data))
+    {
+        return;
+    }
     if (data != NULL && data->current_page == FMC_PAGE_ROUTE)
     {
         fmc_data_route_next_page(data);
@@ -572,6 +624,48 @@ static void action_next_page(FMC_Data *data, const FMC_Button *button)
     {
         fmc_data_dep_arr_next_page(data);
     }
+}
+
+static int fmc_page_prev_vnav(FMC_Data *data)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    if (data->current_page == FMC_PAGE_CRUISE)
+    {
+        fmc_data_set_page(data, FMC_PAGE_CLIMB);
+        return 1;
+    }
+    if (data->current_page == FMC_PAGE_DESCENT)
+    {
+        fmc_data_set_page(data, FMC_PAGE_CRUISE);
+        return 1;
+    }
+
+    return data->current_page == FMC_PAGE_CLIMB;
+}
+
+static int fmc_page_next_vnav(FMC_Data *data)
+{
+    if (data == NULL)
+    {
+        return 0;
+    }
+
+    if (data->current_page == FMC_PAGE_CLIMB)
+    {
+        fmc_data_set_page(data, FMC_PAGE_CRUISE);
+        return 1;
+    }
+    if (data->current_page == FMC_PAGE_CRUISE)
+    {
+        fmc_data_set_page(data, FMC_PAGE_DESCENT);
+        return 1;
+    }
+
+    return data->current_page == FMC_PAGE_DESCENT;
 }
 
 
@@ -616,12 +710,12 @@ const FMC_Button *fmc_key_button_at(int index)
 
 int fmc_key_button_contains_base_point(const FMC_Button *button, int x, int y)
 {
-    if (button == NULL || button->key == FMC_BUTTON_NONE)
+    if (button == NULL || button->id == FMC_BUTTON_NONE)
     {
         return 0;
     }
 
-    if (button->shape == FMC_SHAPE_CIRCLE)
+    if (button->shape == FMC_BUTTON_SHAPE_CIRCLE)
     {
         return point_in_circle(x, y, &button->rect);
     }
@@ -641,7 +735,7 @@ void fmc_key_activate_button(FMC_Data *data, const FMC_Button *button)
         return;
     }
 
-    if (button->key != FMC_BUTTON_EXEC &&
+    if (button->id != FMC_BUTTON_EXEC &&
         !button_sync_deferred_until_data_success(data, button))
     {
         send_button_to_xplane(button);

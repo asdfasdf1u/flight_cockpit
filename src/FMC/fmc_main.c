@@ -10,8 +10,6 @@
 #include "fmc_connect.h"
 #include "../Util/SDL_Util.h"
 
-int fmc_xplane_send_command(const char *command);
-
 #define LOGIC_WIDTH 638
 #define LOGIC_HEIGHT 998 // FMC 是竖长形的!
 #define FMC_TARGET_FRAME_MS 16
@@ -189,7 +187,6 @@ int fmc_main_run(void)
                 else if (event.key.keysym.sym == SDLK_BACKSPACE)
                 {
                     fmc_data_backspace(&data);
-                    fmc_xplane_send_command("sim/FMS/clear");
                 }
                 else if ((event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER) &&
                          data.current_page == FMC_PAGE_ROUTE)
@@ -199,42 +196,34 @@ int fmc_main_run(void)
                 else if (event.key.keysym.sym == SDLK_F1)
                 {
                     fmc_data_set_page(&data, FMC_PAGE_INDEX);
-                    fmc_xplane_send_command("sim/FMS/init");
                 }
                 else if (event.key.keysym.sym == SDLK_F2)
                 {
                     fmc_data_set_page(&data, FMC_PAGE_ROUTE);
-                    fmc_xplane_send_command("sim/FMS/fpln");
                 }
                 else if (event.key.keysym.sym == SDLK_F3)
                 {
                     fmc_data_set_page(&data, FMC_PAGE_DEP_ARR);
-                    fmc_xplane_send_command("sim/FMS/dep_arr");
                 }
                 else if (event.key.keysym.sym == SDLK_F4)
                 {
                     fmc_data_set_page(&data, FMC_PAGE_CLIMB);
-                    fmc_xplane_send_command("sim/FMS/clb");
                 }
                 else if (event.key.keysym.sym == SDLK_F5)
                 {
                     fmc_data_set_page(&data, FMC_PAGE_CRUISE);
-                    fmc_xplane_send_command("sim/FMS/crz");
                 }
                 else if (event.key.keysym.sym == SDLK_F6)
                 {
                     fmc_data_set_page(&data, FMC_PAGE_DESCENT);
-                    fmc_xplane_send_command("sim/FMS/des");
                 }
                 else if (event.key.keysym.sym == SDLK_F7)
                 {
                     fmc_data_set_page(&data, FMC_PAGE_LEGS);
-                    fmc_xplane_send_command("sim/FMS/legs");
                 }
                 else if (event.key.keysym.sym == SDLK_F8)
                 {
                     fmc_data_set_page(&data, FMC_PAGE_STATUS);
-                    fmc_xplane_send_command("sim/FMS/prog");
                 }
             }
         }
