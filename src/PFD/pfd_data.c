@@ -124,7 +124,7 @@ static void apply_file_sample(PFD_Data *data, const PFD_FileSample *sample)
     snprintf(data->flight_mode, sizeof(data->flight_mode), "%s", "PFD DATA");
 }
 
-static void load_file_samples_once(void)
+static void load_file_samples_once(void)//把本地 PFD 样本数据导入程序
 {
     if (file_load_attempted)
     {
@@ -198,7 +198,7 @@ static void load_file_samples_once(void)
     }
 }
 
-void pfd_data_init(PFD_Data *data)
+void pfd_data_init(PFD_Data *data)//初始化 PFD 数据来源
 {
     if (data == NULL)
     {
@@ -234,7 +234,7 @@ void pfd_data_init(PFD_Data *data)
     }
 }
 
-void pfd_data_update_mock(PFD_Data *data, float delta_time)
+void pfd_data_update_mock(PFD_Data *data, float delta_time)//让 PFD 在没有实时数据时仍然可以动态显示
 {
     if (data == NULL)
     {
