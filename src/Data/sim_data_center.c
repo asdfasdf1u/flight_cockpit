@@ -770,6 +770,14 @@ static void rebuild_xplane_snapshot_from_frame(SimDataCenter *center, const SimX
     snapshot->flaps_level = frame->flaps_level;
     snapshot->parking_brake_on = frame->parking_brake_on;
 
+    /* 同步 X-Plane 原生报警状态（通过 getDREF 获取）。
+     * 这些布尔状态用于 cockpit_alarm 直接驱动 MASTER WARNING / MASTER CAUTION 灯。 */
+    snapshot->xplane_master_warning = frame->xplane_master_warning;
+    snapshot->xplane_master_caution = frame->xplane_master_caution;
+    snapshot->xplane_engine_fire = frame->xplane_engine_fire;
+    snapshot->xplane_stall_warning = frame->xplane_stall_warning;
+    snapshot->xplane_overspeed_warning = frame->xplane_overspeed_warning;
+
     update_warnings(snapshot);
     sim_data_center_update_flight_phase(center);
     alert_manager_update(&center->alert_manager, &center->snapshot);

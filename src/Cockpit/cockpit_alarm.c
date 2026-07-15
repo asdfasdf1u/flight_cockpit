@@ -7,7 +7,7 @@
 #define COCKPIT_ALARM_FLASH_PERIOD_MS 900u
 #define COCKPIT_ALARM_CRASH_FLASH_PERIOD_MS 220u
 #define COCKPIT_ALARM_AUDIO_RATE 44100
-#define COCKPIT_ALARM_CAUTION_TONE_HZ 880
+#define COCKPIT_ALARM_CAUTION_TONE_HZ 400
 #define COCKPIT_ALARM_WARNING_TONE_HZ 1450
 #define COCKPIT_ALARM_STALL_TONE_HZ 115
 #define COCKPIT_ALARM_CAUTION_TONE_MS 280
@@ -264,9 +264,9 @@ static void service_continuous_audio(CockpitAlarmState *state)
         (void)queue_tone(state, COCKPIT_ALARM_WARNING_TONE_HZ, COCKPIT_ALARM_AUDIO_CHUNK_MS, 9500.0f, 1);
     }
     else if (wanted_mode == COCKPIT_ALARM_AUDIO_MASTER_CAUTION &&
-             !state->caution_tone_played &&
              SDL_GetQueuedAudioSize(state->audio_device) < chunk_bytes)
     {
+        /* MASTER CAUTION 使用 400 Hz 低频连续提示音。 */
         state->caution_tone_played = queue_tone(
             state,
             COCKPIT_ALARM_CAUTION_TONE_HZ,
@@ -373,12 +373,15 @@ void cockpit_alarm_update(
     int takeoff_detected)
 {
     char warning_signature[sizeof(state->fire_signature)];
+    char caution_signature[sizeof(state->caution_signature)];
     char stall_signature[sizeof(state->stall_signature)];
     int warning_active = 0;
+    int caution_active = 0;
     int engine_fire_active = 0;
     int crash_active = 0;
     int stall_active = 0;
     int warning_is_new = 0;
+    int caution_is_new = 0;
     int engine_fire_is_new = 0;
     int crash_is_new = 0;
     int stall_is_new = 0;
@@ -392,7 +395,16 @@ void cockpit_alarm_update(
     (void)takeoff_detected;
 
     warning_signature[0] = '\0';
+    caution_signature[0] = '\0';
     stall_signature[0] = '\0';
+
+    /* 黄色 MASTER CAUTION 演示模式：p 键开启后，即使 snapshot 没有 caution 源，
+     * 也应保持黄灯闪烁和提示音，直到 o 键关闭。 */
+    if (state->demo_caution_active)
+    {
+        caution_active = 1;
+        append_signature(caution_signature, sizeof(caution_signature), "FAULT DEMO");
+    }
 
     if (alerts != NULL)
     {
@@ -438,10 +450,40 @@ void cockpit_alarm_update(
                 append_signature(stall_signature, sizeof(stall_signature), warning->text);
             }
         }
+
+        /* X-Plane 原生 MASTER WARNING / MASTER CAUTION 状态直接驱动红黄灯。
+         * 这些状态通过 xplane_live_data 中的 getDREF 从 sim/cockpit/warnings/* 读取。 */
+        if (snapshot->xplane_master_warning)
+        {
+            warning_active = 1;
+            append_signature(warning_signature, sizeof(warning_signature), "X-PLANE MASTER WARNING");
+        }
+        if (snapshot->xplane_master_caution)
+        {
+            caution_active = 1;
+            append_signature(caution_signature, sizeof(caution_signature), "X-PLANE MASTER CAUTION");
+        }
+        if (snapshot->xplane_engine_fire)
+        {
+            warning_active = 1;
+            append_signature(warning_signature, sizeof(warning_signature), "X-PLANE ENGINE FIRE");
+        }
+        if (snapshot->xplane_stall_warning)
+        {
+            stall_active = 1;
+            append_signature(stall_signature, sizeof(stall_signature), "X-PLANE STALL");
+        }
+        if (snapshot->xplane_overspeed_warning)
+        {
+            warning_active = 1;
+            append_signature(warning_signature, sizeof(warning_signature), "X-PLANE OVERSPEED");
+        }
     }
 
     warning_is_new = warning_active &&
                      (!state->fire_active || strcmp(state->fire_signature, warning_signature) != 0);
+    caution_is_new = caution_active &&
+                     (!state->caution_active || strcmp(state->caution_signature, caution_signature) != 0);
     engine_fire_is_new = engine_fire_active && !state->engine_fire_active;
     crash_is_new = crash_active && !state->crash_active;
     stall_is_new = stall_active &&
@@ -450,6 +492,10 @@ void cockpit_alarm_update(
     if (state->fire_active && !warning_active)
     {
         publish_event(state, COCKPIT_ALARM_LEVEL_WARNING, 0, state->fire_signature);
+    }
+    if (state->caution_active && !caution_active)
+    {
+        publish_event(state, COCKPIT_ALARM_LEVEL_CAUTION, 0, state->caution_signature);
     }
     if (state->stall_active && !stall_active)
     {
@@ -472,6 +518,23 @@ void cockpit_alarm_update(
                                    (!direct_warning_active || state->fire_acknowledged);
     }
 
+    if (!caution_active)
+    {
+        state->caution_acknowledged = 0;
+        state->caution_signature[0] = '\0';
+    }
+    else if (caution_is_new)
+    {
+        state->caution_acknowledged = 0;
+        state->caution_tone_played = 0;
+        snprintf(state->caution_signature, sizeof(state->caution_signature), "%s", caution_signature);
+        publish_event(state, COCKPIT_ALARM_LEVEL_CAUTION, 1, state->caution_signature);
+    }
+
+    if (warning_is_new)
+    {
+        state->fire_flash_started_ticks = SDL_GetTicks();
+    }
     if (engine_fire_is_new)
     {
         state->fire_flash_started_ticks = SDL_GetTicks();
@@ -490,6 +553,16 @@ void cockpit_alarm_update(
     state->engine_fire_active = engine_fire_active;
     state->crash_active = crash_active;
     state->stall_active = stall_active;
+    if (!caution_active)
+    {
+        state->caution_active = 0;
+        state->caution_signature[0] = '\0';
+    }
+    else
+    {
+        state->caution_active = 1;
+        snprintf(state->caution_signature, sizeof(state->caution_signature), "%s", caution_signature);
+    }
     snprintf(state->fire_signature, sizeof(state->fire_signature), "%s", warning_signature);
     snprintf(state->stall_signature, sizeof(state->stall_signature), "%s", stall_signature);
 
@@ -553,11 +626,13 @@ void cockpit_alarm_render(SDL_Renderer *renderer, const Cockpit_Layout *layout, 
     {
         warning_flash = smooth_flash_intensity(ticks - state->crash_flash_started_ticks, COCKPIT_ALARM_CRASH_FLASH_PERIOD_MS);
     }
-    else if (state->engine_fire_active)
+    else if (state->engine_fire_active || state->fire_active)
     {
         warning_flash = smooth_flash_intensity(ticks - state->fire_flash_started_ticks, COCKPIT_ALARM_FLASH_PERIOD_MS);
     }
 
+    /* 主警告灯（红）：MASTER WARNING / 发动机火警 / 撞击等。
+     * 主注意灯（黄）：MASTER CAUTION。 */
     draw_lamp_glow(
         renderer,
         layout->fire_warn_rect,
@@ -567,7 +642,8 @@ void cockpit_alarm_render(SDL_Renderer *renderer, const Cockpit_Layout *layout, 
         renderer,
         layout->master_caution_rect,
         (SDL_Color){220, 135, 5, 160},
-        state->caution_active && !state->caution_acknowledged ? 1.0f : 0.0f);
+        state->caution_active && !state->caution_acknowledged ?
+            smooth_flash_intensity(ticks, COCKPIT_ALARM_FLASH_PERIOD_MS) : 0.0f);
 }
 
 int cockpit_alarm_handle_click(CockpitAlarmState *state, AlertManager *manager, float world_x, float world_y, const Cockpit_Layout *layout)

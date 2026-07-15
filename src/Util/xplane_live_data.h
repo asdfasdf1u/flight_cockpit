@@ -20,6 +20,11 @@ typedef struct XPlaneLiveData
     XPCSocket socket;
     int socket_open;
 
+    /* 独立 socket，用于通过 getDREF 主动查询报警状态数据ref，
+     * 避免与 RREF 订阅数据流互相干扰。 */
+    XPCSocket alarm_socket;
+    int alarm_socket_open;
+
     char xp_ip[16];
     unsigned short xp_port;
 
@@ -36,6 +41,9 @@ typedef struct XPlaneLiveData
 
     float poll_elapsed;
     float retry_elapsed;
+    float alarm_poll_elapsed;
+    int alarm_values[5];
+    int alarm_values_valid;
 
     int rref_subscribed;
     int rref_subscription_count;
