@@ -1824,7 +1824,7 @@ static int cockpit_main_run_internal(
             delta_time = 0.1f;
         }
 
-        xplane_shared_runtime_update(runtime, delta_time);
+        xplane_shared_runtime_update(runtime);
         if (sim_data_ready)
         {
             sim_snapshot = sim_data_center_snapshot(sim_data_center);
