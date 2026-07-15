@@ -61,6 +61,13 @@ typedef struct SimXPlaneLiveFrame
     int has_gear;
     int has_flaps;
     int has_parking_brake;
+
+    /* X-Plane 原生报警状态（通过 getDREF 读取 sim/cockpit/warnings/*） */
+    int xplane_master_warning;
+    int xplane_master_caution;
+    int xplane_engine_fire;
+    int xplane_stall_warning;
+    int xplane_overspeed_warning;
 } SimXPlaneLiveFrame;
 
 #endif
