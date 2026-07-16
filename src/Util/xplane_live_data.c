@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+// X-Plane RREF 实时数据接入参数
 #define XPLANE_LIVE_POLL_INTERVAL_SEC (1.0f / 30.0f)
 #define XPLANE_LIVE_RETRY_INTERVAL_SEC 1.0f
 #define XPLANE_LIVE_MAX_MISSED_FRAMES 5
@@ -79,11 +80,9 @@ static float second_or_default(const float *values, int size, float fallback)
     return values != NULL && size > 1 ? values[1] : fallback;
 }
 
-/*
- * X-Plane exposes vibration through cockpit2.  Its generic vibration dataref
- * is zero for the Laminar B738 even while its EICAS shows a non-zero value,
- * so a non-positive sample must not mask the next available data source.
- */
+/* X-Plane 通过 cockpit2 提供振动数据。
+ * Laminar B738 的通用振动 dataref 可能为 0，
+ * 因此非正样本不能覆盖后续可用的数据来源。 */
 static float engine_value_with_legacy_fallback(
     const float *primary,
     int primary_size,
@@ -118,7 +117,7 @@ static float vibration_hz_to_display(float hz_value)
 
 static float b738_vibration_display_value(const float *values, int size, float fallback)
 {
-    /* The B738 dataref is already in the same 0.0--5.0 VIB scale as its EICAS. */
+    /* B738 专用 dataref 已经是 EICAS 使用的 0.0--5.0 VIB 显示量程。 */
     if (values != NULL && size > 0 && values[0] > 0.0f)
     {
         return clamp_float(values[0], 0.0f, XPLANE_LIVE_VIBRATION_DISPLAY_MAX);
@@ -191,6 +190,7 @@ static int valid_engine(float value)
     return valid_float(value) && value >= 0.0f;
 }
 
+// 更新各显示模块的实时数据连接状态
 static void set_status(XPlaneLiveData *live, int pfd_active, int nd_active, int eicas_active, int fmc_active)
 {
     if (live == NULL)
@@ -217,6 +217,7 @@ static void set_status(XPlaneLiveData *live, int pfd_active, int nd_active, int 
     }
 }
 
+// 打开 RREF 主数据 socket
 static void open_socket_once(XPlaneLiveData *live)
 {
     if (live == NULL || live->socket_open)
@@ -230,6 +231,7 @@ static void open_socket_once(XPlaneLiveData *live)
     fflush(stdout);
 }
 
+// 打开报警状态查询 socket
 static void open_alarm_socket_once(XPlaneLiveData *live)
 {
     if (live == NULL || live->alarm_socket_open)
@@ -292,6 +294,7 @@ static void poll_alarm_drefs(XPlaneLiveData *live)
     live->alarm_values_valid = !any_invalid;
 }
 
+// 生成 RREF 订阅路径，数组 dataref 会拼接元素下标
 static int rref_write_dref_path(char *dest, int dest_size, const char *dref, int element_index, int element_count)
 {
     int written;
@@ -312,7 +315,7 @@ static int rref_write_dref_path(char *dest, int dest_size, const char *dref, int
 
     return written > 0 && written < dest_size;
 }
-//向 X-Plane 申请实时数据
+// 向 X-Plane 申请实时数据
 static int rref_send_subscription(XPlaneLiveData *live, int subscription_index, const char *dref, int element_index, int element_count, int frequency_hz)
 {
     char buffer[XPLANE_RREF_REQUEST_BYTES];
@@ -340,6 +343,7 @@ static int rref_send_subscription(XPlaneLiveData *live, int subscription_index, 
     return sendUDP(live->socket, buffer, sizeof(buffer)) >= 0;
 }
 
+// 确保所有 dataref 已经完成 RREF 订阅，超时后会重新订阅
 static int rref_ensure_subscriptions(XPlaneLiveData *live, const char *drefs[], int dref_count, const int capacities[])
 {
     int subscription_index = 0;
@@ -396,7 +400,7 @@ static int rref_ensure_subscriptions(XPlaneLiveData *live, const char *drefs[], 
 
     return live->rref_subscribed;
 }
-//接收并解析 X-Plane 实时数据
+// 接收并解析 X-Plane 实时数据
 static void rref_drain_packets(XPlaneLiveData *live)
 {
     char buffer[4096];
@@ -470,7 +474,7 @@ static int rref_find_subscription(const XPlaneLiveData *live, int dref_index, in
 
     return -1;
 }
-//把收到的实时数据整理成程序内部可用的数值
+// 把收到的实时数据整理成程序内部可用的数值
 static void rref_copy_values(const XPlaneLiveData *live, float *values[], int dref_count, int sizes[])
 {
     if (live == NULL || values == NULL || sizes == NULL)
@@ -499,6 +503,7 @@ static void rref_copy_values(const XPlaneLiveData *live, float *values[], int dr
     }
 }
 
+// 兼容旧路径：把实时帧直接写入 PFD、ND、EICAS 等模块
 static void apply_frame_to_legacy_modules(
     const SimXPlaneLiveFrame *frame,
     PFD_Data *pfd_data,
@@ -598,7 +603,7 @@ static void apply_frame_to_legacy_modules(
         fmc_data->live_data_active = 1;
     }
 }
-//把 X-Plane 的实时数据整理成一帧完整飞行状态
+// 把 X-Plane 的实时数据整理成一帧完整飞行状态
 static int poll_all_data(
     XPlaneLiveData *live,
     PFD_Data *pfd_data,
@@ -881,6 +886,7 @@ static int poll_all_data(
     return 1;
 }
 
+// 初始化 X-Plane 实时连接参数
 void xplane_live_data_init(XPlaneLiveData *live, const char *xp_ip, unsigned short xp_port)
 {
     if (live == NULL)
@@ -895,6 +901,7 @@ void xplane_live_data_init(XPlaneLiveData *live, const char *xp_ip, unsigned sho
     live->missed_frames = 0;
 }
 
+// 关闭 X-Plane 实时连接
 void xplane_live_data_shutdown(XPlaneLiveData *live)
 {
     if (live == NULL)
@@ -1128,6 +1135,7 @@ static void report_xplane_snapshot_status(XPlaneLiveData *live, const SimSnapsho
     live->compare_timed_out = timed_out;
 }
 
+// 在无新数据时发布连接状态，便于统一数据中心切换回本地数据
 static void publish_connection_status_frame(XPlaneLiveData *live, SimDataCenter *sim_data_center, float delta_time)
 {
     SimXPlaneLiveFrame frame;
@@ -1148,6 +1156,7 @@ static void publish_connection_status_frame(XPlaneLiveData *live, SimDataCenter 
     report_xplane_snapshot_status(live, sim_data_center_snapshot(sim_data_center));
 }
 
+// X-Plane 实时数据主更新流程
 static int xplane_live_data_update_internal(
     XPlaneLiveData *live,
     PFD_Data *pfd_data,
@@ -1291,7 +1300,7 @@ int xplane_live_data_update(
 {
     return xplane_live_data_update_internal(live, pfd_data, nd_data, eicas_data, systems_data, fmc_data, NULL, delta_time, 1, 0);
 }
-//把 X-Plane 实时数据送进统一数据中心
+// 把 X-Plane 实时数据送进统一数据中心
 int xplane_live_data_update_with_sim_data_center(
     XPlaneLiveData *live,
     PFD_Data *pfd_data,
@@ -1334,6 +1343,7 @@ int xplane_live_data_has_valid_frame(const XPlaneLiveData *live)
     return live != NULL && live->frame_id > 0;
 }
 
+// 初始化共享运行时，把 X-Plane 连接和 SimDataCenter 绑定在一起
 void xplane_shared_runtime_init(
     XPlaneSharedRuntime *runtime,
     SimDataCenter *sim_data_center,
@@ -1401,6 +1411,7 @@ void xplane_shared_runtime_shutdown(XPlaneSharedRuntime *runtime)
     memset(runtime, 0, sizeof(*runtime));
 }
 
+// 共享运行时每帧更新：读取 X-Plane 并刷新统一快照
 int xplane_shared_runtime_update(XPlaneSharedRuntime *runtime, float delta_time)
 {
     const SimSnapshot *snapshot;

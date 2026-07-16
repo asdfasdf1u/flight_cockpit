@@ -492,6 +492,7 @@ static void integrate_nd_position(SimDataCenter *center, float delta_time)
     }
 }
 
+// 把本地 PFD 样本写入统一快照
 static void apply_pfd_sample(SimDataCenter *center)
 {
     if (center == NULL || center->store.pfd_count <= 0)
@@ -652,6 +653,7 @@ static void apply_eicas_lower_frame(SimDataCenter *center)
     }
 }
 
+// 按本地样本重建统一快照
 static void rebuild_snapshot(SimDataCenter *center, float delta_time)
 {
     if (center == NULL)
@@ -683,7 +685,7 @@ static void rebuild_snapshot(SimDataCenter *center, float delta_time)
     alert_manager_update(&center->alert_manager, &center->snapshot);
     alert_manager_append_sim_warnings(alert_manager_snapshot(&center->alert_manager), &center->snapshot);
 }
-//把实时飞行帧转换成全系统统一快照
+// 把实时飞行帧转换成全系统统一快照
 static void rebuild_xplane_snapshot_from_frame(SimDataCenter *center, const SimXPlaneLiveFrame *frame)
 {
     SimSnapshot previous_snapshot;
@@ -892,6 +894,7 @@ static void sim_data_center_log_source_change(SimDataCenter *center, const char 
     }
 }
 
+// X-Plane 不可用时重建本地回退快照
 static int sim_data_center_rebuild_fallback_snapshot(
     SimDataCenter *center,
     const SimXPlaneLiveFrame *frame,
@@ -925,7 +928,7 @@ static int sim_data_center_rebuild_fallback_snapshot(
     sim_data_center_log_source_change(center, reason);
     return center->snapshot.data_valid;
 }
-//让统一数据中心接收 X-Plane 实时数据
+// 让统一数据中心接收 X-Plane 实时数据
 int sim_data_center_apply_xplane_live_frame(SimDataCenter *center, const SimXPlaneLiveFrame *frame)
 {
     int xplane_ready;
@@ -964,7 +967,7 @@ int sim_data_center_apply_xplane_live_frame(SimDataCenter *center, const SimXPla
     if (!frame->connected || frame->timed_out || center->snapshot.source != SIM_SNAPSHOT_SOURCE_XPLANE)
     {
         return sim_data_center_rebuild_fallback_snapshot(center, frame, !frame->connected ? "xplane_disconnected" : (frame->timed_out ? "xplane_timeout" : "xplane_unavailable"));
-    }//实时数据统一快照
+    }
 
     sim_data_center_log_source_change(center, "xplane_transient_invalid");
     return 0;
@@ -1005,7 +1008,7 @@ int sim_data_center_route_revision(const SimDataCenter *center)
 {
     return center != NULL ? center->route_revision : 0;
 }
-//给 PFD、ND、EICAS 提供统一数据--最新的统一快照
+// 给 PFD、ND、EICAS 提供统一数据--最新的统一快照
 const SimSnapshot *sim_data_center_snapshot(const SimDataCenter *center)
 {
     if (center == NULL || !center->initialized)
