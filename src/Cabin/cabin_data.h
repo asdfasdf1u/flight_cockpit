@@ -2,9 +2,15 @@
 #define CABIN_DATA_H
 
 #define CABIN_TEXT_LEN 64
+#define CABIN_ADDRESS_LEN 192
 #define CABIN_ERROR_LEN 160
 #define CABIN_PLANNED_ROUTE_MAX_POINTS 64
-#define CABIN_FLOWN_TRACK_MAX_POINTS 160
+#define CABIN_FLOWN_TRACK_MAX_POINTS 40
+#define CABIN_MAP_MIN_ZOOM 3
+#define CABIN_MAP_MAX_ZOOM 17
+#define CABIN_MAP_DEFAULT_POSITION_ZOOM 10
+#define CABIN_MAP_STATIC_WIDTH 1024
+#define CABIN_MAP_STATIC_HEIGHT 576
 
 #include "../Data/alert_manager.h"
 #include "../Data/sim_snapshot.h"
@@ -40,6 +46,10 @@ typedef struct Cabin_Place
     char province[CABIN_TEXT_LEN];
     char city[CABIN_TEXT_LEN];
     char district[CABIN_TEXT_LEN];
+    char adcode[CABIN_TEXT_LEN];
+    char township[CABIN_TEXT_LEN];
+    char street[CABIN_TEXT_LEN];
+    char formatted_address[CABIN_ADDRESS_LEN];
 } Cabin_Place;
 
 typedef struct Cabin_Trajectory_Point
@@ -76,6 +86,20 @@ typedef struct Cabin_Data
     double map_center_lat;
     double map_center_lon;
     int map_zoom;
+    int map_min_zoom;
+    int map_max_zoom;
+    int map_loaded_zoom;
+    int map_uses_web_mercator;
+    int map_api_zoom_enabled;
+    int map_refresh_requested;
+    int map_zoom_change_pending;
+    unsigned int map_request_revision;
+    double map_display_top_left_lat;
+    double map_display_top_left_lon;
+    double map_display_bottom_right_lat;
+    double map_display_bottom_right_lon;
+    double map_display_center_lat;
+    double map_display_center_lon;
     char map_cache_path[CABIN_ERROR_LEN];
     double latitude;
     double longitude;
@@ -123,6 +147,8 @@ typedef struct Cabin_Data
     unsigned int flown_track_next_sequence;
     float flown_track_last_progress;
     float flown_track_time_since_append;
+    int flown_track_seed_is_default;
+    int flown_track_has_real_point;
 
     char weather[CABIN_TEXT_LEN];
     char weather_city[CABIN_TEXT_LEN];
@@ -149,5 +175,10 @@ typedef struct Cabin_Data
 void cabin_data_init(Cabin_Data *data);
 int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCenter *center, float delta_time);
 const char *cabin_place_display_name(const Cabin_Place *place);
+const char *cabin_place_street_or_town(const Cabin_Place *place);
+int cabin_data_request_map_zoom(Cabin_Data *data, int delta);
+void cabin_data_request_map_refresh(Cabin_Data *data);
+void cabin_data_commit_map_view(Cabin_Data *data, int uses_web_mercator);
+void cabin_data_revert_requested_map_zoom(Cabin_Data *data);
 
 #endif

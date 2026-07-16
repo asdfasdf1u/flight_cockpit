@@ -38,6 +38,12 @@ typedef struct Cabin_Point
     int y;
 } Cabin_Point;
 
+typedef struct Cabin_Project_Point
+{
+    double x;
+    double y;
+} Cabin_Project_Point;
+
 static void set_color(SDL_Renderer *renderer, SDL_Color color)
 {
     SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
@@ -168,12 +174,12 @@ static float clamp_float(float value, float min_value, float max_value)
 static int cabin_geo_bounds_valid(const Cabin_Data *data)
 {
     return data != NULL &&
-           isfinite(data->map_top_left_lat) &&
-           isfinite(data->map_top_left_lon) &&
-           isfinite(data->map_bottom_right_lat) &&
-           isfinite(data->map_bottom_right_lon) &&
-           data->map_top_left_lat > data->map_bottom_right_lat &&
-           data->map_bottom_right_lon > data->map_top_left_lon;
+           isfinite(data->map_display_top_left_lat) &&
+           isfinite(data->map_display_top_left_lon) &&
+           isfinite(data->map_display_bottom_right_lat) &&
+           isfinite(data->map_display_bottom_right_lon) &&
+           data->map_display_top_left_lat > data->map_display_bottom_right_lat &&
+           data->map_display_bottom_right_lon > data->map_display_top_left_lon;
 }
 
 static int cabin_geo_point_valid(double lat, double lon)
@@ -183,7 +189,11 @@ static int cabin_geo_point_valid(double lat, double lon)
            lon >= -180.0 && lon <= 180.0;
 }
 
-static int cabin_geo_to_pixel(const Cabin_Data *data, const SDL_Rect *map_rect, double lat, double lon, Cabin_Point *point)
+static int cabin_geo_project(const Cabin_Data *data,
+                             const SDL_Rect *map_rect,
+                             double lat,
+                             double lon,
+                             Cabin_Project_Point *point)
 {
     if (point == NULL)
     {
@@ -193,25 +203,172 @@ static int cabin_geo_to_pixel(const Cabin_Data *data, const SDL_Rect *map_rect, 
     point->x = 0;
     point->y = 0;
 
-    if (map_rect == NULL || map_rect->w <= 0 || map_rect->h <= 0 ||
-        !cabin_geo_bounds_valid(data) || !cabin_geo_point_valid(lat, lon))
+    if (map_rect == NULL || map_rect->w <= 0 || map_rect->h <= 0 || !cabin_geo_point_valid(lat, lon))
     {
         return 0;
     }
 
-    const double x_ratio = (lon - data->map_top_left_lon) /
-                           (data->map_bottom_right_lon - data->map_top_left_lon);
-    const double y_ratio = (data->map_top_left_lat - lat) /
-                           (data->map_top_left_lat - data->map_bottom_right_lat);
+    if (data != NULL && data->map_uses_web_mercator &&
+        data->map_loaded_zoom >= CABIN_MAP_MIN_ZOOM && data->map_loaded_zoom <= CABIN_MAP_MAX_ZOOM &&
+        cabin_geo_point_valid(data->map_display_center_lat, data->map_display_center_lon))
+    {
+        const double max_mercator_lat = 85.05112878;
+        /* AMap static-map zoom levels are one level above the common XYZ world-pixel scale. */
+        const double world_size = 256.0 * pow(2.0, (double)(data->map_loaded_zoom + 1));
+        double point_lat = lat;
+        double center_lat = data->map_display_center_lat;
+        if (point_lat > max_mercator_lat) point_lat = max_mercator_lat;
+        if (point_lat < -max_mercator_lat) point_lat = -max_mercator_lat;
+        if (center_lat > max_mercator_lat) center_lat = max_mercator_lat;
+        if (center_lat < -max_mercator_lat) center_lat = -max_mercator_lat;
 
-    if (x_ratio < 0.0 || x_ratio > 1.0 || y_ratio < 0.0 || y_ratio > 1.0)
+        const double point_x = (lon + 180.0) / 360.0 * world_size;
+        const double center_x = (data->map_display_center_lon + 180.0) / 360.0 * world_size;
+        const double point_lat_rad = point_lat * CABIN_PI / 180.0;
+        const double center_lat_rad = center_lat * CABIN_PI / 180.0;
+        const double point_y = (1.0 - log(tan(point_lat_rad) + 1.0 / cos(point_lat_rad)) / CABIN_PI) * 0.5 * world_size;
+        const double center_y = (1.0 - log(tan(center_lat_rad) + 1.0 / cos(center_lat_rad)) / CABIN_PI) * 0.5 * world_size;
+        double delta_x = point_x - center_x;
+        const double cover_scale_x = (double)map_rect->w / (double)CABIN_MAP_STATIC_WIDTH;
+        const double cover_scale_y = (double)map_rect->h / (double)CABIN_MAP_STATIC_HEIGHT;
+        const double cover_scale = cover_scale_x > cover_scale_y ? cover_scale_x : cover_scale_y;
+        if (delta_x > world_size * 0.5) delta_x -= world_size;
+        if (delta_x < -world_size * 0.5) delta_x += world_size;
+
+        const double mapped_x = (double)map_rect->x + (double)map_rect->w * 0.5 +
+                                delta_x * cover_scale;
+        const double mapped_y = (double)map_rect->y + (double)map_rect->h * 0.5 +
+                                (point_y - center_y) * cover_scale;
+        point->x = mapped_x;
+        point->y = mapped_y;
+        return 1;
+    }
+
+    if (!cabin_geo_bounds_valid(data))
     {
         return 0;
     }
 
-    point->x = map_rect->x + (int)(x_ratio * (double)map_rect->w + 0.5);
-    point->y = map_rect->y + (int)(y_ratio * (double)map_rect->h + 0.5);
+    const double x_ratio = (lon - data->map_display_top_left_lon) /
+                           (data->map_display_bottom_right_lon - data->map_display_top_left_lon);
+    const double y_ratio = (data->map_display_top_left_lat - lat) /
+                           (data->map_display_top_left_lat - data->map_display_bottom_right_lat);
+
+    point->x = (double)map_rect->x + x_ratio * (double)map_rect->w;
+    point->y = (double)map_rect->y + y_ratio * (double)map_rect->h;
+    return isfinite(point->x) && isfinite(point->y);
+}
+
+static int cabin_geo_to_pixel(const Cabin_Data *data, const SDL_Rect *map_rect, double lat, double lon, Cabin_Point *point)
+{
+    Cabin_Project_Point projected;
+
+    if (point == NULL || !cabin_geo_project(data, map_rect, lat, lon, &projected))
+    {
+        return 0;
+    }
+    if (projected.x < (double)map_rect->x || projected.x > (double)(map_rect->x + map_rect->w - 1) ||
+        projected.y < (double)map_rect->y || projected.y > (double)(map_rect->y + map_rect->h - 1))
+    {
+        return 0;
+    }
+
+    point->x = (int)lround(projected.x);
+    point->y = (int)lround(projected.y);
     return 1;
+}
+
+static int cabin_ui_clip_test(double p, double q, double *lower, double *upper)
+{
+    if (fabs(p) < 1e-12)
+    {
+        return q >= 0.0;
+    }
+
+    const double ratio = q / p;
+    if (p < 0.0)
+    {
+        if (ratio > *upper)
+        {
+            return 0;
+        }
+        if (ratio > *lower)
+        {
+            *lower = ratio;
+        }
+    }
+    else
+    {
+        if (ratio < *lower)
+        {
+            return 0;
+        }
+        if (ratio < *upper)
+        {
+            *upper = ratio;
+        }
+    }
+    return 1;
+}
+
+int cabin_ui_clip_line_to_rect(const SDL_Rect *rect, double *x0, double *y0, double *x1, double *y1)
+{
+    double lower = 0.0;
+    double upper = 1.0;
+    double dx;
+    double dy;
+
+    if (rect == NULL || rect->w <= 0 || rect->h <= 0 ||
+        x0 == NULL || y0 == NULL || x1 == NULL || y1 == NULL ||
+        !isfinite(*x0) || !isfinite(*y0) || !isfinite(*x1) || !isfinite(*y1))
+    {
+        return 0;
+    }
+
+    dx = *x1 - *x0;
+    dy = *y1 - *y0;
+    if (!cabin_ui_clip_test(-dx, *x0 - (double)rect->x, &lower, &upper) ||
+        !cabin_ui_clip_test(dx, (double)(rect->x + rect->w - 1) - *x0, &lower, &upper) ||
+        !cabin_ui_clip_test(-dy, *y0 - (double)rect->y, &lower, &upper) ||
+        !cabin_ui_clip_test(dy, (double)(rect->y + rect->h - 1) - *y0, &lower, &upper))
+    {
+        return 0;
+    }
+
+    const double original_x = *x0;
+    const double original_y = *y0;
+    *x0 = original_x + lower * dx;
+    *y0 = original_y + lower * dy;
+    *x1 = original_x + upper * dx;
+    *y1 = original_y + upper * dy;
+    return 1;
+}
+
+static void draw_geo_segment(SDL_Renderer *renderer,
+                             const Cabin_Data *data,
+                             const SDL_Rect *map_rect,
+                             double latitude_a,
+                             double longitude_a,
+                             double latitude_b,
+                             double longitude_b,
+                             SDL_Color color)
+{
+    Cabin_Project_Point a;
+    Cabin_Project_Point b;
+
+    if (!cabin_geo_project(data, map_rect, latitude_a, longitude_a, &a) ||
+        !cabin_geo_project(data, map_rect, latitude_b, longitude_b, &b) ||
+        !cabin_ui_clip_line_to_rect(map_rect, &a.x, &a.y, &b.x, &b.y))
+    {
+        return;
+    }
+
+    draw_thick_line(renderer,
+                    (int)lround(a.x),
+                    (int)lround(a.y),
+                    (int)lround(b.x),
+                    (int)lround(b.y),
+                    color);
 }
 
 static void draw_polyline_geo(SDL_Renderer *renderer,
@@ -221,26 +378,21 @@ static void draw_polyline_geo(SDL_Renderer *renderer,
                               int point_count,
                               SDL_Color color)
 {
-    Cabin_Point previous = {0, 0};
-    int has_previous = 0;
-
-    if (renderer == NULL || data == NULL || map_rect == NULL || points == NULL || point_count <= 0)
+    if (renderer == NULL || data == NULL || map_rect == NULL || points == NULL || point_count < 2)
     {
         return;
     }
 
-    for (int i = 0; i < point_count; ++i)
+    for (int i = 1; i < point_count; ++i)
     {
-        Cabin_Point current = {0, 0};
-        if (cabin_geo_to_pixel(data, map_rect, points[i].latitude, points[i].longitude, &current))
-        {
-            if (has_previous)
-            {
-                draw_thick_line(renderer, previous.x, previous.y, current.x, current.y, color);
-            }
-            previous = current;
-            has_previous = 1;
-        }
+        draw_geo_segment(renderer,
+                         data,
+                         map_rect,
+                         points[i - 1].latitude,
+                         points[i - 1].longitude,
+                         points[i].latitude,
+                         points[i].longitude,
+                         color);
     }
 }
 
@@ -286,10 +438,10 @@ static void cabin_log_geo_debug(
     printf("Cabin Geo: map source=%s.\n", data->map_source);
     printf("Cabin Geo: map rect x=%d y=%d w=%d h=%d.\n", map_rect->x, map_rect->y, map_rect->w, map_rect->h);
     printf("Cabin Geo: bounds top-left lat=%.6f lon=%.6f, bottom-right lat=%.6f lon=%.6f.\n",
-           data->map_top_left_lat,
-           data->map_top_left_lon,
-           data->map_bottom_right_lat,
-           data->map_bottom_right_lon);
+           data->map_display_top_left_lat,
+           data->map_display_top_left_lon,
+           data->map_display_bottom_right_lat,
+           data->map_display_bottom_right_lon);
     printf("Cabin Geo: origin lat=%.6f lon=%.6f%s",
            data->origin_lat,
            data->origin_lon,
@@ -400,6 +552,23 @@ static const char *safe_text_or(const char *text, const char *fallback)
     return text != NULL && text[0] != '\0' ? text : fallback;
 }
 
+void cabin_ui_format_wind_power(const char *wind_power, char *text, size_t text_size)
+{
+    if (text == NULL || text_size == 0)
+    {
+        return;
+    }
+    if (wind_power == NULL || wind_power[0] == '\0' || strcmp(wind_power, "--") == 0)
+    {
+        snprintf(text, text_size, "%s", "--");
+        return;
+    }
+    snprintf(text,
+             text_size,
+             strstr(wind_power, "级") != NULL ? "%s" : "%s级",
+             wind_power);
+}
+
 static void draw_location_panel(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, int x, int y, int w)
 {
     const int header_h = 44;
@@ -410,24 +579,29 @@ static void draw_location_panel(SDL_Renderer *renderer, const Cabin_Assets *asse
     const char *province = valid ? safe_text_or(place->province, "--") : (resolving ? "解析中" : "--");
     const char *city = valid ? safe_text_or(place->city, "--") : (resolving ? "解析中" : "--");
     const char *district = valid ? safe_text_or(place->district, "--") : (resolving ? "解析中" : "--");
+    const char *street_or_town = valid ? safe_text_or(cabin_place_street_or_town(place), "--") : (resolving ? "解析中" : "--");
 
     draw_panel_header(renderer, assets->title_font, &(SDL_Rect){x, y, w, header_h}, "地点信息");
     draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "省：%s", province);
     draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "市：%s", city);
     draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "县/区：%s", district);
-    draw_rect(renderer, &(SDL_Rect){x, y, w, header_h + row_h * 3}, COLOR_TEXT_DARK);
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 3, w, row_h}, "街道/镇：%s", street_or_town);
+    draw_rect(renderer, &(SDL_Rect){x, y, w, header_h + row_h * 4}, COLOR_TEXT_DARK);
 }
 
 static void draw_weather_panel(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, int x, int y, int w)
 {
     const int header_h = 44;
     const int row_h = 40;
+    char wind_power[CABIN_TEXT_LEN + 8];
+
+    cabin_ui_format_wind_power(data->wind_power, wind_power, sizeof(wind_power));
 
     draw_panel_header(renderer, assets->title_font, &(SDL_Rect){x, y, w, header_h}, "天气信息");
     draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h, w, row_h}, "天气：%s", data->weather);
     draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h, w, row_h}, "温度：%.0f°C", data->temperature);
     draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 2, w, row_h}, "湿度：%.0f%%", data->humidity);
-    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 3, w, row_h}, "风速：%s", safe_text_or(data->wind_power, "--"));
+    draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 3, w, row_h}, "风力：%s", wind_power);
     draw_panel_row(renderer, assets->font, &(SDL_Rect){x, y + header_h + row_h * 4, w, row_h}, "风向：%s", safe_text_or(data->wind_direction, "--"));
     draw_rect(renderer, &(SDL_Rect){x, y, w, header_h + row_h * 5}, COLOR_TEXT_DARK);
 }
@@ -502,7 +676,7 @@ static void cabin_info_panel_rects(int width, int height, SDL_Rect *location_rec
     }
 
     const int panel_y = 24;
-    const int location_h = 44 + 46 * 3;
+    const int location_h = 44 + 46 * 4;
     const int weather_h = 44 + 40 * 5;
     const int weather_y = panel_y + location_h + 28;
 
@@ -558,20 +732,47 @@ static void draw_map_controls(SDL_Renderer *renderer, const Cabin_Assets *assets
 
 static void draw_status_badge(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, const SDL_Rect *map_rect)
 {
+    char text[192];
+    int text_width = 0;
+    int text_height = 0;
+
     if (map_rect == NULL)
     {
         return;
     }
 
-    const SDL_Rect badge = {map_rect->x + 16, map_rect->y + 16, 244, 28};
+    snprintf(text,
+             sizeof(text),
+             "MAP: %s  WEATHER: %s",
+             data->map_source,
+             data->weather_source);
+    if (assets->small_font != NULL)
+    {
+        (void)TTF_SizeUTF8(assets->small_font, text, &text_width, &text_height);
+    }
+
+    const int max_badge_width = map_rect->w - 32;
+    int badge_width = text_width > 0 ? text_width + 20 : 320;
+    int badge_height = text_height > 0 ? text_height + 8 : 28;
+    if (max_badge_width <= 0)
+    {
+        return;
+    }
+    if (badge_width > max_badge_width)
+    {
+        badge_width = max_badge_width;
+    }
+    if (badge_height < 28)
+    {
+        badge_height = 28;
+    }
+
+    const SDL_Rect badge = {map_rect->x + 16, map_rect->y + 16, badge_width, badge_height};
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     fill_rect(renderer, &badge, COLOR_BLACK_OVERLAY);
     draw_rect(renderer, &badge, COLOR_ROUTE_SOFT);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-    draw_text_clipped(renderer, assets->small_font, COLOR_WHITE, &badge, badge.x + 10, badge.y + 4,
-                      "MAP: %s  WEATHER: %s",
-                      data->map_source,
-                      data->weather_source);
+    draw_text_clipped(renderer, assets->small_font, COLOR_WHITE, &badge, badge.x + 10, badge.y + 4, "%s", text);
 }
 
 static int point_in_rect(int x, int y, const SDL_Rect *rect)
@@ -617,7 +818,7 @@ static SDL_Rect cabin_zoomed_map_rect(int width, int height)
     return rect;
 }
 
-void cabin_ui_handle_event(SDL_Window *window, const SDL_Event *event)
+void cabin_ui_handle_event(SDL_Window *window, const SDL_Event *event, Cabin_Data *data)
 {
     if (window == NULL || event == NULL)
     {
@@ -695,13 +896,21 @@ void cabin_ui_handle_event(SDL_Window *window, const SDL_Event *event)
     {
         g_map_zoom = clamp_float(g_map_zoom + CABIN_MAP_ZOOM_STEP, CABIN_MAP_ZOOM_MIN, CABIN_MAP_ZOOM_MAX);
         cabin_clamp_map_pan(width, height);
-        printf("Cabin UI: map zoom %.2f.\n", g_map_zoom);
+        const int api_requested = cabin_data_request_map_zoom(data, 1);
+        printf("Cabin UI: local map zoom %.2f, API zoom=%d request=%s.\n",
+               g_map_zoom,
+               data != NULL ? data->map_zoom : 0,
+               api_requested ? "queued" : "local-only");
     }
     else if (point_in_rect(mouse_x, mouse_y, &sub_rect))
     {
         g_map_zoom = clamp_float(g_map_zoom - CABIN_MAP_ZOOM_STEP, CABIN_MAP_ZOOM_MIN, CABIN_MAP_ZOOM_MAX);
         cabin_clamp_map_pan(width, height);
-        printf("Cabin UI: map zoom %.2f.\n", g_map_zoom);
+        const int api_requested = cabin_data_request_map_zoom(data, -1);
+        printf("Cabin UI: local map zoom %.2f, API zoom=%d request=%s.\n",
+               g_map_zoom,
+               data != NULL ? data->map_zoom : 0,
+               api_requested ? "queued" : "local-only");
     }
     else if (!point_in_rect(mouse_x, mouse_y, &location_rect) &&
              !point_in_rect(mouse_x, mouse_y, &weather_rect) &&
@@ -711,6 +920,20 @@ void cabin_ui_handle_event(SDL_Window *window, const SDL_Event *event)
         g_last_mouse_x = mouse_x;
         g_last_mouse_y = mouse_y;
     }
+}
+
+void cabin_ui_complete_map_refresh(int success)
+{
+    if (!success)
+    {
+        return;
+    }
+
+    g_map_zoom = 1.0f;
+    g_map_pan_x = 0.0f;
+    g_map_pan_y = 0.0f;
+    g_map_dragging = 0;
+    printf("Cabin UI: API map applied; local zoom fallback reset.\n");
 }
 
 static void draw_route(SDL_Renderer *renderer, const Cabin_Assets *assets, const Cabin_Data *data, const SDL_Rect *map_rect)
@@ -738,6 +961,20 @@ static void draw_route(SDL_Renderer *renderer, const Cabin_Assets *assets, const
                       data->flown_track_count,
                       COLOR_ROUTE);
 
+    if (data->flown_track_has_real_point && data->flown_track_count > 0 &&
+        cabin_geo_point_valid(data->current_lat, data->current_lon))
+    {
+        const Cabin_Trajectory_Point *last_trace = &data->flown_track[data->flown_track_count - 1];
+        draw_geo_segment(renderer,
+                         data,
+                         map_rect,
+                         last_trace->latitude,
+                         last_trace->longitude,
+                         data->current_lat,
+                         data->current_lon,
+                         COLOR_ROUTE);
+    }
+
     if (!has_plane)
     {
         static int printed_skip_warning = 0;
@@ -747,22 +984,6 @@ static void draw_route(SDL_Renderer *renderer, const Cabin_Assets *assets, const
             printed_skip_warning = 1;
         }
         return;
-    }
-
-    Cabin_Point last_trace_pixel = {0, 0};
-    int has_last_trace_pixel = 0;
-    if (data->flown_track_count > 0)
-    {
-        const Cabin_Trajectory_Point *last_trace = &data->flown_track[data->flown_track_count - 1];
-        if (cabin_geo_to_pixel(data, map_rect, last_trace->latitude, last_trace->longitude, &last_trace_pixel))
-        {
-            has_last_trace_pixel = 1;
-        }
-    }
-
-    if (has_last_trace_pixel && (last_trace_pixel.x != plane.x || last_trace_pixel.y != plane.y))
-    {
-        draw_thick_line(renderer, last_trace_pixel.x, last_trace_pixel.y, plane.x, plane.y, COLOR_ROUTE);
     }
 
     double heading_from_lat = data->origin_lat;

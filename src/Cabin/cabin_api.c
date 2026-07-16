@@ -18,11 +18,7 @@
 #define CABIN_AMAP_WEATHER_URL "https://restapi.amap.com/v3/weather/weatherInfo"
 #define CABIN_AMAP_REVERSE_GEOCODE_URL "https://restapi.amap.com/v3/geocode/regeo"
 #define CABIN_AMAP_STATIC_MAP_URL "https://restapi.amap.com/v3/staticmap"
-#define CABIN_AMAP_DEFAULT_CITY "110000"
-#define CABIN_AMAP_DEFAULT_CITY_NAME "北京"
-#define CABIN_AMAP_STATIC_SIZE "1024*576"
 #define CABIN_MAP_CACHE_DIR "assets/cache"
-#define CABIN_MAP_DEFAULT_CACHE_PATH "assets/cache/cabin_map_beijing_chengdu.png"
 #define CABIN_STATIC_MAP_MIN_BYTES 20000
 #define CABIN_AMAP_KEY_PLACEHOLDER ""
 #define CABIN_HTTP_RESPONSE_MAX 65536
@@ -301,7 +297,7 @@ static int download_file_with_curl(const char *url, const char *path)
     }
 
     char command[1400];
-    snprintf(command, sizeof(command), "curl -L -s --connect-timeout 5 --max-time 12 -o \"%s\" \"%s\"", path, url);
+    snprintf(command, sizeof(command), "curl -L -s --fail --connect-timeout 5 --max-time 12 -o \"%s\" \"%s\"", path, url);
     return system(command) == 0;
 }
 
@@ -448,49 +444,77 @@ static int json_get_string(const char *json, const char *key, char *out, size_t 
     return write_index > 0;
 }
 
-typedef enum Cabin_Json_Field_Type
-{
-    CABIN_JSON_FIELD_MISSING = 0,
-    CABIN_JSON_FIELD_STRING,
-    CABIN_JSON_FIELD_ARRAY,
-    CABIN_JSON_FIELD_OTHER
-} Cabin_Json_Field_Type;
-
-static Cabin_Json_Field_Type json_get_field_type(const char *json, const char *key)
+static int json_get_object(const char *json, const char *key, char *out, size_t out_size)
 {
     char pattern[96];
     const char *cursor;
+    const char *object_start;
+    int depth = 0;
+    int in_string = 0;
+    int escaped = 0;
 
-    if (json == NULL || key == NULL)
+    if (json == NULL || key == NULL || out == NULL || out_size == 0)
     {
-        return CABIN_JSON_FIELD_MISSING;
+        return 0;
     }
+    out[0] = '\0';
     snprintf(pattern, sizeof(pattern), "\"%s\"", key);
     cursor = strstr(json, pattern);
     if (cursor == NULL || (cursor = strchr(cursor + strlen(pattern), ':')) == NULL)
     {
-        return CABIN_JSON_FIELD_MISSING;
+        return 0;
     }
     ++cursor;
     while (*cursor != '\0' && isspace((unsigned char)*cursor))
     {
         ++cursor;
     }
-    if (*cursor == '"') return CABIN_JSON_FIELD_STRING;
-    if (*cursor == '[') return CABIN_JSON_FIELD_ARRAY;
-    return CABIN_JSON_FIELD_OTHER;
-}
-
-static const char *json_field_type_name(Cabin_Json_Field_Type type)
-{
-    switch (type)
+    if (*cursor != '{')
     {
-    case CABIN_JSON_FIELD_STRING: return "string";
-    case CABIN_JSON_FIELD_ARRAY: return "array";
-    case CABIN_JSON_FIELD_OTHER: return "other";
-    case CABIN_JSON_FIELD_MISSING:
-    default: return "missing";
+        return 0;
     }
+
+    object_start = cursor;
+    for (; *cursor != '\0'; ++cursor)
+    {
+        const char ch = *cursor;
+        if (in_string)
+        {
+            if (escaped)
+            {
+                escaped = 0;
+            }
+            else if (ch == '\\')
+            {
+                escaped = 1;
+            }
+            else if (ch == '"')
+            {
+                in_string = 0;
+            }
+            continue;
+        }
+        if (ch == '"')
+        {
+            in_string = 1;
+        }
+        else if (ch == '{')
+        {
+            ++depth;
+        }
+        else if (ch == '}' && --depth == 0)
+        {
+            const size_t length = (size_t)(cursor - object_start + 1);
+            if (length >= out_size)
+            {
+                return 0;
+            }
+            memcpy(out, object_start, length);
+            out[length] = '\0';
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int cabin_api_is_municipality_province(const char *province)
@@ -502,7 +526,10 @@ static int cabin_api_is_municipality_province(const char *province)
            memcmp(province + length - (sizeof(city_suffix) - 1), city_suffix, sizeof(city_suffix) - 1) == 0;
 }
 
-static int parse_amap_weather_json(Cabin_Data *data, const char *json, const char *requested_city, const char *requested_adcode)
+int cabin_api_parse_weather_response(Cabin_Data *data,
+                                     const char *json,
+                                     const char *requested_city,
+                                     const char *requested_adcode)
 {
     if (data == NULL || json == NULL || json[0] == '\0')
     {
@@ -612,35 +639,88 @@ static void print_weather_response_error(const char *response)
     printf("Cabin API: Amap weather response status=%s info=%s infocode=%s.\n", status, info, infocode);
 }
 
+int cabin_api_parse_reverse_geocode_response(const char *response, Cabin_Place *place)
+{
+    char status[16];
+    char address_component[8192];
+    char street_number[2048];
+    char raw_city[CABIN_TEXT_LEN];
+
+    if (response == NULL || place == NULL)
+    {
+        return 0;
+    }
+
+    place->province[0] = '\0';
+    place->city[0] = '\0';
+    place->district[0] = '\0';
+    place->adcode[0] = '\0';
+    place->township[0] = '\0';
+    place->street[0] = '\0';
+    place->formatted_address[0] = '\0';
+    raw_city[0] = '\0';
+
+    if (!json_get_string(response, "status", status, sizeof(status)) || strcmp(status, "1") != 0 ||
+        !json_get_object(response, "addressComponent", address_component, sizeof(address_component)))
+    {
+        return 0;
+    }
+
+    (void)json_get_string(address_component, "province", place->province, sizeof(place->province));
+    (void)json_get_string(address_component, "city", place->city, sizeof(place->city));
+    copy_text(raw_city, sizeof(raw_city), place->city);
+    (void)json_get_string(address_component, "district", place->district, sizeof(place->district));
+    (void)json_get_string(address_component, "adcode", place->adcode, sizeof(place->adcode));
+    (void)json_get_string(address_component, "township", place->township, sizeof(place->township));
+    if (json_get_object(address_component, "streetNumber", street_number, sizeof(street_number)))
+    {
+        (void)json_get_string(street_number, "street", place->street, sizeof(place->street));
+    }
+    (void)json_get_string(response, "formatted_address", place->formatted_address, sizeof(place->formatted_address));
+
+    /* AMap may encode a municipality city as [], an empty string, or omit it. */
+    if (place->city[0] == '\0' && cabin_api_is_municipality_province(place->province))
+    {
+        copy_text(place->city, sizeof(place->city), place->province);
+    }
+
+    printf("Cabin Place: reverse province=%s city=%s(raw=%s) district=%s adcode=%s township=%s street=%s formatted=%s.\n",
+           place->province[0] != '\0' ? place->province : "--",
+           place->city[0] != '\0' ? place->city : "--",
+           raw_city[0] != '\0' ? raw_city : "--",
+           place->district[0] != '\0' ? place->district : "--",
+           place->adcode[0] != '\0' ? place->adcode : "--",
+           place->township[0] != '\0' ? place->township : "--",
+           place->street[0] != '\0' ? place->street : "--",
+           place->formatted_address[0] != '\0' ? place->formatted_address : "--");
+
+    return place->province[0] != '\0' || place->city[0] != '\0' ||
+           place->district[0] != '\0' || place->township[0] != '\0' ||
+           place->street[0] != '\0' || place->formatted_address[0] != '\0' ||
+           place->adcode[0] != '\0';
+}
+
 int cabin_api_reverse_geocode(double latitude,
                               double longitude,
-                              char *province,
-                              size_t province_size,
-                              char *city,
-                              size_t city_size,
-                              char *district,
-                              size_t district_size)
+                              Cabin_Place *place)
 {
     const char *api_key_source = "";
     const char *api_key = get_api_key(&api_key_source);
     char url[1024];
     char response[CABIN_HTTP_RESPONSE_MAX];
-    char status[16];
-    char raw_city[256];
-    Cabin_Json_Field_Type province_type;
-    Cabin_Json_Field_Type city_type;
-    Cabin_Json_Field_Type district_type;
 
-    if (province == NULL || city == NULL || district == NULL ||
-        province_size == 0 || city_size == 0 || district_size == 0 ||
+    if (place == NULL ||
         latitude < -90.0 || latitude > 90.0 || longitude < -180.0 || longitude > 180.0)
     {
         return 0;
     }
-    province[0] = '\0';
-    city[0] = '\0';
-    district[0] = '\0';
-    raw_city[0] = '\0';
+    place->province[0] = '\0';
+    place->city[0] = '\0';
+    place->district[0] = '\0';
+    place->adcode[0] = '\0';
+    place->township[0] = '\0';
+    place->street[0] = '\0';
+    place->formatted_address[0] = '\0';
 
     if (!is_safe_api_key(api_key))
     {
@@ -651,33 +731,14 @@ int cabin_api_reverse_geocode(double latitude,
     snprintf(url, sizeof(url), "%s?key=%s&location=%.6f,%.6f&extensions=base&output=JSON",
              CABIN_AMAP_REVERSE_GEOCODE_URL, api_key, longitude, latitude);
     if (!http_get_with_curl(url, response, sizeof(response)) ||
-        !json_get_string(response, "status", status, sizeof(status)) || strcmp(status, "1") != 0)
+        !cabin_api_parse_reverse_geocode_response(response, place))
     {
         printf("Cabin Place: reverse geocode failed for lat=%.6f lon=%.6f.\n", latitude, longitude);
         return 0;
     }
 
-    province_type = json_get_field_type(response, "province");
-    city_type = json_get_field_type(response, "city");
-    district_type = json_get_field_type(response, "district");
-    (void)json_get_string(response, "province", province, province_size);
-    (void)json_get_string(response, "city", city, city_size);
-    snprintf(raw_city, sizeof(raw_city), "%s", city);
-    (void)json_get_string(response, "district", district, district_size);
-
-    /* AMap may encode a municipality city as [], an empty string, or omit it. */
-    if (city[0] == '\0' && cabin_api_is_municipality_province(province))
-    {
-        snprintf(city, city_size, "%s", province);
-    }
-
-    printf("Cabin Place: reverse lat=%.6f lon=%.6f province=%s(%s) city=%s(%s) district=%s(%s) display_city=%s.\n",
-           latitude, longitude,
-           json_field_type_name(province_type), province[0] != '\0' ? province : "--",
-           json_field_type_name(city_type), raw_city[0] != '\0' ? raw_city : "--",
-           json_field_type_name(district_type), district[0] != '\0' ? district : "--",
-           city[0] != '\0' ? city : "--");
-    return province[0] != '\0' || city[0] != '\0' || district[0] != '\0';
+    printf("Cabin Place: reverse geocode succeeded for lat=%.6f lon=%.6f.\n", latitude, longitude);
+    return 1;
 }
 
 int cabin_api_update_weather_for_city(Cabin_Data *data, const char *city_name, const char *adcode)
@@ -730,12 +791,11 @@ int cabin_api_update_weather_for_city(Cabin_Data *data, const char *city_name, c
     printf("Cabin API: sending weather request to Amap.\n");
 
     char url[1024];
-    snprintf(url,
-             sizeof(url),
-             "%s?key=%s&city=%s&extensions=base&output=JSON",
-             CABIN_AMAP_WEATHER_URL,
-             api_key,
-             safe_adcode);
+    if (!cabin_api_build_weather_url(url, sizeof(url), api_key, safe_adcode))
+    {
+        set_mock_weather_for_city(data, safe_city, safe_adcode, "Amap weather URL build failed");
+        return 0;
+    }
 
     char response[CABIN_HTTP_RESPONSE_MAX];
     if (!http_get_with_curl(url, response, sizeof(response)))
@@ -747,7 +807,7 @@ int cabin_api_update_weather_for_city(Cabin_Data *data, const char *city_name, c
 
     printf("Cabin API: HTTP request succeeded, response length=%u bytes.\n", (unsigned int)strlen(response));
 
-    if (!parse_amap_weather_json(data, response, safe_city, safe_adcode))
+    if (!cabin_api_parse_weather_response(data, response, safe_city, safe_adcode))
     {
         printf("Cabin API: JSON parse failed or API returned non-success status, fallback to mock weather.\n");
         print_weather_response_error(response);
@@ -767,9 +827,37 @@ int cabin_api_update_weather_for_city(Cabin_Data *data, const char *city_name, c
     return 1;
 }
 
+int cabin_api_build_weather_url(char *url, size_t url_size, const char *api_key, const char *adcode)
+{
+    int written;
+
+    if (url == NULL || url_size == 0 || api_key == NULL || api_key[0] == '\0' ||
+        adcode == NULL || adcode[0] == '\0')
+    {
+        return 0;
+    }
+
+    written = snprintf(url,
+                       url_size,
+                       "%s?key=%s&city=%s&extensions=base&output=JSON",
+                       CABIN_AMAP_WEATHER_URL,
+                       api_key,
+                       adcode);
+    return written >= 0 && (size_t)written < url_size;
+}
+
 int cabin_api_update_weather(Cabin_Data *data)
 {
-    return cabin_api_update_weather_for_city(data, CABIN_AMAP_DEFAULT_CITY_NAME, CABIN_AMAP_DEFAULT_CITY);
+    const char *city;
+
+    if (data == NULL)
+    {
+        return 0;
+    }
+    city = cabin_place_display_name(&data->current_place);
+    return cabin_api_update_weather_for_city(data,
+                                             city[0] != '\0' ? city : "飞行途中",
+                                             data->current_place.adcode);
 }
 
 int cabin_api_prepare_static_map(Cabin_Data *data, char *map_path, int map_path_size)
@@ -778,6 +866,8 @@ int cabin_api_prepare_static_map(Cabin_Data *data, char *map_path, int map_path_
     int zoom = 0;
     char location[64];
     char zoom_text[16];
+    char size_text[32];
+    char temporary_path[256];
 
     if (data == NULL)
     {
@@ -791,12 +881,20 @@ int cabin_api_prepare_static_map(Cabin_Data *data, char *map_path, int map_path_
 
     if (data->map_cache_path[0] == '\0')
     {
-        copy_text(data->map_cache_path, sizeof(data->map_cache_path), CABIN_MAP_DEFAULT_CACHE_PATH);
+        set_map_error(data, "地图缓存标识不可用");
+        return 0;
     }
     cache_path = data->map_cache_path;
-    zoom = data->map_zoom > 0 ? data->map_zoom : 5;
+    zoom = data->map_zoom;
+    if (zoom < data->map_min_zoom || zoom > data->map_max_zoom)
+    {
+        set_map_error(data, "地图缩放层级无效");
+        return 0;
+    }
     snprintf(location, sizeof(location), "%.6f,%.6f", data->map_center_lon, data->map_center_lat);
     snprintf(zoom_text, sizeof(zoom_text), "%d", zoom);
+    snprintf(size_text, sizeof(size_text), "%d*%d", CABIN_MAP_STATIC_WIDTH, CABIN_MAP_STATIC_HEIGHT);
+    snprintf(temporary_path, sizeof(temporary_path), "%s.part", cache_path);
 
     if (file_exists(cache_path) && static_map_file_usable(cache_path))
     {
@@ -848,29 +946,39 @@ int cabin_api_prepare_static_map(Cabin_Data *data, char *map_path, int map_path_
              sizeof(url),
              "%s?key=%s&location=%s&zoom=%s&size=%s&scale=2",
              CABIN_AMAP_STATIC_MAP_URL,
-             api_key,
-             location,
-             zoom_text,
-             CABIN_AMAP_STATIC_SIZE);
+              api_key,
+              location,
+              zoom_text,
+              size_text);
 
     printf("Cabin Map: requesting Amap static map center=%s zoom=%s size=%s cache=%s.\n",
            location,
            zoom_text,
-           CABIN_AMAP_STATIC_SIZE,
+           size_text,
            cache_path);
 
-    if (!download_file_with_curl(url, cache_path))
+    remove(temporary_path);
+    if (!download_file_with_curl(url, temporary_path))
     {
         printf("Cabin Map: static map request failed or curl is unavailable, fallback to local map.\n");
+        remove(temporary_path);
         set_map_error(data, "静态地图下载失败");
         return 0;
     }
 
-    if (!static_map_file_usable(cache_path))
+    if (!static_map_file_usable(temporary_path))
     {
         printf("Cabin Map: downloaded file is not a usable route map, fallback to local/drawn map.\n");
-        remove(cache_path);
+        remove(temporary_path);
         set_map_error(data, "静态地图返回内容不可用");
+        return 0;
+    }
+
+    if (rename(temporary_path, cache_path) != 0)
+    {
+        printf("Cabin Map: failed to commit validated cache file %s.\n", cache_path);
+        remove(temporary_path);
+        set_map_error(data, "地图缓存写入失败");
         return 0;
     }
 

@@ -49,6 +49,34 @@ static SimPlannedRoute domestic_test_route(void)
     return route;
 }
 
+static void apply_live_position(SimDataCenter *center,
+                                Cabin_Data *cabin,
+                                int frame_id,
+                                double latitude,
+                                double longitude,
+                                int connected,
+                                int timed_out)
+{
+    SimXPlaneLiveFrame frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.valid = connected && !timed_out;
+    frame.connected = connected;
+    frame.timed_out = timed_out;
+    frame.frame_id = frame_id;
+    frame.timestamp = (float)frame_id * 1.3f;
+    frame.delta_time = 1.3f;
+    frame.last_valid_timestamp = frame.valid ? frame.timestamp : frame.timestamp - 1.3f;
+    frame.latitude = latitude;
+    frame.longitude = longitude;
+    frame.altitude = 10000.0f;
+    frame.ground_speed = 300.0f;
+    frame.true_air_speed = 320.0f;
+    frame.heading = 90.0f;
+    frame.track = 90.0f;
+    (void)sim_data_center_apply_xplane_live_frame(center, &frame);
+    cabin_data_apply_sim_data_center(cabin, center, frame.delta_time);
+}
+
 static void assert_place_display_fallbacks(void)
 {
     Cabin_Place place;
@@ -66,8 +94,20 @@ static void assert_place_display_fallbacks(void)
     place.province[0] = '\0';
     assert(strcmp(cabin_place_display_name(&place), "顺义区") == 0);
 
+    snprintf(place.township, sizeof(place.township), "%s", "南法信镇");
+    snprintf(place.street, sizeof(place.street), "%s", "顺平路");
+    snprintf(place.formatted_address, sizeof(place.formatted_address), "%s", "北京市顺义区顺平路");
+    assert(strcmp(cabin_place_street_or_town(&place), "南法信镇") == 0);
+    place.township[0] = '\0';
+    assert(strcmp(cabin_place_street_or_town(&place), "顺平路") == 0);
+    place.street[0] = '\0';
+    assert(strcmp(cabin_place_street_or_town(&place), "北京市顺义区顺平路") == 0);
+    place.formatted_address[0] = '\0';
+    assert(cabin_place_street_or_town(&place)[0] == '\0');
+
     place.status = CABIN_PLACE_FAILED;
     assert(cabin_place_display_name(&place)[0] == '\0');
+    assert(cabin_place_street_or_town(&place)[0] == '\0');
 }
 
 int main(void)
@@ -83,6 +123,11 @@ int main(void)
     sim_data_center_set_route(center, &changed_route);
     sim_data_center_update(center, 0.033f);
     cabin_data_init(&cabin);
+    assert(cabin.flown_track_count == 1);
+    assert(cabin.flown_track_seed_is_default);
+    assert(!cabin.flown_track_has_real_point);
+    assert(fabs(cabin.flown_track[0].latitude - 36.07) < 0.000001);
+    assert(fabs(cabin.flown_track[0].longitude - 120.38) < 0.000001);
     assert(cabin_data_apply_sim_data_center(&cabin, center, 0.033f) & CABIN_DATA_UPDATE_ROUTE);
     assert_snapshot_consistency(&cabin, sim_data_center_snapshot(center));
     assert(cabin.route_valid);
@@ -106,7 +151,8 @@ int main(void)
     assert(sim_data_center_snapshot(center)->sim_time > initial_time);
     assert(cabin.latitude != initial_latitude || cabin.longitude != initial_longitude);
     assert(strcmp(cabin.flight_phase, "UNKNOWN") != 0);
-    assert(cabin.flown_track_count > 0);
+    assert(cabin.flown_track_count == 1);
+    assert(cabin.flown_track_seed_is_default);
 
     changed_route = *sim_data_center_route(center);
     snprintf(changed_route.origin, sizeof(changed_route.origin), "%s", "TEST_ORIGIN");
@@ -120,12 +166,65 @@ int main(void)
     assert(cabin_data_apply_sim_data_center(&cabin, center, 0.033f) & CABIN_DATA_UPDATE_ROUTE);
     assert(!cabin.route_valid);
     assert(cabin.planned_route_count == 0);
-    assert(cabin.flown_track_count == 0);
+    assert(cabin.flown_track_count == 1);
+    assert(cabin.flown_track_seed_is_default);
     assert(strcmp(cabin.origin_airport, "----") == 0);
     assert(cabin.map_top_left_lat > cabin.map_bottom_right_lat);
     assert(cabin.map_bottom_right_lon > cabin.map_top_left_lon);
     assert(cabin.latitude <= cabin.map_top_left_lat && cabin.latitude >= cabin.map_bottom_right_lat);
     assert(cabin.longitude >= cabin.map_top_left_lon && cabin.longitude <= cabin.map_bottom_right_lon);
+    assert(cabin.map_zoom >= cabin.map_min_zoom && cabin.map_zoom <= cabin.map_max_zoom);
+    assert(strstr(cabin.map_cache_path, "_c") != NULL);
+    assert(strstr(cabin.map_cache_path, "_z10_1024x576.png") != NULL);
+
+    /* The first stable X-Plane point replaces the Qingdao seed even without an FMC route. */
+    apply_live_position(center, &cabin, 1, 30.0000, 120.0000, 1, 0);
+    apply_live_position(center, &cabin, 2, 30.0000, 120.0000, 1, 0);
+    apply_live_position(center, &cabin, 3, 30.0000, 120.0000, 1, 0);
+    assert(!cabin.route_valid);
+    assert(cabin.flown_track_count == 1);
+    assert(!cabin.flown_track_seed_is_default);
+    assert(cabin.flown_track_has_real_point);
+    assert(fabs(cabin.flown_track[0].latitude - 30.0) < 0.000001);
+    assert(fabs(cabin.flown_track[0].longitude - 120.0) < 0.000001);
+
+    /* More than 40 samples use strict FIFO and retain the newest 40 points. */
+    for (int i = 1; i <= 45; ++i)
+    {
+        apply_live_position(center, &cabin, 3 + i, 30.0 + i * 0.01, 120.0 + i * 0.01, 1, 0);
+        assert(cabin.flown_track_count <= CABIN_FLOWN_TRACK_MAX_POINTS);
+    }
+    assert(cabin.flown_track_count == CABIN_FLOWN_TRACK_MAX_POINTS);
+    assert(fabs(cabin.flown_track[0].latitude - 30.06) < 0.000001);
+    assert(fabs(cabin.flown_track[39].latitude - 30.45) < 0.000001);
+    assert(cabin.flown_track[0].sequence == 6);
+    assert(cabin.flown_track[39].sequence == 45);
+
+    const int count_before_disconnect = cabin.flown_track_count;
+    const double last_before_disconnect = cabin.flown_track[count_before_disconnect - 1].latitude;
+    apply_live_position(center, &cabin, 49, 0.0, 0.0, 0, 0);
+    assert(cabin.flown_track_count == count_before_disconnect);
+    assert(fabs(cabin.flown_track[count_before_disconnect - 1].latitude - last_before_disconnect) < 0.000001);
+
+    /* Recovery requires stable frames; only the stable live position is appended. */
+    apply_live_position(center, &cabin, 50, 31.0, 121.0, 1, 0);
+    apply_live_position(center, &cabin, 51, 31.0, 121.0, 1, 0);
+    apply_live_position(center, &cabin, 52, 31.0, 121.0, 1, 0);
+    assert(cabin.flown_track_count == CABIN_FLOWN_TRACK_MAX_POINTS);
+    assert(fabs(cabin.flown_track[39].latitude - 31.0) < 0.000001);
+
+    cabin_data_commit_map_view(&cabin, 1);
+    const int loaded_zoom = cabin.map_loaded_zoom;
+    const unsigned int request_revision = cabin.map_request_revision;
+    assert(cabin_data_request_map_zoom(&cabin, 1));
+    assert(cabin.map_zoom == loaded_zoom + 1);
+    assert(cabin.map_refresh_requested);
+    assert(cabin.map_request_revision == request_revision + 1);
+    assert(strstr(cabin.map_cache_path, "_z11_1024x576.png") != NULL);
+    cabin_data_revert_requested_map_zoom(&cabin);
+    assert(cabin.map_zoom == loaded_zoom);
+    assert(!cabin.map_zoom_change_pending);
+    assert(!cabin.map_refresh_requested);
 
     SimDataCenter *unavailable_center = (SimDataCenter *)calloc(1, sizeof(*unavailable_center));
     assert(unavailable_center != NULL);
@@ -133,6 +232,7 @@ int main(void)
     assert(!cabin.snapshot_valid);
     assert(cabin.altitude == 0.0f);
     assert(strcmp(cabin.flight_phase, "UNKNOWN") == 0);
+    assert(cabin.flown_track_count == CABIN_FLOWN_TRACK_MAX_POINTS);
     free(unavailable_center);
 
     for (int i = 0; i < 3; ++i)
