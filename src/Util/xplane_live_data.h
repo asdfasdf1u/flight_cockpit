@@ -77,16 +77,6 @@ typedef struct XPlaneLiveDataTargets
 
 typedef struct XPlaneSharedRuntime
 {
-    SimDataCenter *sim_data_center;       // 共享统一数据中心
-    XPlaneLiveData live_data;             // X-Plane 实时连接状态
-    PFD_Data *pfd_shadow;                 // PFD 旧接口影子数据
-    ND_Data *nd_shadow;                   // ND 旧接口影子数据
-    EICAS_Data *eicas_shadow;             // EICAS 旧接口影子数据
-    AircraftSystems_Data *systems_shadow; // 系统旧接口影子数据
-    int initialized;                      // 共享运行时初始化状态
-    int last_frame_id;                    // 上一次日志帧号
-    int last_source;                      // 上一次数据来源
-    int last_valid;                       // 上一次有效状态
     SimDataCenter *sim_data_center;
 
     /* 数据线程独占 UDP socket 与临时模块数据；SDL 渲染线程不直接访问它们。 */
@@ -158,7 +148,7 @@ void xplane_shared_runtime_init(
 // 关闭共享运行时
 void xplane_shared_runtime_shutdown(XPlaneSharedRuntime *runtime);
 // 更新共享实时数据
-int xplane_shared_runtime_update(XPlaneSharedRuntime *runtime, float delta_time);
+int xplane_shared_runtime_update(XPlaneSharedRuntime *runtime);
 // 获取共享数据中心
 SimDataCenter *xplane_shared_runtime_data_center(XPlaneSharedRuntime *runtime);
 // 获取共享快照
