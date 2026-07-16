@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+// X-Plane RREF 实时数据接入参数
 #define XPLANE_LIVE_POLL_INTERVAL_SEC (1.0f / 30.0f)
 #define XPLANE_LIVE_RETRY_INTERVAL_SEC 1.0f
 #define XPLANE_LIVE_MAX_MISSED_FRAMES 5
@@ -79,11 +80,9 @@ static float second_or_default(const float *values, int size, float fallback)
     return values != NULL && size > 1 ? values[1] : fallback;
 }
 
-/*
- * X-Plane exposes vibration through cockpit2.  Its generic vibration dataref
- * is zero for the Laminar B738 even while its EICAS shows a non-zero value,
- * so a non-positive sample must not mask the next available data source.
- */
+/* X-Plane 通过 cockpit2 提供振动数据。
+ * Laminar B738 的通用振动 dataref 可能为 0，
+ * 因此非正样本不能覆盖后续可用的数据来源。 */
 static float engine_value_with_legacy_fallback(
     const float *primary,
     int primary_size,
@@ -118,7 +117,7 @@ static float vibration_hz_to_display(float hz_value)
 
 static float b738_vibration_display_value(const float *values, int size, float fallback)
 {
-    /* The B738 dataref is already in the same 0.0--5.0 VIB scale as its EICAS. */
+    /* B738 专用 dataref 已经是 EICAS 使用的 0.0--5.0 VIB 显示量程。 */
     if (values != NULL && size > 0 && values[0] > 0.0f)
     {
         return clamp_float(values[0], 0.0f, XPLANE_LIVE_VIBRATION_DISPLAY_MAX);
@@ -191,6 +190,7 @@ static int valid_engine(float value)
     return valid_float(value) && value >= 0.0f;
 }
 
+// 更新各显示模块的实时数据连接状态
 static void set_status(XPlaneLiveData *live, int pfd_active, int nd_active, int eicas_active, int fmc_active)
 {
     if (live == NULL)
@@ -217,6 +217,7 @@ static void set_status(XPlaneLiveData *live, int pfd_active, int nd_active, int 
     }
 }
 
+// 打开 RREF 主数据 socket
 static void open_socket_once(XPlaneLiveData *live)
 {
     if (live == NULL || live->socket_open)
@@ -230,6 +231,7 @@ static void open_socket_once(XPlaneLiveData *live)
     fflush(stdout);
 }
 
+// 打开报警状态查询 socket
 static void open_alarm_socket_once(XPlaneLiveData *live)
 {
     if (live == NULL || live->alarm_socket_open)
@@ -292,6 +294,7 @@ static void poll_alarm_drefs(XPlaneLiveData *live)
     live->alarm_values_valid = !any_invalid;
 }
 
+// 生成 RREF 订阅路径，数组 dataref 会拼接元素下标
 static int rref_write_dref_path(char *dest, int dest_size, const char *dref, int element_index, int element_count)
 {
     int written;
@@ -312,7 +315,7 @@ static int rref_write_dref_path(char *dest, int dest_size, const char *dref, int
 
     return written > 0 && written < dest_size;
 }
-//向 X-Plane 申请实时数据
+// 向 X-Plane 申请实时数据
 static int rref_send_subscription(XPlaneLiveData *live, int subscription_index, const char *dref, int element_index, int element_count, int frequency_hz)
 {
     char buffer[XPLANE_RREF_REQUEST_BYTES];
@@ -340,6 +343,7 @@ static int rref_send_subscription(XPlaneLiveData *live, int subscription_index, 
     return sendUDP(live->socket, buffer, sizeof(buffer)) >= 0;
 }
 
+// 确保所有 dataref 已经完成 RREF 订阅，超时后会重新订阅
 static int rref_ensure_subscriptions(XPlaneLiveData *live, const char *drefs[], int dref_count, const int capacities[])
 {
     int subscription_index = 0;
@@ -396,7 +400,7 @@ static int rref_ensure_subscriptions(XPlaneLiveData *live, const char *drefs[], 
 
     return live->rref_subscribed;
 }
-//接收并解析 X-Plane 实时数据
+// 接收并解析 X-Plane 实时数据
 static void rref_drain_packets(XPlaneLiveData *live)
 {
     char buffer[4096];
@@ -470,7 +474,7 @@ static int rref_find_subscription(const XPlaneLiveData *live, int dref_index, in
 
     return -1;
 }
-//把收到的实时数据整理成程序内部可用的数值
+// 把收到的实时数据整理成程序内部可用的数值
 static void rref_copy_values(const XPlaneLiveData *live, float *values[], int dref_count, int sizes[])
 {
     if (live == NULL || values == NULL || sizes == NULL)
@@ -499,6 +503,7 @@ static void rref_copy_values(const XPlaneLiveData *live, float *values[], int dr
     }
 }
 
+// 兼容旧路径：把实时帧直接写入 PFD、ND、EICAS 等模块
 static void apply_frame_to_legacy_modules(
     const SimXPlaneLiveFrame *frame,
     PFD_Data *pfd_data,
@@ -598,7 +603,7 @@ static void apply_frame_to_legacy_modules(
         fmc_data->live_data_active = 1;
     }
 }
-//把 X-Plane 的实时数据整理成一帧完整飞行状态
+// 把 X-Plane 的实时数据整理成一帧完整飞行状态
 static int poll_all_data(
     XPlaneLiveData *live,
     PFD_Data *pfd_data,
@@ -881,6 +886,7 @@ static int poll_all_data(
     return 1;
 }
 
+// 初始化 X-Plane 实时连接参数
 void xplane_live_data_init(XPlaneLiveData *live, const char *xp_ip, unsigned short xp_port)
 {
     if (live == NULL)
@@ -895,6 +901,7 @@ void xplane_live_data_init(XPlaneLiveData *live, const char *xp_ip, unsigned sho
     live->missed_frames = 0;
 }
 
+// 关闭 X-Plane 实时连接
 void xplane_live_data_shutdown(XPlaneLiveData *live)
 {
     if (live == NULL)
@@ -1128,41 +1135,46 @@ static void report_xplane_snapshot_status(XPlaneLiveData *live, const SimSnapsho
     live->compare_timed_out = timed_out;
 }
 
-static void publish_connection_status_frame(XPlaneLiveData *live, SimDataCenter *sim_data_center, float delta_time)
+// 在无新数据时构造连接状态帧，便于统一数据中心切换回本地数据
+static void build_connection_status_frame(
+    const XPlaneLiveData *live,
+    SimXPlaneLiveFrame *frame,
+    float delta_time)
 {
-    SimXPlaneLiveFrame frame;
-
-    if (live == NULL || sim_data_center == NULL)
+    if (live == NULL || frame == NULL)
     {
         return;
     }
 
-    memset(&frame, 0, sizeof(frame));
-    frame.connected = live->connected;
-    frame.timed_out = !live->connected;
-    frame.frame_id = live->frame_id;
-    frame.timestamp = live->elapsed_time;
-    frame.delta_time = delta_time;
-    frame.last_valid_timestamp = live->last_valid_time;
-    sim_data_center_apply_xplane_live_frame(sim_data_center, &frame);
-    report_xplane_snapshot_status(live, sim_data_center_snapshot(sim_data_center));
+    memset(frame, 0, sizeof(*frame));
+    frame->connected = live->connected;
+    frame->timed_out = !live->connected;
+    frame->frame_id = live->frame_id;
+    frame->timestamp = live->elapsed_time;
+    frame->delta_time = delta_time;
+    frame->last_valid_timestamp = live->last_valid_time;
 }
 
-static int xplane_live_data_update_internal(
+/*
+ * 采集函数只操作数据线程私有的 XPlaneLiveData 和 shadow 数据。
+ * 它不写 SimDataCenter，使主线程可以安全地统一处理路线、告警和快照发布。
+ */
+static int xplane_live_data_collect_frame_internal(
     XPlaneLiveData *live,
-    PFD_Data *pfd_data,
-    ND_Data *nd_data,
-    EICAS_Data *eicas_data,
-    AircraftSystems_Data *systems_data,
+    const XPlaneLiveDataTargets *targets,
     FMC_Data *fmc_data,
-    SimDataCenter *sim_data_center,
+    SimXPlaneLiveFrame *published_frame,
     float delta_time,
-    int write_legacy_outputs,
-    int compare_snapshot)
+    int write_legacy_outputs)
 {
     SimXPlaneLiveFrame frame;
 
-    if (live == NULL)
+    if (published_frame == NULL)
+    {
+        return 0;
+    }
+    memset(published_frame, 0, sizeof(*published_frame));
+    if (live == NULL || targets == NULL)
     {
         return 0;
     }
@@ -1206,7 +1218,7 @@ static int xplane_live_data_update_internal(
         live->poll_elapsed += delta_time;
         if (live->poll_elapsed < XPLANE_LIVE_POLL_INTERVAL_SEC)
         {
-            publish_connection_status_frame(live, sim_data_center, delta_time);
+            build_connection_status_frame(live, published_frame, delta_time);
             return live->connected;
         }
         live->poll_elapsed = 0.0f;
@@ -1216,7 +1228,7 @@ static int xplane_live_data_update_internal(
         live->retry_elapsed += delta_time;
         if (live->retry_elapsed < XPLANE_LIVE_RETRY_INTERVAL_SEC)
         {
-            publish_connection_status_frame(live, sim_data_center, delta_time);
+            build_connection_status_frame(live, published_frame, delta_time);
             return 0;
         }
         live->retry_elapsed = 0.0f;
@@ -1225,10 +1237,10 @@ static int xplane_live_data_update_internal(
     memset(&frame, 0, sizeof(frame));
     const int ok = poll_all_data(
         live,
-        pfd_data,
-        nd_data,
-        eicas_data,
-        systems_data,
+        targets->pfd_data,
+        targets->nd_data,
+        targets->eicas_data,
+        targets->systems_data,
         fmc_data,
         &frame,
         delta_time,
@@ -1254,14 +1266,7 @@ static int xplane_live_data_update_internal(
         {
             fmc_data->live_data_active = 1;
         }
-        if (sim_data_center != NULL)
-        {
-            const int applied_xplane = sim_data_center_apply_xplane_live_frame(sim_data_center, &frame);
-            if (compare_snapshot && applied_xplane)
-            {
-                compare_xplane_frame_to_snapshot(live, &frame, sim_data_center_snapshot(sim_data_center));
-            }
-        }
+        *published_frame = frame;
     }
     else
     {
@@ -1274,34 +1279,69 @@ static int xplane_live_data_update_internal(
                 fmc_data->live_data_active = 0;
             }
         }
-        publish_connection_status_frame(live, sim_data_center, delta_time);
+        build_connection_status_frame(live, published_frame, delta_time);
     }
 
     return live->connected;
 }
 
+static int xplane_live_data_update_internal(
+    XPlaneLiveData *live,
+    const XPlaneLiveDataTargets *targets,
+    FMC_Data *fmc_data,
+    SimDataCenter *sim_data_center,
+    float delta_time,
+    int write_legacy_outputs,
+    int compare_snapshot)
+{
+    SimXPlaneLiveFrame frame;
+    const int connected = xplane_live_data_collect_frame_internal(
+        live, targets, fmc_data,
+        &frame, delta_time, write_legacy_outputs);
+
+    if (sim_data_center != NULL)
+    {
+        const int applied_xplane = sim_data_center_apply_xplane_live_frame(sim_data_center, &frame);
+        if (compare_snapshot && applied_xplane)
+        {
+            compare_xplane_frame_to_snapshot(live, &frame, sim_data_center_snapshot(sim_data_center));
+        }
+        else if (!frame.valid || !frame.connected || frame.timed_out)
+        {
+            report_xplane_snapshot_status(live, sim_data_center_snapshot(sim_data_center));
+        }
+    }
+
+    return connected;
+}
+
 int xplane_live_data_update(
     XPlaneLiveData *live,
-    PFD_Data *pfd_data,
-    ND_Data *nd_data,
-    EICAS_Data *eicas_data,
-    AircraftSystems_Data *systems_data,
+    const XPlaneLiveDataTargets *targets,
     FMC_Data *fmc_data,
     float delta_time)
 {
-    return xplane_live_data_update_internal(live, pfd_data, nd_data, eicas_data, systems_data, fmc_data, NULL, delta_time, 1, 0);
+    return xplane_live_data_update_internal(live, targets, fmc_data, NULL, delta_time, 1, 0);
 }
-//把 X-Plane 实时数据送进统一数据中心
+// 把 X-Plane 实时数据送进统一数据中心
 int xplane_live_data_update_with_sim_data_center(
     XPlaneLiveData *live,
-    PFD_Data *pfd_data,
-    ND_Data *nd_data,
-    EICAS_Data *eicas_data,
-    AircraftSystems_Data *systems_data,
+    const XPlaneLiveDataTargets *targets,
     SimDataCenter *sim_data_center,
     float delta_time)
 {
-    return xplane_live_data_update_internal(live, pfd_data, nd_data, eicas_data, systems_data, NULL, sim_data_center, delta_time, 0, 0);
+    return xplane_live_data_update_internal(live, targets, NULL, sim_data_center, delta_time, 0, 0);
+}
+
+int xplane_live_data_collect_frame(
+    XPlaneLiveData *live,
+    const XPlaneLiveDataTargets *targets,
+    SimXPlaneLiveFrame *frame,
+    float delta_time)
+{
+    return xplane_live_data_collect_frame_internal(
+        live, targets, NULL,
+        frame, delta_time, 0);
 }
 
 int xplane_live_data_pfd_active(const XPlaneLiveData *live)
@@ -1334,6 +1374,168 @@ int xplane_live_data_has_valid_frame(const XPlaneLiveData *live)
     return live != NULL && live->frame_id > 0;
 }
 
+#define XPLANE_SHARED_WORKER_INTERVAL_MS 16
+
+/*
+ * 数据线程写入未发布缓冲区后，在互斥锁内切换索引。
+ * 主线程只读取已经发布的完整帧，避免 UDP 包解析过程与界面渲染发生数据竞争。
+ */
+static void xplane_shared_runtime_publish_frame(
+    XPlaneSharedRuntime *runtime,
+    const SimXPlaneLiveFrame *frame)
+{
+    int write_index;
+
+    if (runtime == NULL || frame == NULL || runtime->frame_mutex == NULL)
+    {
+        return;
+    }
+
+    SDL_LockMutex(runtime->frame_mutex);
+    write_index = runtime->published_frame_index == 0 ? 1 : 0;
+    runtime->frame_buffers[write_index] = *frame;
+    runtime->published_frame_index = write_index;
+    runtime->published_frame_revision++;
+    SDL_AtomicSet(&runtime->data_ready, 1);
+    SDL_UnlockMutex(runtime->frame_mutex);
+}
+
+static int xplane_shared_runtime_data_worker(void *user_data)
+{
+    XPlaneSharedRuntime *runtime = (XPlaneSharedRuntime *)user_data;
+    const XPlaneLiveDataTargets targets = {
+        runtime != NULL ? runtime->pfd_shadow : NULL,
+        runtime != NULL ? runtime->nd_shadow : NULL,
+        runtime != NULL ? runtime->eicas_shadow : NULL,
+        runtime != NULL ? runtime->systems_shadow : NULL};
+    Uint32 last_ticks;
+
+    if (runtime == NULL)
+    {
+        return 0;
+    }
+
+#ifdef _WIN32
+    last_ticks = GetTickCount();
+#else
+    last_ticks = SDL_GetTicks();
+#endif
+    while (SDL_AtomicGet(&runtime->thread_exit) == 0)
+    {
+        SimXPlaneLiveFrame frame;
+        Uint32 current_ticks;
+        float delta_time;
+
+#ifdef _WIN32
+        current_ticks = GetTickCount();
+#else
+        current_ticks = SDL_GetTicks();
+#endif
+        delta_time = (float)(current_ticks - last_ticks) / 1000.0f;
+
+        last_ticks = current_ticks;
+        if (delta_time > 0.1f)
+        {
+            delta_time = 0.1f;
+        }
+
+        xplane_live_data_collect_frame(
+            &runtime->live_data,
+            &targets,
+            &frame,
+            delta_time);
+        xplane_shared_runtime_publish_frame(runtime, &frame);
+
+        /* 采集频率独立于 UI 帧率，退出标志最多在一个周期内得到响应。 */
+#ifdef _WIN32
+        Sleep(XPLANE_SHARED_WORKER_INTERVAL_MS);
+#else
+        SDL_Delay(XPLANE_SHARED_WORKER_INTERVAL_MS);
+#endif
+    }
+
+    return 0;
+}
+
+#ifdef _WIN32
+static DWORD WINAPI xplane_shared_runtime_windows_worker(LPVOID user_data)
+{
+    return (DWORD)xplane_shared_runtime_data_worker(user_data);
+}
+#endif
+
+static int xplane_shared_runtime_start_worker(XPlaneSharedRuntime *runtime)
+{
+    if (runtime == NULL)
+    {
+        return 0;
+    }
+
+#ifdef _WIN32
+    /* 按 Windows 平台线程模型创建数据采集线程。 */
+    runtime->data_thread = CreateThread(
+        NULL,
+        0,
+        xplane_shared_runtime_windows_worker,
+        runtime,
+        0,
+        NULL);
+    return runtime->data_thread != NULL;
+#else
+    runtime->data_thread = SDL_CreateThread(
+        xplane_shared_runtime_data_worker,
+        "xplane-data",
+        runtime);
+    return runtime->data_thread != NULL;
+#endif
+}
+
+static void xplane_shared_runtime_join_worker(XPlaneSharedRuntime *runtime)
+{
+    if (runtime == NULL || runtime->data_thread == NULL)
+    {
+        return;
+    }
+
+#ifdef _WIN32
+    WaitForSingleObject(runtime->data_thread, INFINITE);
+    CloseHandle(runtime->data_thread);
+#else
+    SDL_WaitThread(runtime->data_thread, NULL);
+#endif
+    runtime->data_thread = NULL;
+}
+
+/* 主线程按版本读取一次最新帧，并继续使用既有 DataCenter 完成快照和告警更新。 */
+static int xplane_shared_runtime_apply_published_frame(XPlaneSharedRuntime *runtime)
+{
+    SimXPlaneLiveFrame frame;
+    int has_new_frame = 0;
+
+    if (runtime == NULL || runtime->frame_mutex == NULL ||
+        SDL_AtomicGet(&runtime->data_ready) == 0)
+    {
+        return 0;
+    }
+
+    SDL_LockMutex(runtime->frame_mutex);
+    if (runtime->published_frame_revision != runtime->consumed_frame_revision)
+    {
+        frame = runtime->frame_buffers[runtime->published_frame_index];
+        runtime->consumed_frame_revision = runtime->published_frame_revision;
+        has_new_frame = 1;
+    }
+    SDL_UnlockMutex(runtime->frame_mutex);
+
+    if (has_new_frame)
+    {
+        sim_data_center_apply_xplane_live_frame(runtime->sim_data_center, &frame);
+    }
+
+    return has_new_frame;
+}
+
+// 初始化共享运行时，把 X-Plane 连接和 SimDataCenter 绑定在一起
 void xplane_shared_runtime_init(
     XPlaneSharedRuntime *runtime,
     SimDataCenter *sim_data_center,
@@ -1354,17 +1556,24 @@ void xplane_shared_runtime_init(
     runtime->nd_shadow = (ND_Data *)malloc(sizeof(*runtime->nd_shadow));
     runtime->eicas_shadow = (EICAS_Data *)malloc(sizeof(*runtime->eicas_shadow));
     runtime->systems_shadow = (AircraftSystems_Data *)malloc(sizeof(*runtime->systems_shadow));
+    runtime->frame_mutex = SDL_CreateMutex();
     if (runtime->pfd_shadow == NULL ||
         runtime->nd_shadow == NULL ||
         runtime->eicas_shadow == NULL ||
-        runtime->systems_shadow == NULL)
+        runtime->systems_shadow == NULL ||
+        runtime->frame_mutex == NULL ||
+        sim_data_center == NULL)
     {
-        printf("Shared Runtime: failed to allocate shadow data.\n");
+        printf("Shared Runtime: failed to allocate thread data resources.\n");
         fflush(stdout);
         free(runtime->pfd_shadow);
         free(runtime->nd_shadow);
         free(runtime->eicas_shadow);
         free(runtime->systems_shadow);
+        if (runtime->frame_mutex != NULL)
+        {
+            SDL_DestroyMutex(runtime->frame_mutex);
+        }
         memset(runtime, 0, sizeof(*runtime));
         return;
     }
@@ -1374,7 +1583,18 @@ void xplane_shared_runtime_init(
     eicas_data_init(runtime->eicas_shadow);
     aircraft_systems_data_init(runtime->systems_shadow);
     xplane_live_data_init(&runtime->live_data, xp_ip, xp_port);
-    runtime->initialized = sim_data_center != NULL;
+    SDL_AtomicSet(&runtime->data_ready, 0);
+    SDL_AtomicSet(&runtime->thread_exit, 0);
+    runtime->initialized = 1;
+
+    if (!xplane_shared_runtime_start_worker(runtime))
+    {
+        printf("Shared Runtime: failed to start X-Plane data thread.\n");
+        fflush(stdout);
+        xplane_shared_runtime_shutdown(runtime);
+        return;
+    }
+
     printf("Shared Runtime: initialized SimDataCenter=%p X-Plane=%s:%u.\n",
            (void *)sim_data_center,
            runtime->live_data.xp_ip,
@@ -1389,6 +1609,10 @@ void xplane_shared_runtime_shutdown(XPlaneSharedRuntime *runtime)
         return;
     }
 
+    /* 先通知线程退出并等待回收，再关闭 socket 和释放双缓冲资源。 */
+    SDL_AtomicSet(&runtime->thread_exit, 1);
+    xplane_shared_runtime_join_worker(runtime);
+
     if (runtime->initialized)
     {
         xplane_live_data_shutdown(&runtime->live_data);
@@ -1398,30 +1622,24 @@ void xplane_shared_runtime_shutdown(XPlaneSharedRuntime *runtime)
     free(runtime->nd_shadow);
     free(runtime->eicas_shadow);
     free(runtime->systems_shadow);
+    if (runtime->frame_mutex != NULL)
+    {
+        SDL_DestroyMutex(runtime->frame_mutex);
+    }
     memset(runtime, 0, sizeof(*runtime));
 }
 
-int xplane_shared_runtime_update(XPlaneSharedRuntime *runtime, float delta_time)
+// 共享运行时每帧更新：读取 X-Plane 并刷新统一快照
+int xplane_shared_runtime_update(XPlaneSharedRuntime *runtime)
 {
     const SimSnapshot *snapshot;
 
-    if (runtime == NULL || !runtime->initialized || runtime->sim_data_center == NULL ||
-        runtime->pfd_shadow == NULL ||
-        runtime->nd_shadow == NULL ||
-        runtime->eicas_shadow == NULL ||
-        runtime->systems_shadow == NULL)
+    if (runtime == NULL || !runtime->initialized || runtime->sim_data_center == NULL)
     {
         return 0;
     }
 
-    xplane_live_data_update_with_sim_data_center(
-        &runtime->live_data,
-        runtime->pfd_shadow,
-        runtime->nd_shadow,
-        runtime->eicas_shadow,
-        runtime->systems_shadow,
-        runtime->sim_data_center,
-        delta_time);
+    xplane_shared_runtime_apply_published_frame(runtime);
 
     snapshot = sim_data_center_snapshot(runtime->sim_data_center);
     if (snapshot != NULL &&

@@ -53,6 +53,29 @@ typedef struct Cabin_Place_Resolver
     Cabin_Place result;
 } Cabin_Place_Resolver;
 
+typedef struct Cabin_Map_Loader
+{
+    SDL_Thread *thread;
+    SDL_atomic_t complete;
+    int success;
+    unsigned int request_revision;
+    Cabin_Data request_data;
+    char map_path[256];
+} Cabin_Map_Loader;
+
+typedef struct Cabin_Weather_Resolver
+{
+    SDL_Thread *thread;
+    SDL_atomic_t complete;
+    int success;
+    int latitude_grid;
+    int longitude_grid;
+    char data_source[CABIN_TEXT_LEN];
+    char city[CABIN_TEXT_LEN];
+    char adcode[CABIN_TEXT_LEN];
+    Cabin_Data result;
+} Cabin_Weather_Resolver;
+
 #define CABIN_PLACE_GRID_SCALE 10.0
 #define CABIN_PLACE_RETRY_SECONDS 30.0f
 
@@ -102,12 +125,7 @@ static int cabin_place_worker(void *user_data)
     snprintf(resolver->result.snapshot_source, sizeof(resolver->result.snapshot_source), "%s", resolver->request.data_source);
     resolver->success = cabin_api_reverse_geocode(resolver->request.latitude,
                                                    resolver->request.longitude,
-                                                   resolver->result.province,
-                                                   sizeof(resolver->result.province),
-                                                   resolver->result.city,
-                                                   sizeof(resolver->result.city),
-                                                   resolver->result.district,
-                                                   sizeof(resolver->result.district));
+                                                   &resolver->result);
     resolver->result.status = resolver->success ? CABIN_PLACE_VALID : CABIN_PLACE_FAILED;
     if (resolver->request.target != CABIN_PLACE_TARGET_CURRENT)
     {
@@ -277,105 +295,129 @@ static void cabin_place_apply_labels(Cabin_Data *data)
     {
         snprintf(data->current_city, sizeof(data->current_city), "%s", cabin_place_display_name(&data->current_place));
         snprintf(data->current_district, sizeof(data->current_district), "%s", data->current_place.district);
-        snprintf(data->current_town, sizeof(data->current_town), "%s", data->current_place.province);
+        snprintf(data->current_town, sizeof(data->current_town), "%s", cabin_place_street_or_town(&data->current_place));
     }
 }
 
-static void resolve_weather_city(const Cabin_Data *data, char *city, size_t city_size, char *adcode, size_t adcode_size)
+static int cabin_weather_worker(void *user_data)
 {
-    if (city != NULL && city_size > 0)
+    Cabin_Weather_Resolver *resolver = (Cabin_Weather_Resolver *)user_data;
+
+    if (resolver == NULL)
     {
-        city[0] = '\0';
-    }
-    if (adcode != NULL && adcode_size > 0)
-    {
-        adcode[0] = '\0';
+        return 0;
     }
 
-    if (data == NULL)
-    {
-        return;
-    }
-
-    if (strcmp(data->current_city, "北京") == 0 ||
-        strcmp(data->current_city, "北京市") == 0 ||
-        strcmp(data->current_district, "北京") == 0 ||
-        strcmp(data->current_district, "北京市") == 0)
-    {
-        snprintf(city, city_size, "%s", "北京");
-        snprintf(adcode, adcode_size, "%s", "110000");
-        return;
-    }
-    if (strcmp(data->current_city, "陕西省") == 0 ||
-        strcmp(data->current_district, "西安") == 0 ||
-        strcmp(data->current_district, "西安市") == 0)
-    {
-        snprintf(city, city_size, "%s", "西安");
-        snprintf(adcode, adcode_size, "%s", "610100");
-        return;
-    }
-    if (strcmp(data->current_city, "成都") == 0 ||
-        strcmp(data->current_city, "成都市") == 0 ||
-        strcmp(data->current_city, "四川省") == 0 ||
-        strcmp(data->current_district, "成都") == 0 ||
-        strcmp(data->current_district, "成都市") == 0)
-    {
-        snprintf(city, city_size, "%s", "成都");
-        snprintf(adcode, adcode_size, "%s", "510100");
-        return;
-    }
-
-    snprintf(city, city_size, "%s", "飞行途中");
-    snprintf(adcode, adcode_size, "%s", "");
-    return;
+    resolver->success = cabin_api_update_weather_for_city(&resolver->result,
+                                                           resolver->city,
+                                                           resolver->adcode);
+    SDL_AtomicSet(&resolver->complete, 1);
+    return 0;
 }
 
-static void update_weather_if_city_changed(Cabin_Data *data, char *last_city, size_t last_city_size, char *last_adcode, size_t last_adcode_size)
+static int cabin_weather_request_matches(const Cabin_Weather_Resolver *resolver, const Cabin_Data *data)
 {
-    char city[CABIN_TEXT_LEN];
-    char adcode[CABIN_TEXT_LEN];
+    return resolver != NULL && data != NULL &&
+           data->current_place.status == CABIN_PLACE_VALID &&
+           data->current_place.adcode[0] != '\0' &&
+           strcmp(resolver->adcode, data->current_place.adcode) == 0 &&
+           resolver->latitude_grid == data->current_place.latitude_grid &&
+           resolver->longitude_grid == data->current_place.longitude_grid &&
+           strcmp(resolver->data_source, data->current_place.snapshot_source) == 0;
+}
 
-    resolve_weather_city(data, city, sizeof(city), adcode, sizeof(adcode));
-    if (city[0] == '\0')
+static void cabin_weather_apply_completed(Cabin_Weather_Resolver *resolver, Cabin_Data *data)
+{
+    if (resolver == NULL || data == NULL || resolver->thread == NULL ||
+        SDL_AtomicGet(&resolver->complete) == 0)
     {
         return;
     }
 
-    if (strcmp(city, last_city) == 0 && strcmp(adcode, last_adcode) == 0)
+    SDL_WaitThread(resolver->thread, NULL);
+    resolver->thread = NULL;
+    if (!cabin_weather_request_matches(resolver, data))
     {
+        printf("Cabin Weather: discard stale result city=%s adcode=%s grid=%d/%d.\n",
+               resolver->city,
+               resolver->adcode,
+               resolver->latitude_grid,
+               resolver->longitude_grid);
         return;
     }
 
-    printf("Cabin Weather: current position lat=%.6f lon=%.6f progress=%.3f.\n",
-           data->current_lat,
-           data->current_lon,
-           data->progress);
-    printf("Cabin Weather: city changed from %s/%s to %s/%s, update weather.\n",
-           last_city[0] != '\0' ? last_city : "none",
-           last_adcode[0] != '\0' ? last_adcode : "none",
-           city,
-           adcode[0] != '\0' ? adcode : "none");
+    snprintf(data->weather, sizeof(data->weather), "%s", resolver->result.weather);
+    snprintf(data->weather_city, sizeof(data->weather_city), "%s", resolver->result.weather_city);
+    snprintf(data->weather_adcode, sizeof(data->weather_adcode), "%s", resolver->result.weather_adcode);
+    data->temperature = resolver->result.temperature;
+    data->humidity = resolver->result.humidity;
+    snprintf(data->wind_direction, sizeof(data->wind_direction), "%s", resolver->result.wind_direction);
+    snprintf(data->wind_power, sizeof(data->wind_power), "%s", resolver->result.wind_power);
+    snprintf(data->weather_source, sizeof(data->weather_source), "%s", resolver->result.weather_source);
+    snprintf(data->weather_report_time, sizeof(data->weather_report_time), "%s", resolver->result.weather_report_time);
+    data->api_weather_loaded = resolver->result.api_weather_loaded;
+    data->api_weather_failed = resolver->result.api_weather_failed;
+    snprintf(data->api_error_message, sizeof(data->api_error_message), "%s", resolver->result.api_error_message);
 
-    if (adcode[0] == '\0')
-    {
-        printf("Cabin Weather: enroute segment has no city adcode, keep current weather source=%s.\n",
-               data->weather_source);
-        snprintf(last_city, last_city_size, "%s", city);
-        snprintf(last_adcode, last_adcode_size, "%s", adcode);
-        return;
-    }
-
-    cabin_api_update_weather_for_city(data, city, adcode);
-
-    printf("Cabin Weather: weather source=%s city=%s weather=%s temperature=%.1f humidity=%.1f.\n",
-           data->weather_source,
+    printf("Cabin Weather: applied city=%s adcode=%s source=%s success=%d.\n",
            data->weather_city,
-           data->weather,
-           data->temperature,
-           data->humidity);
+           data->weather_adcode,
+           data->weather_source,
+           resolver->success);
+}
 
-    snprintf(last_city, last_city_size, "%s", city);
-    snprintf(last_adcode, last_adcode_size, "%s", adcode);
+static void cabin_weather_schedule(Cabin_Weather_Resolver *resolver, Cabin_Data *data)
+{
+    const Cabin_Place *place;
+    const char *city;
+
+    if (resolver == NULL || data == NULL || resolver->thread != NULL)
+    {
+        return;
+    }
+    place = &data->current_place;
+    if (place->status != CABIN_PLACE_VALID || place->adcode[0] == '\0')
+    {
+        return;
+    }
+    if (strcmp(data->weather_adcode, place->adcode) == 0 &&
+        (data->api_weather_loaded || data->api_weather_failed))
+    {
+        return;
+    }
+
+    city = cabin_place_display_name(place);
+    resolver->result = *data;
+    resolver->latitude_grid = place->latitude_grid;
+    resolver->longitude_grid = place->longitude_grid;
+    snprintf(resolver->data_source, sizeof(resolver->data_source), "%s", place->snapshot_source);
+    snprintf(resolver->city, sizeof(resolver->city), "%s", city[0] != '\0' ? city : "飞行途中");
+    snprintf(resolver->adcode, sizeof(resolver->adcode), "%s", place->adcode);
+    resolver->success = 0;
+    SDL_AtomicSet(&resolver->complete, 0);
+    resolver->thread = SDL_CreateThread(cabin_weather_worker, "cabin-weather", resolver);
+    if (resolver->thread == NULL)
+    {
+        data->api_weather_failed = 1;
+        snprintf(data->api_error_message, sizeof(data->api_error_message), "%s", "天气请求线程启动失败");
+        printf("Cabin Weather: failed to start resolver thread: %s.\n", SDL_GetError());
+        return;
+    }
+
+    printf("Cabin Weather: queued city=%s adcode=%s grid=%d/%d.\n",
+           resolver->city,
+           resolver->adcode,
+           resolver->latitude_grid,
+           resolver->longitude_grid);
+}
+
+static void cabin_weather_stop(Cabin_Weather_Resolver *resolver)
+{
+    if (resolver != NULL && resolver->thread != NULL)
+    {
+        SDL_WaitThread(resolver->thread, NULL);
+        resolver->thread = NULL;
+    }
 }
 
 static TTF_Font *open_font(int size)
@@ -416,6 +458,19 @@ static SDL_Texture *load_texture(SDL_Renderer *renderer, const char *path, const
     return texture;
 }
 
+static int cabin_static_map_texture_usable(SDL_Texture *texture)
+{
+    int width = 0;
+    int height = 0;
+
+    if (texture == NULL || SDL_QueryTexture(texture, NULL, NULL, &width, &height) != 0)
+    {
+        return 0;
+    }
+    return width >= CABIN_MAP_STATIC_WIDTH && height >= CABIN_MAP_STATIC_HEIGHT &&
+           width * CABIN_MAP_STATIC_HEIGHT == height * CABIN_MAP_STATIC_WIDTH;
+}
+
 static SDL_Texture *load_cabin_map_texture(SDL_Renderer *renderer, Cabin_Data *data)
 {
     char api_map_path[256];
@@ -425,13 +480,19 @@ static SDL_Texture *load_cabin_map_texture(SDL_Renderer *renderer, Cabin_Data *d
     if (cabin_api_prepare_static_map(data, api_map_path, sizeof(api_map_path)) && api_map_path[0] != '\0')
     {
         texture = load_texture(renderer, api_map_path, "cached/API Beijing-Chengdu map background");
-        if (texture != NULL)
+        if (cabin_static_map_texture_usable(texture))
         {
             printf("Cabin Map: final map source=%s path=%s.\n", data->map_source, api_map_path);
             return texture;
         }
 
-        printf("Cabin Map: cached/API map failed to load as SDL texture, fallback to local map.\n");
+        if (texture != NULL)
+        {
+            SDL_DestroyTexture(texture);
+            texture = NULL;
+        }
+
+        printf("Cabin Map: cached/API map texture failed size/aspect validation, fallback to local map.\n");
     }
 
     if (!data->route_valid)
@@ -453,6 +514,150 @@ static SDL_Texture *load_cabin_map_texture(SDL_Renderer *renderer, Cabin_Data *d
     snprintf(data->map_source, sizeof(data->map_source), "%s", "FALLBACK");
     printf("Cabin Map: final map source=FALLBACK, using drawn map background.\n");
     return NULL;
+}
+
+static int cabin_map_worker(void *user_data)
+{
+    Cabin_Map_Loader *loader = (Cabin_Map_Loader *)user_data;
+    if (loader == NULL)
+    {
+        return 0;
+    }
+
+    loader->map_path[0] = '\0';
+    loader->success = cabin_api_prepare_static_map(&loader->request_data,
+                                                   loader->map_path,
+                                                   sizeof(loader->map_path));
+    SDL_AtomicSet(&loader->complete, 1);
+    return 0;
+}
+
+static int cabin_map_request_matches(const Cabin_Map_Loader *loader, const Cabin_Data *data)
+{
+    return loader != NULL && data != NULL &&
+           loader->request_revision == data->map_request_revision &&
+           loader->request_data.route_revision == data->route_revision &&
+           loader->request_data.map_zoom == data->map_zoom &&
+           fabs(loader->request_data.map_center_lat - data->map_center_lat) < 0.000001 &&
+           fabs(loader->request_data.map_center_lon - data->map_center_lon) < 0.000001 &&
+           strcmp(loader->request_data.map_cache_path, data->map_cache_path) == 0;
+}
+
+static void cabin_map_start_request(Cabin_Map_Loader *loader, Cabin_Data *data)
+{
+    if (loader == NULL || data == NULL || loader->thread != NULL || !data->map_refresh_requested)
+    {
+        return;
+    }
+
+    loader->request_data = *data;
+    loader->request_revision = data->map_request_revision;
+    loader->success = 0;
+    loader->map_path[0] = '\0';
+    SDL_AtomicSet(&loader->complete, 0);
+    data->map_refresh_requested = 0;
+    loader->thread = SDL_CreateThread(cabin_map_worker, "cabin-map", loader);
+    if (loader->thread == NULL)
+    {
+        printf("Cabin Map: failed to start background request: %s.\n", SDL_GetError());
+        data->api_map_failed = 1;
+        snprintf(data->api_map_error_message, sizeof(data->api_map_error_message), "%s", "地图加载线程启动失败");
+        if (data->map_zoom_change_pending)
+        {
+            cabin_data_revert_requested_map_zoom(data);
+        }
+    }
+    else
+    {
+        printf("Cabin Map: queued request revision=%u zoom=%d cache=%s.\n",
+               loader->request_revision,
+               loader->request_data.map_zoom,
+               loader->request_data.map_cache_path);
+    }
+}
+
+static void cabin_map_apply_completed(Cabin_Map_Loader *loader,
+                                      SDL_Renderer *renderer,
+                                      Cabin_Assets *assets,
+                                      Cabin_Data *data)
+{
+    SDL_Texture *new_texture = NULL;
+
+    if (loader == NULL || renderer == NULL || assets == NULL || data == NULL ||
+        loader->thread == NULL || !SDL_AtomicGet(&loader->complete))
+    {
+        return;
+    }
+
+    SDL_WaitThread(loader->thread, NULL);
+    loader->thread = NULL;
+    if (!cabin_map_request_matches(loader, data))
+    {
+        printf("Cabin Map: discard stale request revision=%u; current revision=%u zoom=%d.\n",
+               loader->request_revision,
+               data->map_request_revision,
+               data->map_zoom);
+        return;
+    }
+
+    if (loader->success && loader->map_path[0] != '\0')
+    {
+        new_texture = load_texture(renderer, loader->map_path, "cached/API Cabin map background");
+        if (!cabin_static_map_texture_usable(new_texture))
+        {
+            if (new_texture != NULL)
+            {
+                SDL_DestroyTexture(new_texture);
+                new_texture = NULL;
+            }
+            printf("Cabin Map: new texture failed size/aspect validation; keep existing texture.\n");
+        }
+    }
+
+    if (new_texture != NULL)
+    {
+        SDL_Texture *old_texture = assets->map_texture;
+        assets->map_texture = new_texture;
+        snprintf(data->map_source, sizeof(data->map_source), "%s", loader->request_data.map_source);
+        data->api_map_loaded = 1;
+        data->api_map_failed = 0;
+        data->api_map_error_message[0] = '\0';
+        cabin_data_commit_map_view(data, 1);
+        cabin_ui_complete_map_refresh(1);
+        if (old_texture != NULL)
+        {
+            SDL_DestroyTexture(old_texture);
+        }
+        printf("Cabin Map: applied revision=%u zoom=%d path=%s.\n",
+               loader->request_revision,
+               data->map_loaded_zoom,
+               loader->map_path);
+        return;
+    }
+
+    data->api_map_failed = 1;
+    snprintf(data->api_map_error_message,
+             sizeof(data->api_map_error_message),
+             "%s",
+             loader->request_data.api_map_error_message[0] != '\0'
+                 ? loader->request_data.api_map_error_message
+                 : "静态地图纹理加载失败");
+    if (data->map_zoom_change_pending)
+    {
+        cabin_data_revert_requested_map_zoom(data);
+    }
+    cabin_ui_complete_map_refresh(0);
+    printf("Cabin Map: request revision=%u failed; keep existing texture and local zoom fallback.\n",
+           loader->request_revision);
+}
+
+static void cabin_map_stop_loader(Cabin_Map_Loader *loader)
+{
+    if (loader != NULL && loader->thread != NULL)
+    {
+        SDL_WaitThread(loader->thread, NULL);
+        loader->thread = NULL;
+    }
 }
 
 static void destroy_assets(Cabin_Assets *assets)
@@ -584,6 +789,10 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedR
     cabin_data_apply_sim_data_center(&data, sim_data_center, 0.0f);
     Cabin_Place_Resolver place_resolver;
     memset(&place_resolver, 0, sizeof(place_resolver));
+    Cabin_Map_Loader map_loader;
+    memset(&map_loader, 0, sizeof(map_loader));
+    Cabin_Weather_Resolver weather_resolver;
+    memset(&weather_resolver, 0, sizeof(weather_resolver));
     printf("Cabin %s: SimDataCenter=%p planned_route=%p revision=%d origin=%s destination=%s points=%d; active view is the unified updater.\n",
            shared_mode ? "SHARED" : "STANDALONE",
            (void *)sim_data_center,
@@ -596,6 +805,9 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedR
 
     Cabin_Assets assets;
     assets.map_texture = load_cabin_map_texture(renderer, &data);
+    cabin_data_commit_map_view(&data,
+                               strcmp(data.map_source, "API") == 0 || strcmp(data.map_source, "CACHE") == 0);
+    data.map_refresh_requested = 0;
     assets.plane_texture = load_texture(renderer, CABIN_PLANE_PATH, "plane icon");
     assets.fullscreen_texture = load_texture(renderer, CABIN_FULLSCREEN_PATH, "fullscreen control");
     assets.add_texture = load_texture(renderer, CABIN_ADD_PATH, "zoom plus");
@@ -620,12 +832,7 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedR
         {
             cabin_api_set_key(dialog_result.api_key, dialog_result.remember);
             printf("Cabin: API key entered via dialog, remember=%d.\n", dialog_result.remember);
-            if (assets.map_texture != NULL)
-            {
-                SDL_DestroyTexture(assets.map_texture);
-                assets.map_texture = NULL;
-            }
-            assets.map_texture = load_cabin_map_texture(renderer, &data);
+            cabin_data_request_map_refresh(&data);
         }
         else
         {
@@ -633,14 +840,6 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedR
             printf("Cabin: API key dialog cancelled, using mock data.\n");
         }
     }
-
-    char last_weather_city[CABIN_TEXT_LEN] = "";
-    char last_weather_adcode[CABIN_TEXT_LEN] = "";
-    update_weather_if_city_changed(&data,
-                                   last_weather_city,
-                                   sizeof(last_weather_city),
-                                   last_weather_adcode,
-                                   sizeof(last_weather_adcode));
 
     int running = 1;
     SDL_Event event;
@@ -671,7 +870,7 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedR
             }
             else
             {
-                cabin_ui_handle_event(window, &event);
+                cabin_ui_handle_event(window, &event, &data);
             }
         }
 
@@ -680,16 +879,18 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedR
         last_ticks = now;
         if (run_mode == CABIN_RUN_SHARED_RUNTIME)
         {
-            xplane_shared_runtime_update(runtime, delta_time);
+            xplane_shared_runtime_update(runtime);
         }
         else if (sim_data_center != NULL)
         {
             sim_data_center_update(sim_data_center, delta_time);
         }
-        const int data_changes = cabin_data_apply_sim_data_center(&data, sim_data_center, delta_time);
+        cabin_data_apply_sim_data_center(&data, sim_data_center, delta_time);
         cabin_place_apply_completed(&place_resolver, &data);
         cabin_place_schedule(&place_resolver, &data);
         cabin_place_apply_labels(&data);
+        cabin_weather_apply_completed(&weather_resolver, &data);
+        cabin_weather_schedule(&weather_resolver, &data);
         if (last_snapshot_log_ticks == 0 || now - last_snapshot_log_ticks >= 1000u)
         {
             const SimSnapshot *snapshot = sim_data_center_snapshot(sim_data_center);
@@ -707,20 +908,8 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedR
                    snapshot != NULL ? sim_snapshot_source_name(snapshot->source) : "NONE",
                    snapshot != NULL ? snapshot->data_valid : 0);
         }
-        if ((data_changes & CABIN_DATA_UPDATE_ROUTE) != 0)
-        {
-            if (assets.map_texture != NULL)
-            {
-                SDL_DestroyTexture(assets.map_texture);
-                assets.map_texture = NULL;
-            }
-            assets.map_texture = load_cabin_map_texture(renderer, &data);
-        }
-        update_weather_if_city_changed(&data,
-                                       last_weather_city,
-                                       sizeof(last_weather_city),
-                                       last_weather_adcode,
-                                       sizeof(last_weather_adcode));
+        cabin_map_apply_completed(&map_loader, renderer, &assets, &data);
+        cabin_map_start_request(&map_loader, &data);
         SDL_SetRenderDrawColor(renderer, 45, 72, 96, 255);
         SDL_RenderClear(renderer);
         cabin_ui_render(renderer, &assets, &data);
@@ -738,6 +927,8 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedR
         SDL_WaitThread(place_resolver.thread, NULL);
         place_resolver.thread = NULL;
     }
+    cabin_weather_stop(&weather_resolver);
+    cabin_map_stop_loader(&map_loader);
     destroy_assets(&assets);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

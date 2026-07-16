@@ -9,8 +9,8 @@
 #include "eicas2_ui.h"
 #include "../Data/sim_data_center.h"
 
-#define EICAS2_WINDOW_WIDTH 768
-#define EICAS2_WINDOW_HEIGHT 768
+#define EICAS2_WINDOW_WIDTH 745
+#define EICAS2_WINDOW_HEIGHT 728
 #define EICAS2_WINDOW_MIN_WIDTH 384
 #define EICAS2_WINDOW_MIN_HEIGHT 384
 #define EICAS2_TARGET_FRAME_MS 16

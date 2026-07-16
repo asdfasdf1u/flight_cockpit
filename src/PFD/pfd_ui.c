@@ -9,6 +9,7 @@
 #define PFD_DEG_TO_RAD 0.01745329251994329577f
 #define TEXT_CACHE_SIZE 512
 
+// PFD 基础颜色定义
 static const SDL_Color COLOR_BLACK = {0, 0, 0, 255};
 static const SDL_Color COLOR_WHITE = {236, 244, 248, 255};
 static const SDL_Color COLOR_GREEN = {75, 255, 105, 255};
@@ -21,19 +22,20 @@ static const SDL_Color COLOR_GROUND = {119, 73, 35, 255};
 
 typedef struct
 {
-    SDL_Renderer *renderer;
-    TTF_Font *font;
-    SDL_Color color;
-    char text[96];
-    SDL_Texture *texture;
-    int w;
-    int h;
-    unsigned int age;
+    SDL_Renderer *renderer; // 绑定的渲染器
+    TTF_Font *font;         // 绑定的字体
+    SDL_Color color;        // 文字颜色
+    char text[96];          // 缓存文本
+    SDL_Texture *texture;   // 文本纹理
+    int w;                  // 纹理宽度
+    int h;                  // 纹理高度
+    unsigned int age;       // 最近使用时间
 } TextCacheEntry;
 
 static TextCacheEntry text_cache[TEXT_CACHE_SIZE];
 static unsigned int text_cache_clock = 1;
 
+// 限制绘制输入的数值范围
 static float clamp_float(float value, float min_value, float max_value)
 {
     if (value < min_value)
@@ -49,6 +51,7 @@ static float clamp_float(float value, float min_value, float max_value)
     return value;
 }
 
+// 航向角归一化到 0-360 度
 static float normalize_heading(float heading)
 {
     while (heading >= 360.0f)
@@ -345,6 +348,7 @@ static void draw_smooth_polygon_outline(SDL_Renderer *renderer, const SDL_Point 
     }
 }
 
+// 文本纹理缓存，避免每帧重复生成相同文字纹理
 static SDL_Texture *get_text_texture(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, const char *text, int *w, int *h)
 {
     int oldest = 0;
@@ -401,6 +405,7 @@ static SDL_Texture *get_text_texture(SDL_Renderer *renderer, TTF_Font *font, SDL
     return texture;
 }
 
+// 清理指定渲染器对应的文字缓存
 void pfd_ui_clear_text_cache(SDL_Renderer *renderer)
 {
     for (int i = 0; i < TEXT_CACHE_SIZE; ++i)
@@ -420,6 +425,7 @@ void pfd_ui_clear_text_cache(SDL_Renderer *renderer)
     }
 }
 
+// 在指定坐标绘制文本
 static void draw_text_at(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, int x, int y, const char *format, ...)
 {
     char text[96];
@@ -441,6 +447,7 @@ static void draw_text_at(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color
     SDL_RenderCopy(renderer, texture, NULL, &dest);
 }
 
+// 在指定矩形区域内居中绘制文本
 static void draw_text_center(SDL_Renderer *renderer, TTF_Font *font, SDL_Color color, SDL_Rect rect, const char *format, ...)
 {
     char text[96];
@@ -536,7 +543,7 @@ static void draw_right_pointer(SDL_Renderer *renderer, TTF_Font *font, SDL_Rect 
     draw_smooth_polygon_outline(renderer, inner, 7, 1, COLOR_BLACK);
     draw_text_center(renderer, font, COLOR_WHITE, (SDL_Rect){x + 18, y + 3, 84, 38}, "%05.0f", value);
 }
-//速度带动态绘制
+// 速度带动态绘制
 static void draw_speed_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     draw_panel(renderer, rect);
@@ -576,7 +583,7 @@ static void draw_speed_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Da
 
     draw_left_pointer(renderer, font, rect, center_y, data->airspeed_current);
 }
-//高度带动态绘制
+// 高度带动态绘制
 static void draw_altitude_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     draw_panel(renderer, rect);
@@ -629,6 +636,7 @@ static void draw_altitude_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD
     draw_text_at(renderer, font, COLOR_GREEN, start_x, base_y, "STD");
 }
 
+// 根据滚转角和俯仰偏移计算姿态仪上的旋转坐标点
 static SDL_Point attitude_point(SDL_Rect rect, float roll_rad, float pitch_offset, float pitch_deg, float x)
 {
     const float cx = (float)(rect.x + rect.w / 2);
@@ -642,7 +650,7 @@ static SDL_Point attitude_point(SDL_Rect rect, float roll_rad, float pitch_offse
     p.y = (int)lrintf(cy + x * sin_roll + local_y * cos_roll);
     return p;
 }
-//姿态仪动态绘制，绘制逻辑：同时处理俯仰偏移、滚转旋转、天空/地面多边形填充和裁剪区域
+// 姿态仪动态绘制：处理俯仰偏移、滚转旋转、天空/地面填充和裁剪区域
 static void draw_attitude(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     const int radius = 16;
@@ -728,6 +736,7 @@ static void draw_attitude(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data
     SDL_RenderSetClipRect(renderer, NULL);
 }
 
+// 根据垂直速度计算 VSI 指针位置
 static int vsi_pointer_y(int center_y, int top, int bottom, float vertical_speed)
 {
     const float v = vertical_speed / 1000.0f;
@@ -789,6 +798,7 @@ static int vsi_pointer_y(int center_y, int top, int bottom, float vertical_speed
     return y;
 }
 
+// 垂直速度表动态绘制
 static void draw_vertical_speed(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     fill_rect(renderer, rect, COLOR_BLACK);
@@ -880,7 +890,7 @@ static void draw_vertical_speed(SDL_Renderer *renderer, TTF_Font *font, const PF
                          "%.0f", -data->vertical_speed);
     }
 }
-//航向盘动态绘制
+// 航向盘动态绘制
 static void draw_heading(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     fill_rect(renderer, rect, COLOR_BLACK);
@@ -949,6 +959,7 @@ static void draw_heading(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data 
     draw_text_center(renderer, font, COLOR_GREEN, (SDL_Rect){center_x, rect.y + rect.h - 36, 52, 30}, "MAG");
 }
 
+// 飞行模式通告栏绘制
 static void draw_fma(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     fill_rect(renderer, rect, COLOR_BLACK);
@@ -963,6 +974,7 @@ static void draw_fma(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *dat
     draw_text_center(renderer, font, COLOR_MAGENTA, (SDL_Rect){rect.x + rect.w - side, rect.y, side, rect.h}, "%04d", altitude_target);
 }
 
+// 油门指示器绘制
 static void draw_thrust_indicator(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     (void)font;
@@ -993,6 +1005,7 @@ static void draw_thrust_indicator(SDL_Renderer *renderer, TTF_Font *font, const 
     draw_thick_line(renderer, cx, cy, pointer_x, pointer_y, 2, COLOR_WHITE);
 }
 
+// PFD 总绘制入口，负责布局并调用各仪表绘制函数
 void pfd_ui_render(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data)
 {
     if (renderer == NULL || font == NULL || data == NULL)

@@ -13,9 +13,9 @@ typedef enum SimWarningLevel
 
 typedef enum SimSnapshotSource
 {
-    SIM_SNAPSHOT_SOURCE_NONE = 0,
-    SIM_SNAPSHOT_SOURCE_DATA_FILES,
-    SIM_SNAPSHOT_SOURCE_XPLANE
+    SIM_SNAPSHOT_SOURCE_NONE = 0,  // 无数据
+    SIM_SNAPSHOT_SOURCE_DATA_FILES, // 本地样本数据
+    SIM_SNAPSHOT_SOURCE_XPLANE      // X-Plane 实时数据
 } SimSnapshotSource;
 
 typedef enum SimFlightPhase
@@ -39,6 +39,7 @@ typedef struct SimWarning
 
 typedef struct SimSnapshot
 {
+    // 快照状态信息
     float sim_time;
     float delta_time;
     float playback_speed;
@@ -55,6 +56,7 @@ typedef struct SimSnapshot
     SimFlightPhase flight_phase;
     int updated_frame;
 
+    // 各显示模块数据有效标志
     int has_pfd;
     int has_nd;
     int has_eicas_upper;
@@ -65,6 +67,7 @@ typedef struct SimSnapshot
     int eicas_upper_frame_index;
     int eicas_lower_frame_index;
 
+    // PFD 主飞行显示数据
     float pitch;
     float roll;
     float yaw;
@@ -78,12 +81,14 @@ typedef struct SimSnapshot
     float vertical_speed;
     float throttle;
 
+    // ND 导航显示数据
     double latitude;
     double longitude;
     float track;
     float ground_speed;
     float true_air_speed;
 
+    // EICAS 发动机与系统显示数据
     float total_air_temperature;
     float n1_left;
     float n1_right;
@@ -117,7 +122,7 @@ typedef struct SimSnapshot
     int flaps_level;
     int parking_brake_on;
 
-    /* X-Plane 原生报警状态（通过 getDREF 从 sim/cockpit/warnings/* 读取） */
+    /* X-Plane 原生报警状态（通过 getDREF 从 sim/cockpit/warnings/ 下读取）。 */
     int xplane_master_warning;
     int xplane_master_caution;
     int xplane_engine_fire;

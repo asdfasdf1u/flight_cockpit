@@ -452,7 +452,7 @@ void cockpit_alarm_update(
         }
 
         /* X-Plane 原生 MASTER WARNING / MASTER CAUTION 状态直接驱动红黄灯。
-         * 这些状态通过 xplane_live_data 中的 getDREF 从 sim/cockpit/warnings/* 读取。 */
+         * 这些状态通过 xplane_live_data 中的 getDREF 从 sim/cockpit/warnings/ 下读取。 */
         if (snapshot->xplane_master_warning)
         {
             warning_active = 1;
