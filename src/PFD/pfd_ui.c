@@ -975,7 +975,7 @@ static void draw_fma(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *dat
 }
 
 // 油门指示器绘制
-static void draw_thrust_indicator(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
+static void draw_thrust_indicator(SDL_Renderer *renderer, TTF_Font *font, SDL_Rect rect)
 {
     (void)font;
     fill_rect(renderer, rect, COLOR_BLACK);
@@ -983,7 +983,6 @@ static void draw_thrust_indicator(SDL_Renderer *renderer, TTF_Font *font, const 
     const int cx = rect.x + rect.w / 2;
     const int cy = rect.y + rect.h / 2 + 4;
     const int radius = rect.w / 2 - 10;
-    const float throttle = clamp_float(data->throttle, 0.0f, 100.0f);
 
     draw_arc(renderer, cx, cy, radius, 225, 450, COLOR_GRAY);
     for (int mark = 0; mark <= 100; mark += 20)
@@ -1031,7 +1030,7 @@ void pfd_ui_render(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data)
 
     draw_fma(renderer, font, data, SR(94, 31, 712, 57));
     draw_speed_tape(renderer, font, data, SR(94, 132, 104, 530));
-    draw_thrust_indicator(renderer, font, data, SR(596, 126, 80, 80));
+    draw_thrust_indicator(renderer, font, SR(596, 126, 80, 80));
     draw_attitude(renderer, font, data, SR(225, 215, 430, 405));
     draw_altitude_tape(renderer, font, data, SR(692, 132, 114, 528));
     draw_vertical_speed(renderer, font, data, SR(831, 184, 73, 388));

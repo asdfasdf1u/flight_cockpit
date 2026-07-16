@@ -19,16 +19,6 @@ extern char show_ariport[20];
 
 int is_string_in_range(const char *str, int min_val, int max_val, int *result);
 int is_string_in_range_f(const char *str, float min_val, float max_val, float *result);
-int fmc_xplane_connect_init(const char *xp_ip, unsigned short xp_port);
-void fmc_xplane_connect_shutdown(void);
-int fmc_xplane_connect_is_ready(void);
-int fmc_xplane_connect_is_connected(void);
-int fmc_xplane_set_origin(const char *origin);
-int fmc_xplane_set_destination(const char *destination);
-int fmc_xplane_set_co_route(const char *co_route);
-int fmc_xplane_set_flt_no(const char *flt_no);
-int fmc_xplane_set_exec(void);
-
 #ifdef _WIN32
 #include <direct.h>
 #include <io.h>
@@ -1884,11 +1874,6 @@ static int sync_route_fields_to_xplane_fmc(const FMC_Data *data, const char *fms
         return -1;
     }
 
-    if (!fmc_xplane_connect_is_ready())
-    {
-        fmc_xplane_connect_init(NULL, 0);
-    }
-
     if (data->origin[0] != '\0')
     {
         if (fmc_xplane_set_origin(data->origin) < 0)
@@ -1954,6 +1939,22 @@ int fmc_data_sync_route_to_xplane(FMC_Data *data)
 
     if (data == NULL)
     {
+        return 0;
+    }
+
+    if (!fmc_xplane_connect_is_ready() || !fmc_xplane_connect_is_connected())
+    {
+        set_text(data->message, sizeof(data->message), "XPLANE NOT CONNECT");
+        printf("FMC Route: X-Plane sync skipped; FMC plugin connection is not ready.\n");
+        fflush(stdout);
+        return 0;
+    }
+
+    if (!fmc_xplane_confirm_sync_ready())
+    {
+        set_text(data->message, sizeof(data->message), "XPLANE CONNECTION LOST");
+        printf("FMC Route: X-Plane sync aborted; quick connection confirmation failed.\n");
+        fflush(stdout);
         return 0;
     }
 

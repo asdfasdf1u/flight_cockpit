@@ -37,9 +37,11 @@ typedef enum ND_MapLayer
 
 typedef struct ND_NavPoint
 {
+    /* Navigation point identity and type loaded from nav data. */
     char ident[ND_NAME_LEN];
     ND_PointType type;
 
+    /* Geographic position and aircraft-relative display state. */
     double latitude;
     double longitude;
 
@@ -52,6 +54,7 @@ typedef struct ND_NavPoint
 
 typedef struct ND_DataFrame
 {
+    /* One local-data playback frame used when live data is unavailable. */
     float time_sec;
     double latitude;
     double longitude;
@@ -67,6 +70,7 @@ typedef struct ND_DataFrame
 
 typedef struct ND_RoutePoint
 {
+    /* Planned route point received from the unified route model. */
     char ident[ND_NAME_LEN];
     double latitude;
     double longitude;
@@ -116,6 +120,7 @@ typedef struct WAYPOINT_RESULT
 
 typedef struct ND_Data
 {
+    /* Live or playback aircraft navigation state. */
     double latitude;
     double longitude;
 
@@ -125,6 +130,7 @@ typedef struct ND_Data
     float true_air_speed;
     float range_nm;
 
+    /* Visible navigation-point cache for the current map range. */
     ND_NavPoint nav_points[ND_MAX_NAV_POINTS];
     int nav_point_count;
 
@@ -137,6 +143,7 @@ typedef struct ND_Data
 
     float simulation_time;
 
+    /* Local ND sample playback state. */
     ND_DataFrame data_frames[ND_MAX_DATA_FRAMES];
     int data_frame_count;
     int data_frame_index;
@@ -145,6 +152,7 @@ typedef struct ND_Data
     int data_file_loaded;
     int data_file_has_time;
 
+    /* Loaded earth_fix, earth_nav and apt.dat cache counters. */
     int mock_nav_point_count;
     int earth_fix_loaded;
     int earth_fix_count;
@@ -157,9 +165,11 @@ typedef struct ND_Data
     int apt_airport_count;
     int apt_tower_count;
 
+    /* Map layer and label visibility controlled by ND UI buttons. */
     int map_layer_visible[ND_MAP_LAYER_COUNT];
     int map_labels_visible;
 
+    /* Planned route cache synchronized from FMC/SimDataCenter. */
     ND_RoutePoint route_points[ND_MAX_ROUTE_POINTS];
     int route_point_count;
     int route_segment_count;

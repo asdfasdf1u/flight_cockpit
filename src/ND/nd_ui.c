@@ -495,6 +495,9 @@ static int nd_project_latlon_to_route_screen(
         return 0;
     }
 
+    /* Convert latitude/longitude deltas into local north/east nautical miles.
+     * Longitude is scaled by current latitude so nearby route points keep the
+     * correct shape before the ND heading rotation is applied. */
     const float aircraft_lat_rad = (float)data->latitude * ND_DEG_TO_RAD;
     const float lon_scale = cosf(aircraft_lat_rad);
     const double delta_lat = latitude - data->latitude;
@@ -503,6 +506,9 @@ static int nd_project_latlon_to_route_screen(
     const float east_nm = (float)(delta_lon * 60.0 * (double)lon_scale);
     const float distance_nm = sqrtf(north_nm * north_nm + east_nm * east_nm);
     const float bearing = atan2f(east_nm, north_nm) / ND_DEG_TO_RAD;
+
+    /* Rotate the local bearing by aircraft track so the screen remains
+     * track-up: positive relative bearing moves right, forward moves upward. */
     const float relative_bearing = normalize_signed_degrees(bearing - data->track);
     const float relative_rad = relative_bearing * ND_DEG_TO_RAD;
     const float distance_ratio = distance_nm / range_nm;
@@ -972,6 +978,9 @@ static int draw_clipped_route_segment(
     float previous_t = 0.0f;
     float visible_start_t = previous_inside ? 0.0f : -1.0f;
 
+    /* Walk the segment in small parameter steps and refine display-boundary
+     * crossings. Segments outside the compass arc or fixed info area are
+     * skipped so route lines do not overdraw static ND labels. */
     const float line_length = route_line_length(a->x, a->y, b->x, b->y);
     int clip_steps = (int)ceilf(line_length / 8.0f);
     if (clip_steps < ND_ROUTE_CLIP_STEPS)
@@ -1098,6 +1107,10 @@ static void draw_route_layer(SDL_Renderer *renderer, TTF_Font *font, const ND_La
 
     const int count = data->route_point_count < ND_MAX_ROUTE_POINTS ? data->route_point_count : ND_MAX_ROUTE_POINTS;
     const float range_nm = nd_map_range_nm(data);
+
+    /* Project all route points first, then draw only the continuous chain that
+     * starts at the active waypoint. This avoids drawing disconnected future
+     * legs that re-enter the display after leaving the visible sector. */
     for (int i = 0; i < count; ++i)
     {
         const ND_RoutePoint *point = &data->route_points[i];
@@ -1170,6 +1183,8 @@ static void draw_route_layer(SDL_Renderer *renderer, TTF_Font *font, const ND_La
         }
     }
 
+    /* Draw waypoint symbols and labels after route lines so the points remain
+     * legible and only appear on segments that survived the clipping pass. */
     for (int i = 0; i < count; ++i)
     {
         if (visible[i] && continuous_route_point[i])

@@ -1,3 +1,4 @@
+/* Development-only single-module switches; keep Launcher as the default entry. */
 /* #define TEST_MODULE_PFD */
 /* #define TEST_MODULE_ND */
 /* #define TEST_MODULE_EICAS1 */

@@ -11,7 +11,7 @@
  * 
  * @return int 成功返回0，失败返回负值
  */
-int initSDL();
+int initSDL(void);
 //定义多种大小的绘制字体
 extern TTF_Font *font8; 
 extern TTF_Font *font12;

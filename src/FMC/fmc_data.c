@@ -41,12 +41,12 @@ char dest[24] = {0};
 char co_route[24] = {0};
 char flt_no[24] = {0};
 
-// 元素与关联关系AAA
+// 元素与关联关系
 AirportElement g_elements[200];
 Relation g_relations[2000];
 int g_element_count = 0;
 int g_relation_count = 0;
-// 展示列表AAA
+// 展示列表
 char **runway = NULL;
 char **proc = NULL;
 char **runway_trans = NULL;
@@ -57,10 +57,19 @@ int runway_trans_count = 0;
 int proc_trans_count = 0;
 
 // 选择项
-SelectDepArr select_dep_arr[3] = {{0},{0},{0}};
+SelectDepArr select_dep_arr[3];
 char show_ariport[20] = {0};
 int dep_arr_index = 1;
 int dep_arr_type = 0;
+
+static void copy_fixed_text(char *dest, size_t dest_size, const char *src)
+{
+    if (dest == NULL || dest_size == 0)
+    {
+        return;
+    }
+    snprintf(dest, dest_size, "%s", src != NULL ? src : "");
+}
 
 int is_string_in_range(const char *str, int min_val, int max_val, int *result)
 {
@@ -138,7 +147,7 @@ int is_string_in_range_f(const char *str, float min_val, float max_val, float *r
     return 1;
 }
 
-void initVIATO() {
+void initVIATO(void) {
     if (via_to_list != NULL) {
         free(via_to_list);
         via_to_list = NULL;
@@ -421,7 +430,7 @@ static WaypointAVLNode *waypoint_avl_insert(WaypointAVLNode *root, const Waypoin
 
 /************************* 加载函数（直接插入AVL树，无数组） *************************/
 // 加载机场数据（直接插入AVL树）
-bool load_airport_data()
+bool load_airport_data(void)
 {
     // 参数检查
     char *file_path = "assets/apt.dat";
@@ -506,7 +515,7 @@ bool load_airport_data()
 }
 
 // 加载航路点数据（直接插入AVL树）
-bool load_waypoint_data()
+bool load_waypoint_data(void)
 {
     char *file_path = "assets/earth_fix.dat";
     // 打开文件
@@ -708,7 +717,7 @@ int setSpdAltLimit(const char *spd_alt_str, SpdAltLimit *spd_alt_limit) {
     }
 
     strncpy(speed_str, spd_alt_str, speed_len);
-    strcpy(altitude_str, slash_pos + 1);
+    copy_fixed_text(altitude_str, sizeof(altitude_str), slash_pos + 1);
 
     int speed = 0;
     int altitude = 0;
@@ -750,28 +759,28 @@ int setTgtSpeed(char *speed, TgtSpeed *target_speed) {
     return 0;
 }
 
-// 添加元素AAA
-void add_element(char *name, ElementType type, char *airport) {
+// 添加机场、跑道、程序和过渡点元素
+void add_element(const char *name, ElementType type, const char *airport) {
     if (g_element_count >= 200)
         return;
     AirportElement *elem = &g_elements[g_element_count++];
-    strcpy(elem->name, name);
-    strcpy(elem->airport, airport);
+    copy_fixed_text(elem->name, sizeof(elem->name), name);
+    copy_fixed_text(elem->airport, sizeof(elem->airport), airport);
     elem->type = type;
 }
 
 // 添加关联关系
-void add_relation(char *airport, char *elem1, ElementType el1_type, char *elem2, ElementType el2_type) {
+void add_relation(const char *airport, const char *elem1, ElementType el1_type, const char *elem2, ElementType el2_type) {
     if (g_relation_count >= 2000)
         return;
     Relation *rel = &g_relations[g_relation_count++];
-    strcpy(rel->airport, airport);
-    strcpy(rel->elem1, elem1);
+    copy_fixed_text(rel->airport, sizeof(rel->airport), airport);
+    copy_fixed_text(rel->elem1, sizeof(rel->elem1), elem1);
     rel->elem1_type = el1_type;
-    strcpy(rel->elem2, elem2);
+    copy_fixed_text(rel->elem2, sizeof(rel->elem2), elem2);
     rel->elem2_type = el2_type;
 }
-// 初始化机场数据AAA
+// 初始化机场元素、程序关系和展示缓存
 void init_airport_data(void) {
     // 初始化展示列表内存
     runway = (char **)malloc(sizeof(char *) * 100);
@@ -936,10 +945,10 @@ int query_runway_proc_by_airport(const char *airport) {
     for (int i = 0; i < g_element_count; i++) {
         if (strcmp(g_elements[i].airport, airport) == 0) {
             if (g_elements[i].type == TYPE_RUNWAY) {
-                strcpy(runway[runway_count], g_elements[i].name);
+                copy_fixed_text(runway[runway_count], 20, g_elements[i].name);
                 runway_count++;
             } else if (g_elements[i].type == TYPE_TAKEOFF_PROC) {
-                strcpy(proc[proc_count], g_elements[i].name);
+                copy_fixed_text(proc[proc_count], 20, g_elements[i].name);
                 proc_count++;
             }
         }
@@ -954,10 +963,10 @@ int query_proc_by_runway(const char *airport, const char *runway) {
         if (strcmp(g_relations[i].airport, airport) == 0 && 
             (strcmp(g_relations[i].elem1, runway) == 0 || strcmp(g_relations[i].elem2, runway) == 0)) {
             if (strcmp(g_relations[i].elem1, runway) == 0 && g_relations[i].elem2_type == TYPE_TAKEOFF_PROC) {
-                strcpy(proc[proc_count], g_relations[i].elem2);
+                copy_fixed_text(proc[proc_count], 20, g_relations[i].elem2);
                 proc_count++;
             } else if (strcmp(g_relations[i].elem2, runway) == 0 && g_relations[i].elem1_type == TYPE_TAKEOFF_PROC) {
-                strcpy(proc[proc_count], g_relations[i].elem1);
+                copy_fixed_text(proc[proc_count], 20, g_relations[i].elem1);
                 proc_count++;
             }
         }
@@ -972,10 +981,10 @@ int query_trans_by_runway(const char *airport, const char *runway) {
         if (strcmp(g_relations[i].airport, airport) == 0 && 
             (strcmp(g_relations[i].elem1, runway) == 0 || strcmp(g_relations[i].elem2, runway) == 0)) {
             if (strcmp(g_relations[i].elem1, runway) == 0 && g_relations[i].elem2_type == TYPE_WAYPOINT) {
-                strcpy(runway_trans[runway_trans_count], g_relations[i].elem2);
+                copy_fixed_text(runway_trans[runway_trans_count], 20, g_relations[i].elem2);
                 runway_trans_count++;
             } else if (strcmp(g_relations[i].elem2, runway) == 0 && g_relations[i].elem1_type == TYPE_WAYPOINT) {
-                strcpy(runway_trans[runway_trans_count], g_relations[i].elem1);
+                copy_fixed_text(runway_trans[runway_trans_count], 20, g_relations[i].elem1);
                 runway_trans_count++;
             }
         }
@@ -990,10 +999,10 @@ int query_runway_by_proc(const char *airport, const char *proc) {
         if (strcmp(g_relations[i].airport, airport) == 0 && 
             (strcmp(g_relations[i].elem1, proc) == 0 || strcmp(g_relations[i].elem2, proc) == 0)) {
             if (strcmp(g_relations[i].elem1, proc) == 0 && g_relations[i].elem2_type == TYPE_RUNWAY) {
-                strcpy(runway[runway_count], g_relations[i].elem2);
+                copy_fixed_text(runway[runway_count], 20, g_relations[i].elem2);
                 runway_count++;
             } else if (strcmp(g_relations[i].elem2, proc) == 0 && g_relations[i].elem1_type == TYPE_RUNWAY) {
-                strcpy(runway[runway_count], g_relations[i].elem1);
+                copy_fixed_text(runway[runway_count], 20, g_relations[i].elem1);
                 runway_count++;
             }
         }
@@ -1008,10 +1017,10 @@ int query_trans_by_proc(const char *airport, const char *proc) {
         if (strcmp(g_relations[i].airport, airport) == 0 && 
             (strcmp(g_relations[i].elem1, proc) == 0 || strcmp(g_relations[i].elem2, proc) == 0)) {
             if (strcmp(g_relations[i].elem1, proc) == 0 && g_relations[i].elem2_type == TYPE_WAYPOINT) {
-                strcpy(proc_trans[proc_trans_count], g_relations[i].elem2);
+                copy_fixed_text(proc_trans[proc_trans_count], 20, g_relations[i].elem2);
                 proc_trans_count++;
             } else if (strcmp(g_relations[i].elem2, proc) == 0 && g_relations[i].elem1_type == TYPE_WAYPOINT) {
-                strcpy(proc_trans[proc_trans_count], g_relations[i].elem1);
+                copy_fixed_text(proc_trans[proc_trans_count], 20, g_relations[i].elem1);
                 proc_trans_count++;
             }
         }

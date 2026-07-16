@@ -52,11 +52,13 @@ typedef enum FMC_CoordinateSource
 
 typedef struct FMC_Data
 {
+    /* UI page state and scratchpad context. */
     FMC_Page current_page;
     FMC_Page previous_page;
     FMC_FlightPhase active_phase;
     int page_switch_count;
 
+    /* Route draft shown on the FMC route and legs pages. */
     char origin[FMC_TEXT_LEN];
     char destination[FMC_TEXT_LEN];
     char company_route[FMC_TEXT_LEN];
@@ -78,6 +80,7 @@ typedef struct FMC_Data
     int active_waypoint_index;
     char fms_plan_path[192];
 
+    /* Performance and phase parameters edited from CLB/CRZ/DES pages. */
     int cruise_altitude;
     int target_speed;
     float cost_index;
@@ -89,6 +92,7 @@ typedef struct FMC_Data
     int descent_transition_level;
     int descent_vertical_speed;
 
+    /* DEP/ARR, LEGS and HOLD temporary selections. */
     char departure_runway[FMC_TEXT_LEN];
     char arrival_runway[FMC_TEXT_LEN];
     char departure_procedure[FMC_TEXT_LEN];
@@ -107,7 +111,7 @@ typedef struct FMC_Data
     char message[FMC_TEXT_LEN];
     int origin_exec_pending;
 
-    /* X-Plane live state */
+    /* X-Plane live state mirrored into FMC pages. */
     double current_latitude;
     double current_longitude;
     float current_altitude_ft;
@@ -119,6 +123,7 @@ typedef struct FMC_Data
     float current_wind_speed;
     float current_wind_direction;
     float current_fuel_kg;
+    /* Live-data availability plus route EXEC/delete pending flags. */
     int live_data_active;
     int route_mod_pending;
     int route_clear_pending;

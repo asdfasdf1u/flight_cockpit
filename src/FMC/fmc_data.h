@@ -65,7 +65,7 @@ typedef struct
 } SpdAltLimit;
 
 
-// 元素类型枚举AAA
+// 元素类型枚举
 typedef enum
 {
     TYPE_RUNWAY,       // 跑道
@@ -121,12 +121,12 @@ extern int crz_alt;
 extern int trans_fl;
 extern float vpa;
 
-// 元素与关联关系全局数组AAA
+// 元素与关联关系全局数组
 extern AirportElement g_elements[200];
 extern Relation g_relations[2000];
 extern int g_element_count;
 extern int g_relation_count;
-// 当前展示的跑道、起飞程序和过渡点AAA
+// 当前展示的跑道、起飞程序和过渡点
 extern char **runway;
 extern char **proc;
 extern char **runway_trans;
@@ -148,10 +148,10 @@ extern char dest[24];
 extern char co_route[24];
 // 航班号
 extern char flt_no[24];
-void initVIATO();
+void initVIATO(void);
 // 核心数据加载与查询函数（AVL树实现）
-bool load_airport_data();
-bool load_waypoint_data();
+bool load_airport_data(void);
+bool load_waypoint_data(void);
 Airport *fmc_query_airport_by_icao(const char *icao_code);
 Waypoint *fmc_query_waypoint_by_code(const char *wp_code);
 // AVL树销毁（内部调用，外部可选使用）
@@ -163,9 +163,9 @@ extern int waypoint_count;         // 实际加载的航路点数量
 // 速度与限制设置
 int setTgtSpeed(char *speed, TgtSpeed *target_speed);
 int setSpdAltLimit(const char *spd_alt_str, SpdAltLimit *spd_alt_limit);
-// 机场元素与关联关系 AAA
-void add_element(char *name, ElementType type, char *airport);
-void add_relation(char *airport, char *elem1, ElementType el1_type, char *elem2, ElementType el2_type);
+// 机场元素与关联关系
+void add_element(const char *name, ElementType type, const char *airport);
+void add_relation(const char *airport, const char *elem1, ElementType el1_type, const char *elem2, ElementType elem2_type);
 void init_airport_data(void);
 void destroy_airport_data(void);
 // 查询相关

@@ -9,7 +9,7 @@
 #define FMC_XPLANE_DEFAULT_PORT 49009
 #define FMC_COMMAND_DELAY_MS 60
 
-int fmc_xplane_probe_connection(void);
+static int fmc_xplane_probe_connection_attempts(int max_attempts);
 
 static XPCSocket g_sock;
 static int g_sock_ready = 0;
@@ -169,16 +169,17 @@ static int fmc_send_command(const char *command, const char *context)
         fmc_xplane_log("send skipped socket_not_ready command=%s context=%s", command, context != NULL ? context : "unknown");
         return -1;
     }
-    if (!g_plugin_connected && !fmc_xplane_probe_connection())
+    if (!g_plugin_connected)
     {
-        printf("FMC X-Plane send warning: X-Plane Connect is not confirmed; sending command anyway.\n");
-        fmc_xplane_log("send warning plugin_not_confirmed command=%s context=%s", command, context != NULL ? context : "unknown");
-        fflush(stdout);
+        printf("FMC X-Plane send skipped: plugin connection is not confirmed.\n");
+        fmc_xplane_log("send skipped plugin_not_connected command=%s context=%s", command, context != NULL ? context : "unknown");
+        return -1;
     }
 
     result = sendCOMM(g_sock, command);
     if (result < 0)
     {
+        g_plugin_connected = 0;
         printf("FMC X-Plane send failed in %s: %s.\n", context != NULL ? context : "unknown", command);
         fmc_xplane_log("send failed result=%d command=%s context=%s", result, command, context != NULL ? context : "unknown");
         return result;
@@ -245,7 +246,7 @@ int fmc_xplane_connect_is_connected(void)
     return g_plugin_connected;
 }
 
-int fmc_xplane_probe_connection(void)
+static int fmc_xplane_probe_connection_attempts(int max_attempts)
 {
     const char *dref = "sim/time/total_running_time_sec";
 
@@ -255,7 +256,12 @@ int fmc_xplane_probe_connection(void)
         return 0;
     }
 
-    for (int attempt = 0; attempt < 5; ++attempt)
+    if (max_attempts < 1)
+    {
+        max_attempts = 1;
+    }
+
+    for (int attempt = 0; attempt < max_attempts; ++attempt)
     {
         float running_time[1] = {0.0f};
         float *values[1] = {running_time};
@@ -275,7 +281,7 @@ int fmc_xplane_probe_connection(void)
             return 1;
         }
 
-        if (attempt < 4)
+        if (attempt + 1 < max_attempts)
         {
             SDL_Delay(20);
         }
@@ -290,6 +296,21 @@ int fmc_xplane_probe_connection(void)
     g_plugin_connected = 0;
     fmc_xplane_log("probe failed");
     return 0;
+}
+
+int fmc_xplane_probe_connection(void)
+{
+    return fmc_xplane_probe_connection_attempts(5);
+}
+
+int fmc_xplane_confirm_sync_ready(void)
+{
+    if (!g_sock_ready || !g_plugin_connected)
+    {
+        return 0;
+    }
+
+    return fmc_xplane_probe_connection_attempts(1);
 }
 
 int fmc_xplane_send_command(const char *command)
@@ -419,17 +440,18 @@ int fmc_xplane_set_exec(void)
     return 0;
 }
 
-void setOrigin(char *origin)
+/* Legacy wrappers keep old FMC UI code compatible; command failures are logged by fmc_xplane_* helpers. */
+void setOrigin(const char *origin)
 {
     (void)fmc_xplane_set_origin(origin);
 }
 
-void setDestination(char *destination)
+void setDestination(const char *destination)
 {
     (void)fmc_xplane_set_destination(destination);
 }
 
-void setFlt_no(char *flt_no)
+void setFlt_no(const char *flt_no)
 {
     (void)fmc_xplane_set_flt_no(flt_no);
 }

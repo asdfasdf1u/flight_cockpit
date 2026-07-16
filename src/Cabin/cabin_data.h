@@ -11,6 +11,7 @@
 #define CABIN_MAP_DEFAULT_POSITION_ZOOM 10
 #define CABIN_MAP_STATIC_WIDTH 1024
 #define CABIN_MAP_STATIC_HEIGHT 576
+#define CABIN_ROUTE_MAX_CROSS_TRACK_KM 50.0f
 
 #include "../Data/alert_manager.h"
 #include "../Data/sim_snapshot.h"
@@ -34,6 +35,7 @@ typedef enum Cabin_Place_Status
 
 typedef struct Cabin_Place
 {
+    /* Reverse-geocode state for current/origin/destination points. */
     Cabin_Place_Status status;
     double latitude;
     double longitude;
@@ -54,6 +56,7 @@ typedef struct Cabin_Place
 
 typedef struct Cabin_Trajectory_Point
 {
+    /* One planned-route or flown-track point in geographic coordinates. */
     char ident[CABIN_TEXT_LEN];
     double latitude;
     double longitude;
@@ -64,6 +67,7 @@ typedef struct Cabin_Trajectory_Point
 
 typedef struct Cabin_Data
 {
+    /* Flight labels and place names shown in the cabin view. */
     char flight_no[CABIN_TEXT_LEN];
     char origin_city[CABIN_TEXT_LEN];
     char origin_airport[CABIN_TEXT_LEN];
@@ -73,6 +77,7 @@ typedef struct Cabin_Data
     char current_district[CABIN_TEXT_LEN];
     char current_town[CABIN_TEXT_LEN];
 
+    /* Route endpoints, current aircraft position and map bounds. */
     double origin_lat;
     double origin_lon;
     double destination_lat;
@@ -101,6 +106,8 @@ typedef struct Cabin_Data
     double map_display_center_lat;
     double map_display_center_lon;
     char map_cache_path[CABIN_ERROR_LEN];
+
+    /* Live snapshot state and connection/fallback flags. */
     double latitude;
     double longitude;
     float altitude;
@@ -125,10 +132,14 @@ typedef struct Cabin_Data
     int engine_left_running;
     int engine_right_running;
     AlertSnapshot alerts;
+
+    /* Reverse-geocode results and flight phase display state. */
     Cabin_Place current_place;
     Cabin_Place origin_place;
     Cabin_Place destination_place;
     char flight_phase[CABIN_TEXT_LEN];
+
+    /* Planned route synchronized from FMC/SimDataCenter. */
     int route_valid;
     int route_revision;
     int route_point_count;
@@ -136,12 +147,20 @@ typedef struct Cabin_Data
     char active_waypoint[CABIN_TEXT_LEN];
     float distance_to_active_nm;
     float distance_to_destination_nm;
+    int route_progress_valid;
+    int route_remaining_time_valid;
+    float route_cross_track_km;
+    float route_total_distance_nm;
+    float route_completed_distance_nm;
+    float route_remaining_distance_nm;
     int planned_route_from_fmc;
     char planned_route_source[CABIN_TEXT_LEN];
     float progress;
     float remaining_time_min;
     Cabin_Trajectory_Point planned_route[CABIN_PLANNED_ROUTE_MAX_POINTS];
     int planned_route_count;
+
+    /* FIFO of real flown positions used to draw the aircraft trail. */
     Cabin_Trajectory_Point flown_track[CABIN_FLOWN_TRACK_MAX_POINTS];
     int flown_track_count;
     unsigned int flown_track_next_sequence;
@@ -150,6 +169,7 @@ typedef struct Cabin_Data
     int flown_track_seed_is_default;
     int flown_track_has_real_point;
 
+    /* Weather API result and fallback status. */
     char weather[CABIN_TEXT_LEN];
     char weather_city[CABIN_TEXT_LEN];
     char weather_adcode[CABIN_TEXT_LEN];
@@ -163,11 +183,13 @@ typedef struct Cabin_Data
     int api_weather_failed;
     char api_error_message[CABIN_ERROR_LEN];
 
+    /* Static map API/cache status. */
     char map_source[CABIN_TEXT_LEN];
     int api_map_loaded;
     int api_map_failed;
     char api_map_error_message[CABIN_ERROR_LEN];
 
+    /* Cabin emergency demo state driven by shared alerts. */
     int crash_demo_active;
     unsigned int crash_demo_started_ticks;
 } Cabin_Data;

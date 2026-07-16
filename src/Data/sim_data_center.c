@@ -530,6 +530,51 @@ static void integrate_nd_position(SimDataCenter *center, float delta_time)
     }
 }
 
+static int sim_route_next_valid_point(const SimPlannedRoute *route, int after_index)
+{
+    if (route == NULL)
+    {
+        return -1;
+    }
+    for (int i = after_index + 1; i < route->point_count; ++i)
+    {
+        if (route->points[i].has_position &&
+            sim_valid_route_position(route->points[i].latitude, route->points[i].longitude))
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int sim_route_same_geometry(const SimPlannedRoute *left, const SimPlannedRoute *right)
+{
+    if (left == NULL || right == NULL ||
+        left->valid != right->valid ||
+        left->point_count != right->point_count ||
+        strcmp(left->origin, right->origin) != 0 ||
+        strcmp(left->destination, right->destination) != 0)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < left->point_count; ++i)
+    {
+        const SimRoutePoint *left_point = &left->points[i];
+        const SimRoutePoint *right_point = &right->points[i];
+        if (strcmp(left_point->ident, right_point->ident) != 0 ||
+            left_point->has_position != right_point->has_position ||
+            (left_point->has_position &&
+             (fabs(left_point->latitude - right_point->latitude) > 0.0000001 ||
+              fabs(left_point->longitude - right_point->longitude) > 0.0000001)))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
 // 把本地 PFD 样本写入统一快照
 static void apply_pfd_sample(SimDataCenter *center)
 {
@@ -590,7 +635,7 @@ static void apply_nd_frame(SimDataCenter *center, float delta_time)
         snapshot->track = normalize_heading(frame->heading);
     }
 
-    if (!snapshot->has_pfd && (frame->fields & SIM_ND_FIELD_HEADING) != 0)
+    if ((frame->fields & SIM_ND_FIELD_HEADING) != 0)
     {
         snapshot->heading = normalize_heading(frame->heading);
         snapshot->heading_target = snapshot->heading;
@@ -601,6 +646,7 @@ static void apply_nd_frame(SimDataCenter *center, float delta_time)
         center->nd_latitude = frame->latitude;
         center->nd_longitude = frame->longitude;
         center->nd_position_initialized = 1;
+        center->demo_route_origin_initialized = 0;
     }
     else
     {
@@ -837,7 +883,6 @@ int sim_data_center_init(SimDataCenter *center)
     center->nd_latitude = 39.904200;
     center->nd_longitude = 116.407400;
     center->nd_position_initialized = 1;
-
     center->initialized = sim_data_loader_load_all(&center->store);
     init_planned_route(center);
     rebuild_snapshot(center, 0.0f);
@@ -905,6 +950,7 @@ void sim_data_center_set_position(SimDataCenter *center, double latitude, double
     center->nd_position_initialized = 1;
     center->snapshot.latitude = latitude;
     center->snapshot.longitude = longitude;
+    center->demo_route_origin_initialized = 0;
 }
 
 static void sim_data_center_log_source_change(SimDataCenter *center, const char *reason)
@@ -992,6 +1038,7 @@ int sim_data_center_apply_xplane_live_frame(SimDataCenter *center, const SimXPla
         center->nd_latitude = frame->latitude;
         center->nd_longitude = frame->longitude;
         center->nd_position_initialized = 1;
+        center->demo_route_origin_initialized = 0;
         sim_data_center_log_source_change(center, "xplane_valid");
         return 1;
     }
@@ -1018,9 +1065,33 @@ void sim_data_center_set_route(SimDataCenter *center, const SimPlannedRoute *rou
         return;
     }
 
+    const int route_geometry_changed = !center->route_initialized ||
+                                       !sim_route_same_geometry(&center->planned_route, route);
+
     center->planned_route = *route;
     center->route_initialized = 1;
     center->route_revision++;
+    if (route_geometry_changed)
+    {
+        center->demo_route_origin_initialized = 0;
+        if (center->snapshot.source == SIM_SNAPSHOT_SOURCE_DATA_FILES)
+        {
+            const int first_index = sim_route_next_valid_point(&center->planned_route, -1);
+            if (first_index >= 0)
+            {
+                center->nd_latitude = center->planned_route.points[first_index].latitude;
+                center->nd_longitude = center->planned_route.points[first_index].longitude;
+                center->nd_position_initialized = 1;
+                center->snapshot.latitude = center->nd_latitude;
+                center->snapshot.longitude = center->nd_longitude;
+                center->demo_route_origin_initialized = 1;
+                printf("SimDataCenter route: DATA_FILES demo position initialized once at %s lat=%.6f lon=%.6f; subsequent movement follows nd.dat track.\n",
+                       center->planned_route.points[first_index].ident,
+                       center->nd_latitude,
+                       center->nd_longitude);
+            }
+        }
+    }
     printf("SimDataCenter route: committed revision=%d origin=%s destination=%s points=%d.\n",
            center->route_revision,
            center->planned_route.origin,
@@ -1039,6 +1110,7 @@ void sim_data_center_clear_route(SimDataCenter *center)
     memset(&center->planned_route, 0, sizeof(center->planned_route));
     center->route_initialized = 0;
     center->route_revision++;
+    center->demo_route_origin_initialized = 0;
     printf("SimDataCenter route: cleared revision=%d.\n", center->route_revision);
 }
 

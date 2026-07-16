@@ -5,7 +5,7 @@ TTF_Font *font12 = NULL;
 TTF_Font *font16 = NULL;
 TTF_Font *font20 = NULL;
 TTF_Font *font24 = NULL;
-int initSDL()
+int initSDL(void)
 {
     // 使用最近邻缩放，避免纹理缩放时产生模糊
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");

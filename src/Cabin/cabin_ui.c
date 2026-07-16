@@ -1088,12 +1088,20 @@ static void draw_flight_info_bar(SDL_Renderer *renderer, const Cabin_Assets *ass
     }
     if (snapshot_ready && route_ready)
     {
-        draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   速度 %.0fkm/h   剩余 %.0f分钟",
-                          data->altitude, data->ground_speed, data->remaining_time_min);
+        if (data->route_remaining_time_valid)
+        {
+            draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   地速 %.0f kt   剩余 %.0f分钟",
+                              data->altitude, data->ground_speed, data->remaining_time_min);
+        }
+        else
+        {
+            draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   地速 %.0f kt   剩余 --",
+                              data->altitude, data->ground_speed);
+        }
     }
     else if (snapshot_ready)
     {
-        draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   速度 %.0fkm/h   剩余 --",
+        draw_text_clipped(renderer, assets->font, COLOR_WHITE, &text_clip, bar.x + 18, bar.y + 44, "高度 %.0fm   地速 %.0f kt   剩余 --",
                           data->altitude, data->ground_speed);
     }
     else
@@ -1105,11 +1113,12 @@ static void draw_flight_info_bar(SDL_Renderer *renderer, const Cabin_Assets *ass
                       route_ready ? data->origin_airport : "--",
                       route_ready ? data->destination_airport : "--");
 
-    const float progress = route_ready && snapshot_ready ? clamp_float(data->progress, 0.0f, 1.0f) : 0.0f;
+    const int progress_ready = route_ready && snapshot_ready && data->route_progress_valid;
+    const float progress = progress_ready ? clamp_float(data->progress, 0.0f, 1.0f) : 0.0f;
     const SDL_Rect progress_bg = {progress_x, progress_y, progress_w, 12};
     const SDL_Rect progress_fg = {progress_x, progress_y, (int)((float)progress_w * progress), 12};
     draw_text_clipped(renderer, assets->font, COLOR_WHITE, &progress_clip, progress_x, bar.y + 34,
-                      route_ready && snapshot_ready ? "进度 %.0f%%" : "进度 --",
+                      progress_ready ? "进度 %.0f%%" : "进度 --",
                       progress * 100.0f);
     fill_rect(renderer, &progress_bg, COLOR_PROGRESS_BG);
     fill_rect(renderer, &progress_fg, COLOR_ROUTE);

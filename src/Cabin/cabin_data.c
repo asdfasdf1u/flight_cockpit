@@ -13,6 +13,10 @@
 #define CABIN_TRAJECTORY_PROGRESS_THRESHOLD 0.006f
 #define CABIN_TRAJECTORY_UPDATE_INTERVAL 1.2f
 #define CABIN_TRAJECTORY_DUPLICATE_EPSILON 0.000001
+#define CABIN_EARTH_RADIUS_KM 6371.0088
+#define CABIN_KM_PER_NM 1.852
+#define CABIN_ROUTE_MIN_TOTAL_DISTANCE_KM 0.1
+#define CABIN_ROUTE_MIN_GROUND_SPEED_KT 1.0f
 #define CABIN_PI 3.14159265358979323846
 #define CABIN_MAP_CACHE_DIR "assets/cache"
 #define CABIN_MAP_MIN_LAT_SPAN 0.18
@@ -72,19 +76,6 @@ const char *cabin_place_street_or_town(const Cabin_Place *place)
         return place->street;
     }
     return place->formatted_address;
-}
-
-static float clamp_float(float value, float min_value, float max_value)
-{
-    if (value < min_value)
-    {
-        return min_value;
-    }
-    if (value > max_value)
-    {
-        return max_value;
-    }
-    return value;
 }
 
 static int cabin_data_valid_geo(double latitude, double longitude)
@@ -357,46 +348,71 @@ static double cabin_data_route_distance(const Cabin_Trajectory_Point *a, const C
     return sqrt(x * x + dlat * dlat);
 }
 
-static float cabin_data_progress_for_position(const Cabin_Data *data, double latitude, double longitude)
+static double cabin_data_longitude_delta(double longitude, double reference_longitude)
 {
-    if (data == NULL || data->planned_route_count < 2 || !cabin_data_valid_geo(latitude, longitude))
+    double delta = longitude - reference_longitude;
+    while (delta > 180.0) delta -= 360.0;
+    while (delta < -180.0) delta += 360.0;
+    return delta;
+}
+
+static void cabin_data_clear_route_metrics(Cabin_Data *data)
+{
+    if (data == NULL)
     {
-        return data != NULL ? data->progress : 0.0f;
+        return;
     }
 
-    double total_distance = 0.0;
+    data->route_progress_valid = 0;
+    data->route_remaining_time_valid = 0;
+    data->route_cross_track_km = 0.0f;
+    data->route_total_distance_nm = 0.0f;
+    data->route_completed_distance_nm = 0.0f;
+    data->route_remaining_distance_nm = 0.0f;
+    data->distance_to_destination_nm = 0.0f;
+    data->progress = 0.0f;
+    data->remaining_time_min = 0.0f;
+}
+
+static void cabin_data_update_route_metrics(Cabin_Data *data, double latitude, double longitude)
+{
+    if (data == NULL || !data->route_valid || data->planned_route_count < 2 ||
+        !cabin_data_valid_geo(latitude, longitude))
+    {
+        cabin_data_clear_route_metrics(data);
+        return;
+    }
+
+    double total_distance_km = 0.0;
     for (int i = 1; i < data->planned_route_count; ++i)
     {
-        total_distance += cabin_data_route_distance(&data->planned_route[i - 1], &data->planned_route[i]);
+        total_distance_km += cabin_data_route_distance(&data->planned_route[i - 1], &data->planned_route[i]) * CABIN_EARTH_RADIUS_KM;
     }
 
-    if (total_distance <= 0.0)
+    if (!isfinite(total_distance_km) || total_distance_km < CABIN_ROUTE_MIN_TOTAL_DISTANCE_KM)
     {
-        return data->progress;
+        cabin_data_clear_route_metrics(data);
+        return;
     }
 
-    double best_distance_sq = 1.0e30;
-    double best_route_distance = 0.0;
-    double accumulated = 0.0;
+    double best_distance_sq_km = 1.0e30;
+    double best_route_distance_km = 0.0;
+    double accumulated_km = 0.0;
+
     for (int i = 1; i < data->planned_route_count; ++i)
     {
         const Cabin_Trajectory_Point *from = &data->planned_route[i - 1];
         const Cabin_Trajectory_Point *to = &data->planned_route[i];
         const double avg_lat_rad = (from->latitude + to->latitude) * 0.5 * CABIN_PI / 180.0;
-        const double lon_scale = cos(avg_lat_rad);
-        const double x1 = from->longitude * lon_scale;
-        const double y1 = from->latitude;
-        const double x2 = to->longitude * lon_scale;
-        const double y2 = to->latitude;
-        const double xp = longitude * lon_scale;
-        const double yp = latitude;
-        const double dx = x2 - x1;
-        const double dy = y2 - y1;
+        const double dx = cabin_data_longitude_delta(to->longitude, from->longitude) * CABIN_PI / 180.0 * cos(avg_lat_rad) * CABIN_EARTH_RADIUS_KM;
+        const double dy = (to->latitude - from->latitude) * CABIN_PI / 180.0 * CABIN_EARTH_RADIUS_KM;
+        const double px = cabin_data_longitude_delta(longitude, from->longitude) * CABIN_PI / 180.0 * cos(avg_lat_rad) * CABIN_EARTH_RADIUS_KM;
+        const double py = (latitude - from->latitude) * CABIN_PI / 180.0 * CABIN_EARTH_RADIUS_KM;
         const double len_sq = dx * dx + dy * dy;
         double local_t = 0.0;
         if (len_sq > 0.0)
         {
-            local_t = ((xp - x1) * dx + (yp - y1) * dy) / len_sq;
+            local_t = (px * dx + py * dy) / len_sq;
             if (local_t < 0.0)
             {
                 local_t = 0.0;
@@ -407,21 +423,60 @@ static float cabin_data_progress_for_position(const Cabin_Data *data, double lat
             }
         }
 
-        const double nearest_x = x1 + dx * local_t;
-        const double nearest_y = y1 + dy * local_t;
-        const double dist_x = xp - nearest_x;
-        const double dist_y = yp - nearest_y;
-        const double distance_sq = dist_x * dist_x + dist_y * dist_y;
-        const double segment_distance = cabin_data_route_distance(from, to);
-        if (distance_sq < best_distance_sq)
+        const double nearest_x = dx * local_t;
+        const double nearest_y = dy * local_t;
+        const double dist_x = px - nearest_x;
+        const double dist_y = py - nearest_y;
+        const double distance_sq_km = dist_x * dist_x + dist_y * dist_y;
+        const double segment_distance_km = cabin_data_route_distance(from, to) * CABIN_EARTH_RADIUS_KM;
+        if (distance_sq_km < best_distance_sq_km)
         {
-            best_distance_sq = distance_sq;
-            best_route_distance = accumulated + segment_distance * local_t;
+            best_distance_sq_km = distance_sq_km;
+            best_route_distance_km = accumulated_km + segment_distance_km * local_t;
         }
-        accumulated += segment_distance;
+        accumulated_km += segment_distance_km;
     }
 
-    return clamp_float((float)(best_route_distance / total_distance), 0.0f, 1.0f);
+    if (!isfinite(best_distance_sq_km) || best_distance_sq_km < 0.0 ||
+        !isfinite(best_route_distance_km))
+    {
+        cabin_data_clear_route_metrics(data);
+        return;
+    }
+
+    data->route_cross_track_km = (float)sqrt(best_distance_sq_km);
+    data->route_total_distance_nm = (float)(total_distance_km / CABIN_KM_PER_NM);
+    if (data->route_cross_track_km > CABIN_ROUTE_MAX_CROSS_TRACK_KM)
+    {
+        data->route_completed_distance_nm = 0.0f;
+        data->route_remaining_distance_nm = 0.0f;
+        data->distance_to_destination_nm = 0.0f;
+        data->progress = 0.0f;
+        data->remaining_time_min = 0.0f;
+        data->route_progress_valid = 0;
+        data->route_remaining_time_valid = 0;
+        return;
+    }
+
+    best_route_distance_km = best_route_distance_km < 0.0 ? 0.0 : best_route_distance_km;
+    best_route_distance_km = best_route_distance_km > total_distance_km ? total_distance_km : best_route_distance_km;
+    const double remaining_distance_km = total_distance_km - best_route_distance_km;
+    data->route_completed_distance_nm = (float)(best_route_distance_km / CABIN_KM_PER_NM);
+    data->route_remaining_distance_nm = (float)(remaining_distance_km / CABIN_KM_PER_NM);
+    data->distance_to_destination_nm = data->route_remaining_distance_nm;
+    data->progress = (float)(best_route_distance_km / total_distance_km);
+    data->route_progress_valid = 1;
+
+    if (isfinite(data->ground_speed) && data->ground_speed >= CABIN_ROUTE_MIN_GROUND_SPEED_KT)
+    {
+        data->remaining_time_min = data->route_remaining_distance_nm * 60.0f / data->ground_speed;
+        data->route_remaining_time_valid = 1;
+    }
+    else
+    {
+        data->remaining_time_min = 0.0f;
+        data->route_remaining_time_valid = 0;
+    }
 }
 
 static void cabin_data_fit_map_bounds_to_route(Cabin_Data *data)
@@ -526,6 +581,9 @@ static void cabin_data_push_flown_track_point(Cabin_Data *data, double latitude,
 
     if (data->flown_track_count > 0)
     {
+        /* Drop duplicate positions before touching the FIFO. Live data can
+         * repeat the same coordinate for several frames, and drawing all of
+         * those samples would thicken the trail without adding information. */
         const Cabin_Trajectory_Point *last = &data->flown_track[data->flown_track_count - 1];
         if (fabs(last->latitude - latitude) < CABIN_TRAJECTORY_DUPLICATE_EPSILON &&
             fabs(last->longitude - longitude) < CABIN_TRAJECTORY_DUPLICATE_EPSILON)
@@ -536,12 +594,17 @@ static void cabin_data_push_flown_track_point(Cabin_Data *data, double latitude,
 
     if (data->flown_track_count >= CABIN_FLOWN_TRACK_MAX_POINTS)
     {
+        /* The flown track is a fixed-size FIFO: once full, discard the oldest
+         * point and append the newest one so memory use and draw cost stay
+         * bounded during long sessions. */
         memmove(&data->flown_track[0],
                 &data->flown_track[1],
                 sizeof(data->flown_track[0]) * (CABIN_FLOWN_TRACK_MAX_POINTS - 1));
         data->flown_track_count = CABIN_FLOWN_TRACK_MAX_POINTS - 1;
     }
 
+    /* Append the new real aircraft position after duplicate and capacity
+     * checks, preserving sequence order for later drawing. */
     Cabin_Trajectory_Point *point = &data->flown_track[data->flown_track_count++];
     point->ident[0] = '\0';
     point->latitude = latitude;
@@ -657,7 +720,7 @@ static void cabin_data_clear_route_view(Cabin_Data *data)
     data->active_waypoint_index = -1;
     data->active_waypoint[0] = '\0';
     data->distance_to_active_nm = 0.0f;
-    data->distance_to_destination_nm = 0.0f;
+    cabin_data_clear_route_metrics(data);
     data->origin_lat = 0.0;
     data->origin_lon = 0.0;
     data->destination_lat = 0.0;
@@ -674,6 +737,10 @@ static void cabin_data_clear_route_view(Cabin_Data *data)
     copy_text(data->destination_city, sizeof(data->destination_city), "----");
     copy_text(data->destination_airport, sizeof(data->destination_airport), "----");
     copy_text(data->planned_route_source, sizeof(data->planned_route_source), "NONE");
+
+    /* Clearing the planned route removes FMC route geometry only. The flown
+     * track is actual aircraft history, so it is preserved until the data model
+     * is reinitialized. */
     memset(data->planned_route, 0, sizeof(data->planned_route));
     memset(&data->origin_place, 0, sizeof(data->origin_place));
     memset(&data->destination_place, 0, sizeof(data->destination_place));
@@ -839,8 +906,7 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
         data->longitude = 0.0;
         data->current_lat = 0.0;
         data->current_lon = 0.0;
-        data->progress = 0.0f;
-        data->remaining_time_min = 0.0f;
+        cabin_data_clear_route_metrics(data);
         copy_text(data->current_city, sizeof(data->current_city), "DATA UNAVAILABLE");
     }
     else
@@ -859,10 +925,6 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
         data->current_lon = snapshot->longitude;
         data->engine_left_running = snapshot->engine_left_running;
         data->engine_right_running = snapshot->engine_right_running;
-        data->progress = cabin_data_progress_for_position(data, data->latitude, data->longitude);
-        data->distance_to_destination_nm = data->planned_route_count > 0
-                                               ? cabin_data_distance_nm(data->latitude, data->longitude, data->destination_lat, data->destination_lon)
-                                               : 0.0f;
         data->distance_to_active_nm = data->active_waypoint[0] != '\0' && route != NULL &&
                                               route->active_waypoint_index >= 0 && route->active_waypoint_index < route->point_count &&
                                               route->points[route->active_waypoint_index].has_position
@@ -870,7 +932,7 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
                                                                    route->points[route->active_waypoint_index].latitude,
                                                                    route->points[route->active_waypoint_index].longitude)
                                           : 0.0f;
-        data->remaining_time_min = data->ground_speed > 1.0f ? data->distance_to_destination_nm * 60.0f / data->ground_speed : 0.0f;
+        cabin_data_update_route_metrics(data, data->latitude, data->longitude);
         if (!data->route_valid)
         {
             cabin_data_fit_map_bounds_to_position(data);

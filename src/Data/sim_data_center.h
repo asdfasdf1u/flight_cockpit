@@ -29,6 +29,7 @@ typedef struct SimDataCenter
     double nd_latitude;          // ND 当前纬度
     double nd_longitude;         // ND 当前经度
     int nd_position_initialized; // ND 位置初始化状态
+    int demo_route_origin_initialized; // 当前 DATA_FILES 航路是否已执行过起点初始化
 } SimDataCenter;
 
 // 初始化统一数据中心

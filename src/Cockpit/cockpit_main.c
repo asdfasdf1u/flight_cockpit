@@ -1016,7 +1016,28 @@ static int submit_fmc_route_to_sim_center(FMC_Data *data, SimDataCenter *sim_dat
 
     sim_data_center_set_route(sim_data_center, &route);
     fmc_data_mark_route_committed(data);
-    fmc_data_sync_route_to_xplane(data);
+    const SimSnapshot *snapshot = sim_data_center_snapshot(sim_data_center);
+    const int live_source_ready = snapshot != NULL &&
+                                  snapshot->source == SIM_SNAPSHOT_SOURCE_XPLANE &&
+                                  snapshot->data_valid &&
+                                  snapshot->xplane_connected &&
+                                  !snapshot->timed_out;
+    const int fmc_plugin_ready = fmc_xplane_connect_is_ready() &&
+                                 fmc_xplane_connect_is_connected();
+    if (live_source_ready && fmc_plugin_ready)
+    {
+        if (!fmc_data_sync_route_to_xplane(data))
+        {
+            printf("FMC Route: local EXEC committed; X-Plane sync failed without rolling back the local route.\n");
+        }
+    }
+    else
+    {
+        printf("FMC Route: local EXEC committed; X-Plane sync skipped (source=%s live_ready=%d plugin_ready=%d).\n",
+               snapshot != NULL ? sim_snapshot_source_name(snapshot->source) : "NONE",
+               live_source_ready,
+               fmc_plugin_ready);
+    }
     snprintf(data->message, sizeof(data->message), "RTE %s-%s EXEC", route.origin, route.destination);
     printf("FMC Route: EXEC committed; origin=%s destination=%s planned_route points=%d revision=%d pending_mod=%d.\n",
            route.origin,
