@@ -12,6 +12,15 @@
 #define MAX_VIATO_NUM 20
 #endif
 
+#define FMC_TRANS_ALT_MIN 100
+#define FMC_TRANS_ALT_MAX 99000
+#define FMC_CRZ_ALT_MIN 100
+#define FMC_CRZ_ALT_MAX 99000
+#define FMC_TRANS_FL_MIN 1
+#define FMC_TRANS_FL_MAX 999
+#define FMC_VPA_MIN 0.0f
+#define FMC_VPA_MAX 90.0f
+
 extern int rte_index;
 extern int dep_arr_index;
 extern int dep_arr_type;
@@ -1076,7 +1085,7 @@ int fmc_data_set_phase_parameter(FMC_Data *data, int field_index)
         }
         if (field_index == 3)
         {
-            if (!is_string_in_range(data->scratchpad, 100, 99000, &trans_alt))
+            if (!is_string_in_range(data->scratchpad, FMC_TRANS_ALT_MIN, FMC_TRANS_ALT_MAX, &trans_alt))
             {
                 return set_phase_invalid(data);
             }
@@ -1095,7 +1104,7 @@ int fmc_data_set_phase_parameter(FMC_Data *data, int field_index)
         }
         if (field_index == 4)
         {
-            if (!is_string_in_range(data->scratchpad, 100, 99000, &crz_alt))
+            if (!is_string_in_range(data->scratchpad, FMC_CRZ_ALT_MIN, FMC_CRZ_ALT_MAX, &crz_alt))
             {
                 return set_phase_invalid(data);
             }
@@ -1118,7 +1127,7 @@ int fmc_data_set_phase_parameter(FMC_Data *data, int field_index)
         }
         if (field_index == 5)
         {
-            if (!is_string_in_range(data->scratchpad, 1, 999, &trans_fl))
+            if (!is_string_in_range(data->scratchpad, FMC_TRANS_FL_MIN, FMC_TRANS_FL_MAX, &trans_fl))
             {
                 return set_phase_invalid(data);
             }
@@ -1129,7 +1138,7 @@ int fmc_data_set_phase_parameter(FMC_Data *data, int field_index)
         }
         if (field_index == 6)
         {
-            if (!is_string_in_range_f(data->scratchpad, 0.0f, 90.0f, &vpa))
+            if (!is_string_in_range_f(data->scratchpad, FMC_VPA_MIN, FMC_VPA_MAX, &vpa))
             {
                 return set_phase_invalid(data);
             }
@@ -1202,6 +1211,7 @@ static void click_dep_arr_left(FMC_Data *data, int index)
         if (index >= start_index && index <= end_index)
         {
             set_text(sda->select_proc_trans, sizeof(sda->select_proc_trans), proc_trans[index - 2]);
+            dep_arr_index = 1;
         }
     }
     else if (strlen(sda->select_proc) > 0 && index == 1)
@@ -1215,8 +1225,10 @@ static void click_dep_arr_left(FMC_Data *data, int index)
         if (truely_selected < proc_count)
         {
             set_text(sda->select_proc, sizeof(sda->select_proc), proc[truely_selected]);
+            sda->select_proc_trans[0] = '\0';
             query_trans_by_proc(show_ariport, sda->select_proc);
             query_runway_by_proc(show_ariport, sda->select_proc);
+            dep_arr_index = 1;
         }
     }
 
@@ -1239,6 +1251,7 @@ static void click_dep_arr_right(FMC_Data *data, int index)
         if (index >= start_index && index <= end_index)
         {
             set_text(sda->select_runway_trans, sizeof(sda->select_runway_trans), runway_trans[index - 2]);
+            dep_arr_index = 1;
         }
     }
     else if (strlen(sda->select_runway) > 0 && index == 1)
@@ -1252,8 +1265,10 @@ static void click_dep_arr_right(FMC_Data *data, int index)
         if (truely_selected < runway_count)
         {
             set_text(sda->select_runway, sizeof(sda->select_runway), runway[truely_selected]);
+            sda->select_runway_trans[0] = '\0';
             query_trans_by_runway(show_ariport, sda->select_runway);
             query_proc_by_runway(show_ariport, sda->select_runway);
+            dep_arr_index = 1;
         }
     }
 

@@ -60,7 +60,7 @@ void fmc_event_update_hover(SDL_Renderer *renderer, FMC_Event_State *state, int 
 
     const int index = hit_test_button_index(renderer, x, y);
     state->hovered_button_index = index;
-    state->hovered_button = index >= 0 ? fmc_key_button_at(index)->key : FMC_BUTTON_NONE;
+    state->hovered_button = index >= 0 ? fmc_key_button_at(index)->id : FMC_BUTTON_NONE;
 }
 
 void fmc_event_update_hover_base(FMC_Event_State *state, int base_x, int base_y)
@@ -72,7 +72,7 @@ void fmc_event_update_hover_base(FMC_Event_State *state, int base_x, int base_y)
 
     const int index = hit_test_button_index_base(base_x, base_y);
     state->hovered_button_index = index;
-    state->hovered_button = index >= 0 ? fmc_key_button_at(index)->key : FMC_BUTTON_NONE;
+    state->hovered_button = index >= 0 ? fmc_key_button_at(index)->id : FMC_BUTTON_NONE;
 }
 
 int fmc_event_handle_mouse_button(SDL_Renderer *renderer, FMC_Event_State *state, FMC_Data *data, int x, int y)
@@ -81,7 +81,7 @@ int fmc_event_handle_mouse_button(SDL_Renderer *renderer, FMC_Event_State *state
     if (state != NULL)
     {
         state->hovered_button_index = index;
-        state->hovered_button = index >= 0 ? fmc_key_button_at(index)->key : FMC_BUTTON_NONE;
+        state->hovered_button = index >= 0 ? fmc_key_button_at(index)->id : FMC_BUTTON_NONE;
     }
 
     if (index < 0)
@@ -105,7 +105,7 @@ int fmc_event_handle_mouse_button_base(FMC_Event_State *state, FMC_Data *data, i
     if (state != NULL)
     {
         state->hovered_button_index = index;
-        state->hovered_button = index >= 0 ? fmc_key_button_at(index)->key : FMC_BUTTON_NONE;
+        state->hovered_button = index >= 0 ? fmc_key_button_at(index)->id : FMC_BUTTON_NONE;
     }
 
     if (index < 0)

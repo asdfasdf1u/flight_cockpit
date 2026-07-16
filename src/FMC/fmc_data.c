@@ -11,6 +11,13 @@
 #define MAX_VIATO_NUM 20
 #endif
 
+#define FMC_TGT_IAS_MIN 100
+#define FMC_TGT_IAS_MAX 399
+#define FMC_TGT_MACH_MIN 40
+#define FMC_TGT_MACH_MAX 95
+#define FMC_SPD_ALT_LIMIT_ALT_MIN 1000
+#define FMC_SPD_ALT_LIMIT_ALT_MAX 99990
+
 // AVL树树根
 AirportAVLNode *airport_avl_root = NULL;
 WaypointAVLNode *waypoint_avl_root = NULL;
@@ -721,10 +728,10 @@ int setSpdAltLimit(const char *spd_alt_str, SpdAltLimit *spd_alt_limit) {
 
     int speed = 0;
     int altitude = 0;
-    if (!is_string_in_range(speed_str, 100, 399, &speed)) {
+    if (!is_string_in_range(speed_str, FMC_TGT_IAS_MIN, FMC_TGT_IAS_MAX, &speed)) {
         return -2;
     }
-    if (!is_string_in_range(altitude_str, 1000, 99990, &altitude)) {
+    if (!is_string_in_range(altitude_str, FMC_SPD_ALT_LIMIT_ALT_MIN, FMC_SPD_ALT_LIMIT_ALT_MAX, &altitude)) {
         return -3;
     }
 
@@ -736,27 +743,55 @@ int setSpdAltLimit(const char *spd_alt_str, SpdAltLimit *spd_alt_limit) {
 
 // 设置目标速度
 int setTgtSpeed(char *speed, TgtSpeed *target_speed) {
+    char speed_part[16] = {0};
+    const char *mach_part = NULL;
+    char *slash_pos = NULL;
+
     if (speed == NULL || target_speed == NULL) {
         return -1;
     }
 
-    if (speed[0] == '/' && speed[1] == '.') {
+    slash_pos = strchr(speed, '/');
+    if (slash_pos != NULL) {
+        int spd = 0;
         int mach = 0;
-        if (!is_string_in_range(speed + 2, 40, 95, &mach)) {
-            return -3;
+        int changed = 0;
+
+        if (slash_pos > speed) {
+            int speed_len = slash_pos - speed;
+            if (speed_len >= (int)sizeof(speed_part)) {
+                return -2;
+            }
+            strncpy(speed_part, speed, speed_len);
+            speed_part[speed_len] = '\0';
+            if (!is_string_in_range(speed_part, FMC_TGT_IAS_MIN, FMC_TGT_IAS_MAX, &spd)) {
+                return -2;
+            }
+            target_speed->speed1 = spd;
+            changed = 1;
         }
-        target_speed->speed2 = mach;
-        return 2;
+
+        mach_part = slash_pos + 1;
+        if (mach_part[0] == '.') {
+            mach_part++;
+        }
+        if (mach_part[0] != '\0') {
+            if (!is_string_in_range(mach_part, FMC_TGT_MACH_MIN, FMC_TGT_MACH_MAX, &mach)) {
+                return -3;
+            }
+            target_speed->speed2 = mach;
+            changed = 1;
+        }
+
+        return changed ? 3 : -1;
     } else {
         int spd = 0;
-        if (!is_string_in_range(speed, 100, 399, &spd)) {
+        if (!is_string_in_range(speed, FMC_TGT_IAS_MIN, FMC_TGT_IAS_MAX, &spd)) {
             return -2;
         }
         target_speed->speed1 = spd;
         return 1;
     }
-
-    return 0;
 }
 
 // 添加机场、跑道、程序和过渡点元素
