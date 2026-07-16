@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../Data/sim_data_center.h"
@@ -17,6 +18,8 @@
 #define CABIN_MAP_MIN_LAT_SPAN 0.18
 #define CABIN_MAP_MIN_LON_SPAN 0.18
 #define CABIN_MAP_ROUTE_MARGIN_RATIO 0.30
+#define CABIN_MAP_RECENTER_LAT_THRESHOLD 0.08
+#define CABIN_MAP_RECENTER_LON_THRESHOLD 0.10
 
 typedef struct Cabin_Route_Bounds
 {
@@ -52,6 +55,23 @@ const char *cabin_place_display_name(const Cabin_Place *place)
         return place->province;
     }
     return place->district;
+}
+
+const char *cabin_place_street_or_town(const Cabin_Place *place)
+{
+    if (place == NULL || place->status != CABIN_PLACE_VALID)
+    {
+        return "";
+    }
+    if (place->township[0] != '\0')
+    {
+        return place->township;
+    }
+    if (place->street[0] != '\0')
+    {
+        return place->street;
+    }
+    return place->formatted_address;
 }
 
 static float clamp_float(float value, float min_value, float max_value)
@@ -194,7 +214,9 @@ static void cabin_data_append_safe_cache_part(char *dest, size_t dest_size, cons
 
 static void cabin_data_build_map_cache_path(Cabin_Data *data)
 {
-    char route_name[96];
+    char route_name[64];
+    const int center_lat_units = (int)(fabs(data != NULL ? data->map_center_lat : 0.0) * 10000.0 + 0.5);
+    const int center_lon_units = (int)(fabs(data != NULL ? data->map_center_lon : 0.0) * 10000.0 + 0.5);
 
     if (data == NULL)
     {
@@ -211,16 +233,16 @@ static void cabin_data_build_map_cache_path(Cabin_Data *data)
         }
         cabin_data_append_safe_cache_part(route_name, sizeof(route_name), data->destination_airport);
     }
-    else if (cabin_data_valid_geo(data->latitude, data->longitude))
+    else if (cabin_data_valid_geo(data->map_center_lat, data->map_center_lon))
     {
-        const int lat_tenths = (int)(fabs(data->latitude) * 10.0 + 0.5);
-        const int lon_tenths = (int)(fabs(data->longitude) * 10.0 + 0.5);
+        const int lat_tenths = (int)(fabs(data->map_center_lat) * 10.0 + 0.5);
+        const int lon_tenths = (int)(fabs(data->map_center_lon) * 10.0 + 0.5);
         snprintf(route_name,
                  sizeof(route_name),
                  "position_%c%04d_%c%04d",
-                 data->latitude >= 0.0 ? 'N' : 'S',
+                 data->map_center_lat >= 0.0 ? 'N' : 'S',
                  lat_tenths,
-                 data->longitude >= 0.0 ? 'E' : 'W',
+                 data->map_center_lon >= 0.0 ? 'E' : 'W',
                  lon_tenths);
     }
     else
@@ -235,9 +257,88 @@ static void cabin_data_build_map_cache_path(Cabin_Data *data)
 
     snprintf(data->map_cache_path,
              sizeof(data->map_cache_path),
-             "%s/cabin_map_%s.png",
+             "%s/cabin_map_%s_c%c%06d_%c%07d_z%02d_%dx%d.png",
              CABIN_MAP_CACHE_DIR,
-             route_name);
+             route_name,
+             data->map_center_lat >= 0.0 ? 'N' : 'S',
+             center_lat_units,
+             data->map_center_lon >= 0.0 ? 'E' : 'W',
+             center_lon_units,
+             data->map_zoom,
+             CABIN_MAP_STATIC_WIDTH,
+             CABIN_MAP_STATIC_HEIGHT);
+}
+
+void cabin_data_request_map_refresh(Cabin_Data *data)
+{
+    if (data == NULL || data->map_zoom < data->map_min_zoom || data->map_zoom > data->map_max_zoom)
+    {
+        return;
+    }
+    data->map_refresh_requested = 1;
+    data->map_request_revision++;
+}
+
+int cabin_data_request_map_zoom(Cabin_Data *data, int delta)
+{
+    int next_zoom;
+
+    if (data == NULL || delta == 0 || !data->map_api_zoom_enabled ||
+        data->map_zoom < data->map_min_zoom || data->map_zoom > data->map_max_zoom)
+    {
+        return 0;
+    }
+
+    next_zoom = data->map_zoom + delta;
+    if (next_zoom < data->map_min_zoom)
+    {
+        next_zoom = data->map_min_zoom;
+    }
+    if (next_zoom > data->map_max_zoom)
+    {
+        next_zoom = data->map_max_zoom;
+    }
+    if (next_zoom == data->map_zoom)
+    {
+        return 0;
+    }
+
+    data->map_zoom = next_zoom;
+    data->map_zoom_change_pending = 1;
+    cabin_data_build_map_cache_path(data);
+    cabin_data_request_map_refresh(data);
+    return 1;
+}
+
+void cabin_data_commit_map_view(Cabin_Data *data, int uses_web_mercator)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    data->map_loaded_zoom = data->map_zoom;
+    data->map_uses_web_mercator = uses_web_mercator ? 1 : 0;
+    data->map_display_top_left_lat = data->map_top_left_lat;
+    data->map_display_top_left_lon = data->map_top_left_lon;
+    data->map_display_bottom_right_lat = data->map_bottom_right_lat;
+    data->map_display_bottom_right_lon = data->map_bottom_right_lon;
+    data->map_display_center_lat = data->map_center_lat;
+    data->map_display_center_lon = data->map_center_lon;
+    data->map_zoom_change_pending = 0;
+}
+
+void cabin_data_revert_requested_map_zoom(Cabin_Data *data)
+{
+    if (data == NULL || data->map_loaded_zoom < data->map_min_zoom || data->map_loaded_zoom > data->map_max_zoom)
+    {
+        return;
+    }
+
+    data->map_zoom = data->map_loaded_zoom;
+    data->map_zoom_change_pending = 0;
+    data->map_refresh_requested = 0;
+    cabin_data_build_map_cache_path(data);
 }
 
 static double cabin_data_route_distance(const Cabin_Trajectory_Point *a, const Cabin_Trajectory_Point *b)
@@ -363,6 +464,7 @@ static void cabin_data_fit_map_bounds_to_route(Cabin_Data *data)
     data->map_top_left_lon = bounds.min_lon - lon_margin;
     data->map_bottom_right_lon = bounds.max_lon + lon_margin;
     cabin_data_build_map_cache_path(data);
+    cabin_data_request_map_refresh(data);
 }
 
 static void cabin_data_fit_map_bounds_to_position(Cabin_Data *data)
@@ -375,45 +477,50 @@ static void cabin_data_fit_map_bounds_to_position(Cabin_Data *data)
         return;
     }
 
+    if (data->map_zoom >= data->map_min_zoom && data->map_zoom <= data->map_max_zoom &&
+        fabs(data->latitude - data->map_center_lat) < CABIN_MAP_RECENTER_LAT_THRESHOLD &&
+        fabs(data->longitude - data->map_center_lon) < CABIN_MAP_RECENTER_LON_THRESHOLD)
+    {
+        return;
+    }
+
     data->map_center_lat = data->latitude;
     data->map_center_lon = data->longitude;
     data->map_top_left_lat = data->latitude + latitude_span * 0.5;
     data->map_bottom_right_lat = data->latitude - latitude_span * 0.5;
     data->map_top_left_lon = data->longitude - longitude_span * 0.5;
     data->map_bottom_right_lon = data->longitude + longitude_span * 0.5;
-    data->map_zoom = 10;
+    if (data->map_zoom < data->map_min_zoom || data->map_zoom > data->map_max_zoom)
+    {
+        data->map_zoom = CABIN_MAP_DEFAULT_POSITION_ZOOM;
+    }
     cabin_data_build_map_cache_path(data);
+    cabin_data_request_map_refresh(data);
 }
 
-
-static void cabin_data_compact_flown_track(Cabin_Data *data)
-{
-    if (data == NULL || data->flown_track_count < CABIN_FLOWN_TRACK_MAX_POINTS)
-    {
-        return;
-    }
-
-    Cabin_Trajectory_Point compact[CABIN_FLOWN_TRACK_MAX_POINTS];
-    int compact_count = 0;
-
-    compact[compact_count++] = data->flown_track[0];
-    for (int i = 1; i < data->flown_track_count - 1 && compact_count < CABIN_FLOWN_TRACK_MAX_POINTS - 1; i += 2)
-    {
-        compact[compact_count++] = data->flown_track[i];
-    }
-    if (data->flown_track_count > 1 && compact_count < CABIN_FLOWN_TRACK_MAX_POINTS)
-    {
-        compact[compact_count++] = data->flown_track[data->flown_track_count - 1];
-    }
-
-    memcpy(data->flown_track, compact, sizeof(compact[0]) * (size_t)compact_count);
-    data->flown_track_count = compact_count;
-}
 
 static void cabin_data_push_flown_track_point(Cabin_Data *data, double latitude, double longitude)
 {
     if (data == NULL || !cabin_data_valid_geo(latitude, longitude))
     {
+        return;
+    }
+
+    if (data->flown_track_seed_is_default && !data->flown_track_has_real_point)
+    {
+        Cabin_Trajectory_Point *point = &data->flown_track[0];
+        memset(point, 0, sizeof(*point));
+        point->latitude = latitude;
+        point->longitude = longitude;
+        point->sequence = 0;
+        point->altitude = data->altitude;
+        point->ground_speed = data->ground_speed;
+        data->flown_track_count = 1;
+        data->flown_track_next_sequence = 1;
+        data->flown_track_last_progress = data->progress;
+        data->flown_track_time_since_append = 0.0f;
+        data->flown_track_seed_is_default = 0;
+        data->flown_track_has_real_point = 1;
         return;
     }
 
@@ -429,11 +536,10 @@ static void cabin_data_push_flown_track_point(Cabin_Data *data, double latitude,
 
     if (data->flown_track_count >= CABIN_FLOWN_TRACK_MAX_POINTS)
     {
-        cabin_data_compact_flown_track(data);
-        if (data->flown_track_count >= CABIN_FLOWN_TRACK_MAX_POINTS)
-        {
-            data->flown_track_count = CABIN_FLOWN_TRACK_MAX_POINTS - 1;
-        }
+        memmove(&data->flown_track[0],
+                &data->flown_track[1],
+                sizeof(data->flown_track[0]) * (CABIN_FLOWN_TRACK_MAX_POINTS - 1));
+        data->flown_track_count = CABIN_FLOWN_TRACK_MAX_POINTS - 1;
     }
 
     Cabin_Trajectory_Point *point = &data->flown_track[data->flown_track_count++];
@@ -443,6 +549,7 @@ static void cabin_data_push_flown_track_point(Cabin_Data *data, double latitude,
     point->sequence = data->flown_track_next_sequence++;
     point->altitude = data->altitude;
     point->ground_speed = data->ground_speed;
+    data->flown_track_has_real_point = 1;
     data->flown_track_last_progress = data->progress;
     data->flown_track_time_since_append = 0.0f;
 }
@@ -456,13 +563,6 @@ static void cabin_data_update_flown_track(Cabin_Data *data, float delta_time, in
     }
 
     data->flown_track_time_since_append += delta_time;
-
-    if (data->flown_track_count <= 0)
-    {
-        cabin_data_push_flown_track_point(data, data->origin_lat, data->origin_lon);
-        cabin_data_push_flown_track_point(data, data->current_lat, data->current_lon);
-        return;
-    }
 
     const float progress_delta = fabsf(data->progress - data->flown_track_last_progress);
     if (force_append ||
@@ -500,6 +600,16 @@ void cabin_data_init(Cabin_Data *data)
     copy_text(data->wind_power, sizeof(data->wind_power), "--");
     copy_text(data->weather_source, sizeof(data->weather_source), "NONE");
     copy_text(data->map_source, sizeof(data->map_source), "LOCAL");
+    data->map_min_zoom = CABIN_MAP_MIN_ZOOM;
+    data->map_max_zoom = CABIN_MAP_MAX_ZOOM;
+    data->map_api_zoom_enabled = 1;
+    {
+        const char *local_zoom_only = getenv("CABIN_MAP_LOCAL_ZOOM_ONLY");
+        if (local_zoom_only != NULL && strcmp(local_zoom_only, "1") == 0)
+        {
+            data->map_api_zoom_enabled = 0;
+        }
+    }
     data->snapshot_frame = -1;
     data->frame_id = -1;
     data->timestamp = 0.0f;
@@ -510,6 +620,13 @@ void cabin_data_init(Cabin_Data *data)
     data->last_valid_xplane_timestamp = 0.0f;
     data->route_revision = -1;
     data->active_waypoint_index = -1;
+    data->flown_track_count = 1;
+    data->flown_track[0].latitude = 36.07;
+    data->flown_track[0].longitude = 120.38;
+    data->flown_track[0].sequence = 0;
+    data->flown_track_next_sequence = 1;
+    data->flown_track_seed_is_default = 1;
+    data->flown_track_has_real_point = 0;
     return;
 
 }
@@ -560,7 +677,6 @@ static void cabin_data_clear_route_view(Cabin_Data *data)
     memset(data->planned_route, 0, sizeof(data->planned_route));
     memset(&data->origin_place, 0, sizeof(data->origin_place));
     memset(&data->destination_place, 0, sizeof(data->destination_place));
-    data->flown_track_count = 0;
 }
 
 static const SimRoutePoint *cabin_data_find_route_endpoint(const SimPlannedRoute *route, const char *ident)
@@ -725,7 +841,6 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
         data->current_lon = 0.0;
         data->progress = 0.0f;
         data->remaining_time_min = 0.0f;
-        data->flown_track_count = 0;
         copy_text(data->current_city, sizeof(data->current_city), "DATA UNAVAILABLE");
     }
     else
@@ -759,12 +874,10 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
         if (!data->route_valid)
         {
             cabin_data_fit_map_bounds_to_position(data);
-            data->flown_track_count = 0;
-            data->flown_track_next_sequence = 0;
-            data->flown_track_last_progress = data->progress;
-            data->flown_track_time_since_append = 0.0f;
         }
-        else
+        if (snapshot->source == SIM_SNAPSHOT_SOURCE_XPLANE &&
+            snapshot->xplane_connected && !snapshot->timed_out &&
+            cabin_data_valid_geo(snapshot->latitude, snapshot->longitude))
         {
             cabin_data_update_flown_track(data, delta_time > 0.0f ? delta_time : 0.0f, 0);
         }
@@ -772,7 +885,7 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
         {
             copy_text(data->current_city, sizeof(data->current_city), data->current_place.city);
             copy_text(data->current_district, sizeof(data->current_district), data->current_place.district);
-            copy_text(data->current_town, sizeof(data->current_town), data->current_place.province);
+            copy_text(data->current_town, sizeof(data->current_town), cabin_place_street_or_town(&data->current_place));
         }
         else
         {
