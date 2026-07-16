@@ -12,6 +12,7 @@
 #define PFD_WINDOW_HEIGHT 800
 #define PFD_TARGET_FRAME_MS 16
 
+// 打开 PFD 使用的字体，优先项目字体，失败后回退系统字体
 static TTF_Font *open_pfd_font(void)
 {
     TTF_Font *font = TTF_OpenFont("assets/ALIBABAPUHUITI-2-45-LIGHT.TTF", 20);
@@ -30,6 +31,7 @@ static TTF_Font *open_pfd_font(void)
     return font;
 }
 
+// 将统一数据中心的快照写入 PFD 显示数据
 static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapshot)
 {
     if (data == NULL || snapshot == NULL || !snapshot->has_pfd)
@@ -56,6 +58,7 @@ static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapsho
     snprintf(data->flight_mode, sizeof(data->flight_mode), "%s", "SIM DATA");
 }
 
+// PFD 独立窗口主流程
 int pfd_main_run(void)
 {
     // 使用最近邻缩放，避免纹理缩放时产生模糊
@@ -121,6 +124,8 @@ int pfd_main_run(void)
     PFDData data;
     pfd_data_init(&data);
     SimDataCenter sim_data_center;
+
+    // 优先使用统一数据中心；不可用时回退到本地样本或模拟数据
     const int use_sim_data_center = sim_data_center_init(&sim_data_center) &&
                                     sim_data_center_has_pfd_data(&sim_data_center);
     if (use_sim_data_center)
@@ -141,6 +146,7 @@ int pfd_main_run(void)
     {
         const Uint32 frame_start = SDL_GetTicks();
 
+        // 处理关闭窗口和 ESC 退出事件
         while (SDL_PollEvent(&event))
         {
             if (event.type == SDL_QUIT)
@@ -156,11 +162,14 @@ int pfd_main_run(void)
         const Uint32 current_ticks = SDL_GetTicks();
         float delta_time = (float)(current_ticks - last_ticks) / 1000.0f;
         last_ticks = current_ticks;
+
+        // 限制单帧时间，避免窗口卡顿后仪表突然大幅跳动
         if (delta_time > 0.1f)
         {
             delta_time = 0.1f;
         }
 
+        // 每帧刷新数据来源，并交给 UI 层绘制
         if (use_sim_data_center)
         {
             sim_data_center_update(&sim_data_center, delta_time);
@@ -177,6 +186,7 @@ int pfd_main_run(void)
         SDL_RenderPresent(renderer);
 
         const Uint32 frame_time = SDL_GetTicks() - frame_start;
+        // 通过固定帧间隔控制独立 PFD 约 60 FPS 刷新
         if (frame_time < PFD_TARGET_FRAME_MS)
         {
             SDL_Delay(PFD_TARGET_FRAME_MS - frame_time);

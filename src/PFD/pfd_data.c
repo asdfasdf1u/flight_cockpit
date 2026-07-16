@@ -11,17 +11,17 @@
 
 typedef struct PFD_FileSample
 {
-    float airspeed_current;
-    float airspeed_target;
-    float altitude;
-    float altitude_target;
-    float agl_altitude;
-    float pitch;
-    float roll;
-    float vertical_speed;
-    float heading;
-    float throttle;
-    float yaw;
+    float airspeed_current; // 当前空速
+    float airspeed_target;  // 目标空速
+    float altitude;         // 当前高度
+    float altitude_target;  // 目标高度
+    float agl_altitude;     // 离地高度
+    float pitch;            // 俯仰角
+    float roll;             // 滚转角
+    float vertical_speed;   // 垂直速度
+    float heading;          // 航向
+    float throttle;         // 油门
+    float yaw;              // 偏航角
 } PFD_FileSample;
 
 static PFD_FileSample file_samples[PFD_MAX_FILE_SAMPLES];
@@ -29,6 +29,7 @@ static int file_sample_count = 0;
 static int file_load_attempted = 0;
 static int file_load_ok = 0;
 
+// 限制数值范围，避免异常数据影响仪表显示
 static float clamp_float(float value, float min_value, float max_value)
 {
     if (value < min_value)
@@ -44,6 +45,7 @@ static float clamp_float(float value, float min_value, float max_value)
     return value;
 }
 
+// 航向角归一化到 0-360 度
 static float normalize_heading(float heading)
 {
     while (heading >= 360.0f)
@@ -57,6 +59,7 @@ static float normalize_heading(float heading)
     return heading;
 }
 
+// 解析一行逗号或分号分隔的数值样本
 static int parse_numeric_line(const char *line, float values[], int max_values)
 {
     int count = 0;
@@ -101,6 +104,7 @@ static int parse_numeric_line(const char *line, float values[], int max_values)
     return count;
 }
 
+// 把一条本地样本应用到 PFD 数据结构
 static void apply_file_sample(PFD_Data *data, const PFD_FileSample *sample)
 {
     if (data == NULL || sample == NULL)
@@ -124,7 +128,8 @@ static void apply_file_sample(PFD_Data *data, const PFD_FileSample *sample)
     snprintf(data->flight_mode, sizeof(data->flight_mode), "%s", "PFD DATA");
 }
 
-static void load_file_samples_once(void)//把本地 PFD 样本数据导入程序
+// 把本地 PFD 样本数据导入程序
+static void load_file_samples_once(void)
 {
     if (file_load_attempted)
     {
@@ -198,7 +203,8 @@ static void load_file_samples_once(void)//把本地 PFD 样本数据导入程序
     }
 }
 
-void pfd_data_init(PFD_Data *data)//初始化 PFD 数据来源
+// 初始化 PFD 数据来源
+void pfd_data_init(PFD_Data *data)
 {
     if (data == NULL)
     {
@@ -234,7 +240,8 @@ void pfd_data_init(PFD_Data *data)//初始化 PFD 数据来源
     }
 }
 
-void pfd_data_update_mock(PFD_Data *data, float delta_time)//让 PFD 在没有实时数据时仍然可以动态显示
+// 让 PFD 在没有实时数据时仍然可以动态显示
+void pfd_data_update_mock(PFD_Data *data, float delta_time)
 {
     if (data == NULL)
     {
@@ -250,6 +257,7 @@ void pfd_data_update_mock(PFD_Data *data, float delta_time)//让 PFD 在没有�
 
     if (data->using_file_data && file_load_ok && file_sample_count > 0)
     {
+        // 按固定样本间隔循环播放本地 pfd.dat
         data->file_sample_accumulator += delta_time;
         while (data->file_sample_accumulator >= PFD_FILE_SAMPLE_INTERVAL)
         {
@@ -266,6 +274,7 @@ void pfd_data_update_mock(PFD_Data *data, float delta_time)//让 PFD 在没有�
     }
 
     const float t = data->simulation_time;
+    // 没有本地样本时，用正弦曲线生成平滑的演示数据
     data->airspeed_current = 250.0f + 28.0f * sinf(t * 0.55f) + 6.0f * cosf(t * 1.35f);
     data->airspeed_target = 250.0f;
     data->altitude = 12000.0f + 850.0f * sinf(t * 0.22f) + 120.0f * cosf(t * 0.70f);
@@ -286,6 +295,7 @@ void pfd_data_update_mock(PFD_Data *data, float delta_time)//让 PFD 在没有�
              data->autopilot_on ? "LNAV VNAV" : "HDG HOLD");
 }
 
+// 旧版接口：外部模块按帧获取一份 PFD 数据
 int getPFDData(PFDData *data)
 {
     static PFDData current_data;
