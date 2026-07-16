@@ -536,7 +536,7 @@ static void draw_right_pointer(SDL_Renderer *renderer, TTF_Font *font, SDL_Rect 
     draw_smooth_polygon_outline(renderer, inner, 7, 1, COLOR_BLACK);
     draw_text_center(renderer, font, COLOR_WHITE, (SDL_Rect){x + 18, y + 3, 84, 38}, "%05.0f", value);
 }
-
+//速度带动态绘制
 static void draw_speed_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     draw_panel(renderer, rect);
@@ -576,7 +576,7 @@ static void draw_speed_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Da
 
     draw_left_pointer(renderer, font, rect, center_y, data->airspeed_current);
 }
-
+//高度带动态绘制
 static void draw_altitude_tape(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     draw_panel(renderer, rect);
@@ -642,7 +642,7 @@ static SDL_Point attitude_point(SDL_Rect rect, float roll_rad, float pitch_offse
     p.y = (int)lrintf(cy + x * sin_roll + local_y * cos_roll);
     return p;
 }
-
+//姿态仪动态绘制，绘制逻辑：同时处理俯仰偏移、滚转旋转、天空/地面多边形填充和裁剪区域
 static void draw_attitude(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     const int radius = 16;
@@ -880,7 +880,7 @@ static void draw_vertical_speed(SDL_Renderer *renderer, TTF_Font *font, const PF
                          "%.0f", -data->vertical_speed);
     }
 }
-
+//航向盘动态绘制
 static void draw_heading(SDL_Renderer *renderer, TTF_Font *font, const PFD_Data *data, SDL_Rect rect)
 {
     fill_rect(renderer, rect, COLOR_BLACK);

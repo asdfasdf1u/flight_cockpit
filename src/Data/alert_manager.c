@@ -44,7 +44,7 @@ void alert_manager_init(AlertManager *manager)
     configure_alert(&manager->snapshot.alerts[ALERT_TYPE_CABIN_ALTITUDE], ALERT_TYPE_CABIN_ALTITUDE, ALERT_LEVEL_WARNING, "CABIN ALTITUDE", 1, 1, 1);
     configure_alert(&manager->snapshot.alerts[ALERT_TYPE_DOOR_OPEN], ALERT_TYPE_DOOR_OPEN, ALERT_LEVEL_WARNING, "DOOR OPEN", 1, 1, 1);
     configure_alert(&manager->snapshot.alerts[ALERT_TYPE_EMERGENCY], ALERT_TYPE_EMERGENCY, ALERT_LEVEL_WARNING, "EMERGENCY", 1, 1, 1);
-    configure_alert(&manager->snapshot.alerts[ALERT_TYPE_CRASH], ALERT_TYPE_CRASH, ALERT_LEVEL_WARNING, "CRASH", 1, 1, 0);
+    configure_alert(&manager->snapshot.alerts[ALERT_TYPE_CRASH], ALERT_TYPE_CRASH, ALERT_LEVEL_WARNING, "CRASH DETECTED", 1, 1, 0);
     configure_alert(&manager->snapshot.alerts[ALERT_TYPE_SEATBELT_ON], ALERT_TYPE_SEATBELT_ON, ALERT_LEVEL_ADVISORY, "SEATBELT ON", 0, 0, 1);
     configure_alert(&manager->snapshot.alerts[ALERT_TYPE_DATA_LOST], ALERT_TYPE_DATA_LOST, ALERT_LEVEL_CAUTION, "FLIGHT DATA LOST", 1, 0, 1);
 }
@@ -133,7 +133,17 @@ void alert_manager_set_demo(AlertManager *manager, AlertType type, int active)
     }
     if (type == ALERT_TYPE_ENGINE_FIRE) manager->demo_engine_fire = active != 0;
     if (type == ALERT_TYPE_CABIN_ALTITUDE) manager->demo_cabin_altitude = active != 0;
-    if (type == ALERT_TYPE_CRASH) manager->demo_crash = active != 0;
+    if (type == ALERT_TYPE_CRASH)
+    {
+        manager->demo_crash = active != 0;
+        if (!manager->demo_crash)
+        {
+            AlertState *crash = &manager->snapshot.alerts[ALERT_TYPE_CRASH];
+            crash->active = 0;
+            crash->acknowledged = 0;
+            snprintf(crash->source, sizeof(crash->source), "%s", "NONE");
+        }
+    }
 }
 
 void alert_manager_clear_demo(AlertManager *manager)

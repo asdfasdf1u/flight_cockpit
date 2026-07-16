@@ -106,6 +106,7 @@ int main(void)
     assert(sim_data_center_snapshot(center)->sim_time > initial_time);
     assert(cabin.latitude != initial_latitude || cabin.longitude != initial_longitude);
     assert(strcmp(cabin.flight_phase, "UNKNOWN") != 0);
+    assert(cabin.flown_track_count > 0);
 
     changed_route = *sim_data_center_route(center);
     snprintf(changed_route.origin, sizeof(changed_route.origin), "%s", "TEST_ORIGIN");
@@ -119,6 +120,7 @@ int main(void)
     assert(cabin_data_apply_sim_data_center(&cabin, center, 0.033f) & CABIN_DATA_UPDATE_ROUTE);
     assert(!cabin.route_valid);
     assert(cabin.planned_route_count == 0);
+    assert(cabin.flown_track_count == 0);
     assert(strcmp(cabin.origin_airport, "----") == 0);
     assert(cabin.map_top_left_lat > cabin.map_bottom_right_lat);
     assert(cabin.map_bottom_right_lon > cabin.map_top_left_lon);

@@ -11,6 +11,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -47,7 +48,7 @@
 #define COCKPIT_PFD_TARGET_FRAME_MS COCKPIT_TARGET_FRAME_MS
 #define COCKPIT_SYNC_CHECK_LOG_MS 5000
 #define COCKPIT_PFD_PERF_LOG_MS 2000
-#define COCKPIT_SCENE_TEXTURE_MAX_WIDTH 2048
+#define COCKPIT_SCENE_TEXTURE_MAX_WIDTH 4096
 
 #define COCKPIT_PFD_TEXTURE_WIDTH 900
 #define COCKPIT_PFD_TEXTURE_HEIGHT 800
@@ -58,8 +59,8 @@
 #define COCKPIT_FMC_TEXTURE_WIDTH COCKPIT_FMC_IMAGE_WIDTH
 #define COCKPIT_FMC_TEXTURE_HEIGHT COCKPIT_FMC_IMAGE_HEIGHT
 
-#define COCKPIT_MIN_SCALE 0.5f
 #define COCKPIT_MAX_SCALE 3.0f
+#define COCKPIT_ZOOM_STEP 1.08f
 
 typedef struct Cockpit_XPlaneConfig
 {
@@ -173,6 +174,7 @@ typedef struct Cockpit_RenderTargets
 typedef struct Cockpit_Camera
 {
     float scale;
+    float fit_scale;
     float offset_x;
     float offset_y;
 } Cockpit_Camera;
@@ -613,7 +615,7 @@ static void update_scene_texture(
     SDL_RenderSetViewport(renderer, NULL);
     SDL_RenderSetScale(renderer, 1.0f, 1.0f);
 }
-
+//把统一数据中心的数据转换成 PFD 能直接显示的数据
 static void apply_sim_snapshot_to_pfd(PFD_Data *data, const SimSnapshot *snapshot)
 {
     if (data == NULL || snapshot == NULL)
@@ -763,7 +765,8 @@ static void reset_camera(Cockpit_Camera *camera, int window_width, int window_he
 
     const float scale_x = (float)window_width / (float)world_width;
     const float scale_y = (float)window_height / (float)world_height;
-    camera->scale = scale_x < scale_y ? scale_x : scale_y;
+    camera->fit_scale = scale_x < scale_y ? scale_x : scale_y;
+    camera->scale = camera->fit_scale;
     camera->offset_x = ((float)window_width - (float)world_width * camera->scale) * 0.5f;
     camera->offset_y = ((float)window_height - (float)world_height * camera->scale) * 0.5f;
 }
@@ -787,7 +790,8 @@ static void zoom_camera_at(Cockpit_Camera *camera, int mouse_x, int mouse_y, flo
     }
 
     const float old_scale = camera->scale;
-    const float new_scale = clamp_float(old_scale * zoom_factor, COCKPIT_MIN_SCALE, COCKPIT_MAX_SCALE);
+    const float minimum_scale = camera->fit_scale > 0.0f ? camera->fit_scale : 0.01f;
+    const float new_scale = clamp_float(old_scale * zoom_factor, minimum_scale, COCKPIT_MAX_SCALE);
     if (new_scale == old_scale)
     {
         return;
@@ -1555,8 +1559,17 @@ static int cockpit_main_run_internal(
             {
                 int mouse_x = 0;
                 int mouse_y = 0;
+                float wheel_delta = event.wheel.preciseY;
+                if (event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
+                {
+                    wheel_delta = -wheel_delta;
+                }
+                if (fabsf(wheel_delta) < 0.001f)
+                {
+                    continue;
+                }
                 SDL_GetMouseState(&mouse_x, &mouse_y);
-                zoom_camera_at(&camera, mouse_x, mouse_y, event.wheel.y > 0 ? 1.12f : 0.89f);
+                zoom_camera_at(&camera, mouse_x, mouse_y, powf(COCKPIT_ZOOM_STEP, wheel_delta));
             }
             else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
             {
@@ -1729,11 +1742,27 @@ static int cockpit_main_run_internal(
                 }
                 else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_p)
                 {
-                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 1);
+                    cockpit_alarm_set_caution_demo(&cockpit_state.alarm, 1);
                 }
                 else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_o)
                 {
+                    cockpit_alarm_set_caution_demo(&cockpit_state.alarm, 0);
+                }
+                else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_g)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 1);
+                }
+                else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_h)
+                {
                     sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_ENGINE_FIRE, 0);
+                }
+                else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_y)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CRASH, 1);
+                }
+                else if (event.key.repeat == 0 && view_mode == COCKPIT_VIEW_MAIN && event.key.keysym.sym == SDLK_r)
+                {
+                    sim_data_center_set_demo_alert(sim_data_center, ALERT_TYPE_CRASH, 0);
                 }
                 else if (event.key.repeat == 0 &&
                          view_mode == COCKPIT_VIEW_ND_ZOOM &&

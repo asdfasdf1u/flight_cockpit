@@ -38,6 +38,16 @@ int main(void)
     alert_manager_set_demo(&manager, ALERT_TYPE_CRASH, 1);
     alert_manager_update(&manager, &snapshot);
     assert(alert_snapshot_find(alert_manager_snapshot(&manager), ALERT_TYPE_CRASH)->active);
+    assert(strcmp(alert_snapshot_find(alert_manager_snapshot(&manager), ALERT_TYPE_CRASH)->message, "CRASH DETECTED") == 0);
+
+    alert_manager_set_demo(&manager, ALERT_TYPE_CRASH, 0);
+    alert_manager_update(&manager, &snapshot);
+    assert(!alert_snapshot_find(alert_manager_snapshot(&manager), ALERT_TYPE_CRASH)->active);
+
+    alert_manager_set_demo(&manager, ALERT_TYPE_CRASH, 1);
+    alert_manager_update(&manager, &snapshot);
+    assert(alert_snapshot_find(alert_manager_snapshot(&manager), ALERT_TYPE_CRASH)->active);
+
     alert_manager_clear_demo(&manager);
     alert_manager_update(&manager, &snapshot);
     assert(!alert_snapshot_find(alert_manager_snapshot(&manager), ALERT_TYPE_CRASH)->active);

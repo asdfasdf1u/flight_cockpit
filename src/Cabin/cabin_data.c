@@ -211,9 +211,21 @@ static void cabin_data_build_map_cache_path(Cabin_Data *data)
         }
         cabin_data_append_safe_cache_part(route_name, sizeof(route_name), data->destination_airport);
     }
+    else if (cabin_data_valid_geo(data->latitude, data->longitude))
+    {
+        const int lat_tenths = (int)(fabs(data->latitude) * 10.0 + 0.5);
+        const int lon_tenths = (int)(fabs(data->longitude) * 10.0 + 0.5);
+        snprintf(route_name,
+                 sizeof(route_name),
+                 "position_%c%04d_%c%04d",
+                 data->latitude >= 0.0 ? 'N' : 'S',
+                 lat_tenths,
+                 data->longitude >= 0.0 ? 'E' : 'W',
+                 lon_tenths);
+    }
     else
     {
-        copy_text(route_name, sizeof(route_name), "beijing_chengdu");
+        copy_text(route_name, sizeof(route_name), "position");
     }
 
     if (route_name[0] == '\0')
@@ -227,59 +239,6 @@ static void cabin_data_build_map_cache_path(Cabin_Data *data)
              CABIN_MAP_CACHE_DIR,
              route_name);
 }
-
-#if 0 /* Retired helpers for the standalone Cabin mock route. */
-static int cabin_data_point_in_map_bounds(const Cabin_Data *data, double latitude, double longitude)
-{
-    return data != NULL &&
-           cabin_data_valid_geo(latitude, longitude) &&
-           data->map_top_left_lat > data->map_bottom_right_lat &&
-           data->map_bottom_right_lon > data->map_top_left_lon &&
-           latitude <= data->map_top_left_lat &&
-           latitude >= data->map_bottom_right_lat &&
-           longitude >= data->map_top_left_lon &&
-           longitude <= data->map_bottom_right_lon;
-}
-
-static void cabin_data_set_route_point(Cabin_Data *data, int index, const char *ident, double latitude, double longitude)
-{
-    if (data == NULL || index < 0 || index >= CABIN_PLANNED_ROUTE_MAX_POINTS)
-    {
-        return;
-    }
-
-    Cabin_Trajectory_Point *point = &data->planned_route[index];
-    copy_text(point->ident, sizeof(point->ident), ident);
-    point->latitude = latitude;
-    point->longitude = longitude;
-    point->sequence = (unsigned int)index;
-    point->altitude = 0.0f;
-    point->ground_speed = 0.0f;
-}
-
-static void cabin_data_init_planned_route(Cabin_Data *data)
-{
-    if (data == NULL)
-    {
-        return;
-    }
-
-    data->planned_route_count = 7;
-    cabin_data_set_route_point(data, 0, "ZBAA", 40.080111, 116.584556); /* Beijing Capital */
-    cabin_data_set_route_point(data, 1, "SJW", 38.042800, 114.514900);  /* Shijiazhuang */
-    cabin_data_set_route_point(data, 2, "TYN", 37.870600, 112.548900);  /* Taiyuan */
-    cabin_data_set_route_point(data, 3, "XIY", 34.341600, 108.939800);  /* Xi'an */
-    cabin_data_set_route_point(data, 4, "HZG", 33.067600, 107.023300);  /* Hanzhong */
-    cabin_data_set_route_point(data, 5, "MIG", 31.467500, 104.679600);  /* Mianyang */
-    cabin_data_set_route_point(data, 6, "ZUTF", 30.312520, 104.441284); /* Chengdu Tianfu */
-
-    data->origin_lat = data->planned_route[0].latitude;
-    data->origin_lon = data->planned_route[0].longitude;
-    data->destination_lat = data->planned_route[data->planned_route_count - 1].latitude;
-    data->destination_lon = data->planned_route[data->planned_route_count - 1].longitude;
-}
-
-#endif
 
 static double cabin_data_route_distance(const Cabin_Trajectory_Point *a, const Cabin_Trajectory_Point *b)
 {
@@ -423,180 +382,9 @@ static void cabin_data_fit_map_bounds_to_position(Cabin_Data *data)
     data->map_top_left_lon = data->longitude - longitude_span * 0.5;
     data->map_bottom_right_lon = data->longitude + longitude_span * 0.5;
     data->map_zoom = 10;
+    cabin_data_build_map_cache_path(data);
 }
 
-#if 0 /* Retired helpers for synthetic Cabin position updates. */
-static void cabin_data_interpolate_planned_route(const Cabin_Data *data, float progress, double *latitude, double *longitude)
-{
-    if (latitude == NULL || longitude == NULL)
-    {
-        return;
-    }
-
-    if (data == NULL || data->planned_route_count < 2)
-    {
-        *latitude = data != NULL ? lerp_double(data->origin_lat, data->destination_lat, progress) : 0.0;
-        *longitude = data != NULL ? lerp_double(data->origin_lon, data->destination_lon, progress) : 0.0;
-        return;
-    }
-
-    progress = clamp_float(progress, 0.0f, 1.0f);
-    if (progress <= 0.0f)
-    {
-        *latitude = data->planned_route[0].latitude;
-        *longitude = data->planned_route[0].longitude;
-        return;
-    }
-    if (progress >= 1.0f)
-    {
-        const Cabin_Trajectory_Point *last = &data->planned_route[data->planned_route_count - 1];
-        *latitude = last->latitude;
-        *longitude = last->longitude;
-        return;
-    }
-
-    double total_distance = 0.0;
-    for (int i = 1; i < data->planned_route_count; ++i)
-    {
-        total_distance += cabin_data_route_distance(&data->planned_route[i - 1], &data->planned_route[i]);
-    }
-
-    if (total_distance <= 0.0)
-    {
-        const double segment_pos = (double)progress * (double)(data->planned_route_count - 1);
-        int segment = (int)floor(segment_pos);
-        if (segment >= data->planned_route_count - 1)
-        {
-            segment = data->planned_route_count - 2;
-        }
-        const float local_t = (float)(segment_pos - (double)segment);
-        *latitude = lerp_double(data->planned_route[segment].latitude, data->planned_route[segment + 1].latitude, local_t);
-        *longitude = lerp_double(data->planned_route[segment].longitude, data->planned_route[segment + 1].longitude, local_t);
-        return;
-    }
-
-    const double target_distance = total_distance * (double)progress;
-    double accumulated = 0.0;
-    for (int i = 1; i < data->planned_route_count; ++i)
-    {
-        const Cabin_Trajectory_Point *from = &data->planned_route[i - 1];
-        const Cabin_Trajectory_Point *to = &data->planned_route[i];
-        const double segment_distance = cabin_data_route_distance(from, to);
-        if (accumulated + segment_distance >= target_distance || i == data->planned_route_count - 1)
-        {
-            const float local_t = segment_distance > 0.0
-                                      ? (float)((target_distance - accumulated) / segment_distance)
-                                      : 0.0f;
-            *latitude = lerp_double(from->latitude, to->latitude, clamp_float(local_t, 0.0f, 1.0f));
-            *longitude = lerp_double(from->longitude, to->longitude, clamp_float(local_t, 0.0f, 1.0f));
-            return;
-        }
-        accumulated += segment_distance;
-    }
-
-    const Cabin_Trajectory_Point *last = &data->planned_route[data->planned_route_count - 1];
-    *latitude = last->latitude;
-    *longitude = last->longitude;
-}
-
-static void cabin_data_update_current_position(Cabin_Data *data)
-{
-    if (data == NULL)
-    {
-        return;
-    }
-
-    cabin_data_interpolate_planned_route(data, data->progress, &data->current_lat, &data->current_lon);
-
-    data->latitude = data->current_lat;
-    data->longitude = data->current_lon;
-}
-
-static void cabin_data_update_progress_fields(Cabin_Data *data)
-{
-    if (data == NULL)
-    {
-        return;
-    }
-
-    data->progress = clamp_float(data->progress, 0.0f, 1.0f);
-    cabin_data_update_current_position(data);
-    data->altitude = 9200.0f + 300.0f * sinf(data->progress * 6.2831853f);
-    data->ground_speed = 820.0f + 20.0f * sinf(data->progress * 12.5663706f);
-    data->remaining_time_min = (1.0f - data->progress) * CABIN_ROUTE_TOTAL_TIME_MIN;
-}
-
-static void cabin_data_update_location_labels(Cabin_Data *data)
-{
-    if (data == NULL)
-    {
-        return;
-    }
-
-    if (data->progress < 0.30f)
-    {
-        copy_text(data->current_city, sizeof(data->current_city), "北京市");
-        copy_text(data->current_district, sizeof(data->current_district), "北京市");
-        copy_text(data->current_town, sizeof(data->current_town), "顺义区");
-        return;
-    }
-    if (data->progress < 0.72f)
-    {
-        copy_text(data->current_city, sizeof(data->current_city), "陕西省");
-        copy_text(data->current_district, sizeof(data->current_district), "西安市");
-        copy_text(data->current_town, sizeof(data->current_town), "航路区");
-        return;
-    }
-
-    copy_text(data->current_city, sizeof(data->current_city), "四川省");
-    copy_text(data->current_district, sizeof(data->current_district), "成都市");
-    copy_text(data->current_town, sizeof(data->current_town), "简阳市");
-    return;
-
-    if (data->planned_route_from_fmc)
-    {
-        if (data->progress < 0.08f)
-        {
-            copy_text(data->current_city, sizeof(data->current_city), data->origin_airport);
-            copy_text(data->current_district, sizeof(data->current_district), "ORIGIN");
-            copy_text(data->current_town, sizeof(data->current_town), data->origin_airport);
-        }
-        else if (data->progress > 0.92f)
-        {
-            copy_text(data->current_city, sizeof(data->current_city), data->destination_airport);
-            copy_text(data->current_district, sizeof(data->current_district), "DEST");
-            copy_text(data->current_town, sizeof(data->current_town), data->destination_airport);
-        }
-        else
-        {
-            copy_text(data->current_city, sizeof(data->current_city), "ENROUTE");
-            copy_text(data->current_district, sizeof(data->current_district), "FMC ROUTE");
-            copy_text(data->current_town, sizeof(data->current_town), "SIM POSITION");
-        }
-        return;
-    }
-
-    if (data->progress < 0.30f)
-    {
-        copy_text(data->current_city, sizeof(data->current_city), "BEIJING");
-        copy_text(data->current_district, sizeof(data->current_district), "SHUNYI");
-        copy_text(data->current_town, sizeof(data->current_town), "BEIJING CAPITAL");
-    }
-    else if (data->progress < 0.72f)
-    {
-        copy_text(data->current_city, sizeof(data->current_city), "椋炶閫斾腑");
-        copy_text(data->current_district, sizeof(data->current_district), "鏈煡鍖哄煙");
-        copy_text(data->current_town, sizeof(data->current_town), "宸¤埅鑸");
-    }
-    else
-    {
-        copy_text(data->current_city, sizeof(data->current_city), "CHENGDU");
-        copy_text(data->current_district, sizeof(data->current_district), "JIAN YANG");
-        copy_text(data->current_town, sizeof(data->current_town), "CHENGDU TIANFU");
-    }
-}
-
-#endif
 
 static void cabin_data_compact_flown_track(Cabin_Data *data)
 {
@@ -659,22 +447,6 @@ static void cabin_data_push_flown_track_point(Cabin_Data *data, double latitude,
     data->flown_track_time_since_append = 0.0f;
 }
 
-#if 0 /* The adapted track starts from the latest valid snapshot position. */
-static void cabin_data_reset_flown_track(Cabin_Data *data)
-{
-    if (data == NULL)
-    {
-        return;
-    }
-
-    data->flown_track_count = 0;
-    data->flown_track_next_sequence = 0;
-    data->flown_track_last_progress = data->progress;
-    data->flown_track_time_since_append = 0.0f;
-    cabin_data_push_flown_track_point(data, data->origin_lat, data->origin_lon);
-}
-
-#endif
 
 static void cabin_data_update_flown_track(Cabin_Data *data, float delta_time, int force_append)
 {
@@ -740,50 +512,6 @@ void cabin_data_init(Cabin_Data *data)
     data->active_waypoint_index = -1;
     return;
 
-#if 0 /* Retired standalone Cabin mock state. */
-    copy_text(data->flight_no, sizeof(data->flight_no), "CA1888");
-    copy_text(data->origin_city, sizeof(data->origin_city), "北京");
-    copy_text(data->origin_airport, sizeof(data->origin_airport), "北京首都");
-    copy_text(data->destination_city, sizeof(data->destination_city), "成都");
-    copy_text(data->destination_airport, sizeof(data->destination_airport), "成都天府");
-    copy_text(data->current_city, sizeof(data->current_city), "北京市");
-    copy_text(data->current_district, sizeof(data->current_district), "顺义区");
-    copy_text(data->current_town, sizeof(data->current_town), "北京首都机场");
-
-    cabin_data_init_planned_route(data);
-    data->altitude = 9200.0f;
-    data->ground_speed = 820.0f;
-    data->heading = 0.0f;
-    data->track = 0.0f;
-    data->has_heading = 0;
-    data->using_sim_data = 0;
-    data->planned_route_from_fmc = 0;
-    copy_text(data->planned_route_source, sizeof(data->planned_route_source), "MOCK");
-    cabin_data_fit_map_bounds_to_route(data);
-    data->progress = 0.16f;
-    cabin_data_update_progress_fields(data);
-    cabin_data_update_location_labels(data);
-    cabin_data_reset_flown_track(data);
-    cabin_data_update_flown_track(data, 0.0f, 1);
-
-    printf("Cabin Route: CA1888 Beijing Capital International Airport -> Chengdu Tianfu International Airport.\n");
-    printf("Cabin Route: map bounds configured for a Beijing-Chengdu wide-area map.\n");
-
-    copy_text(data->weather, sizeof(data->weather), "晴");
-    copy_text(data->weather_city, sizeof(data->weather_city), "北京");
-    copy_text(data->weather_adcode, sizeof(data->weather_adcode), "110000");
-    data->temperature = 18.0f;
-    data->humidity = 57.0f;
-    copy_text(data->wind_direction, sizeof(data->wind_direction), "西南");
-    copy_text(data->wind_power, sizeof(data->wind_power), "3级");
-    copy_text(data->weather_source, sizeof(data->weather_source), "MOCK");
-    copy_text(data->weather_report_time, sizeof(data->weather_report_time), "--");
-    copy_text(data->api_error_message, sizeof(data->api_error_message), "未请求 API");
-    copy_text(data->map_source, sizeof(data->map_source), "LOCAL");
-    copy_text(data->api_map_error_message, sizeof(data->api_map_error_message), "未请求静态地图");
-}
-
-#endif
 }
 
 static float cabin_data_distance_nm(double latitude_a, double longitude_a, double latitude_b, double longitude_b)
@@ -1031,6 +759,14 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
         if (!data->route_valid)
         {
             cabin_data_fit_map_bounds_to_position(data);
+            data->flown_track_count = 0;
+            data->flown_track_next_sequence = 0;
+            data->flown_track_last_progress = data->progress;
+            data->flown_track_time_since_append = 0.0f;
+        }
+        else
+        {
+            cabin_data_update_flown_track(data, delta_time > 0.0f ? delta_time : 0.0f, 0);
         }
         if (data->current_place.status == CABIN_PLACE_VALID)
         {
@@ -1044,7 +780,6 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
             copy_text(data->current_district, sizeof(data->current_district), data->flight_phase);
             copy_text(data->current_town, sizeof(data->current_town), data->active_waypoint[0] != '\0' ? data->active_waypoint : "----");
         }
-        cabin_data_update_flown_track(data, delta_time > 0.0f ? delta_time : 0.0f, 0);
     }
 
     if (previous_valid != data->snapshot_valid)
@@ -1061,24 +796,3 @@ int cabin_data_apply_sim_data_center(Cabin_Data *data, const struct SimDataCente
     }
     return changes;
 }
-
-#if 0
-    if (data->progress < 0.30f)
-    {
-        copy_text(data->current_city, sizeof(data->current_city), "北京市");
-        copy_text(data->current_district, sizeof(data->current_district), "顺义区");
-        copy_text(data->current_town, sizeof(data->current_town), "北京首都机场");
-    }
-    else if (data->progress < 0.72f)
-    {
-        copy_text(data->current_city, sizeof(data->current_city), "飞行途中");
-        copy_text(data->current_district, sizeof(data->current_district), "未知区域");
-        copy_text(data->current_town, sizeof(data->current_town), "巡航航段");
-    }
-    else
-    {
-        copy_text(data->current_city, sizeof(data->current_city), "成都市");
-        copy_text(data->current_district, sizeof(data->current_district), "简阳市");
-        copy_text(data->current_town, sizeof(data->current_town), "成都天府机场");
-    }
-#endif

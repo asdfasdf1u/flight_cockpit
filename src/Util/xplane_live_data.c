@@ -28,6 +28,11 @@
 #define XPLANE_RREF_RESUBSCRIBE_SEC 2.0f
 #define XPLANE_RREF_MAX_DRAIN_PACKETS 4
 
+/* 报警状态数据ref轮询间隔：getDREF 为请求-响应模式，
+ * 过低频率会增加延迟，过高频率会阻塞主循环，1 秒一次较均衡。 */
+#define XPLANE_ALARM_POLL_INTERVAL_SEC 1.0f
+#define XPLANE_ALARM_DREF_COUNT 5
+
 static float clamp_float(float value, float min_value, float max_value)
 {
     if (value < min_value)
@@ -225,6 +230,68 @@ static void open_socket_once(XPlaneLiveData *live)
     fflush(stdout);
 }
 
+static void open_alarm_socket_once(XPlaneLiveData *live)
+{
+    if (live == NULL || live->alarm_socket_open)
+    {
+        return;
+    }
+
+    /* 使用独立本地端口（0 表示由 OS 分配），避免与 RREF socket 混淆。 */
+    live->alarm_socket = aopenUDP(live->xp_ip, live->xp_port, 0);
+    live->alarm_socket_open = 1;
+}
+
+/* 通过 getDREF 主动查询 X-Plane 报警状态数据ref。
+ * 由于 RREF 订阅已占用主 socket 持续接收数据，
+ * 这里使用独立 alarm_socket 发送 GETD 请求并读取响应。 */
+static void poll_alarm_drefs(XPlaneLiveData *live)
+{
+    static const char *drefs[XPLANE_ALARM_DREF_COUNT] = {
+        "sim/cockpit/warnings/master_warning_on",
+        "sim/cockpit/warnings/master_caution_on",
+        "sim/cockpit/warnings/engine_fires",
+        "sim/cockpit/warnings/stall_warning",
+        "sim/cockpit/warnings/overspeed_warning"};
+    float values[XPLANE_ALARM_DREF_COUNT][1];
+    float *value_ptrs[XPLANE_ALARM_DREF_COUNT];
+    int sizes[XPLANE_ALARM_DREF_COUNT];
+    int any_invalid = 0;
+
+    if (live == NULL || !live->alarm_socket_open)
+    {
+        return;
+    }
+
+    for (int i = 0; i < XPLANE_ALARM_DREF_COUNT; ++i)
+    {
+        values[i][0] = 0.0f;
+        value_ptrs[i] = values[i];
+        sizes[i] = 1;
+    }
+
+    if (getDREFs(live->alarm_socket, drefs, value_ptrs, XPLANE_ALARM_DREF_COUNT, sizes) != 0)
+    {
+        live->alarm_values_valid = 0;
+        return;
+    }
+
+    for (int i = 0; i < XPLANE_ALARM_DREF_COUNT; ++i)
+    {
+        if (sizes[i] <= 0)
+        {
+            any_invalid = 1;
+            live->alarm_values[i] = 0;
+        }
+        else
+        {
+            live->alarm_values[i] = values[i][0] > 0.0f ? 1 : 0;
+        }
+    }
+
+    live->alarm_values_valid = !any_invalid;
+}
+
 static int rref_write_dref_path(char *dest, int dest_size, const char *dref, int element_index, int element_count)
 {
     int written;
@@ -245,7 +312,7 @@ static int rref_write_dref_path(char *dest, int dest_size, const char *dref, int
 
     return written > 0 && written < dest_size;
 }
-
+//向 X-Plane 申请实时数据
 static int rref_send_subscription(XPlaneLiveData *live, int subscription_index, const char *dref, int element_index, int element_count, int frequency_hz)
 {
     char buffer[XPLANE_RREF_REQUEST_BYTES];
@@ -329,7 +396,7 @@ static int rref_ensure_subscriptions(XPlaneLiveData *live, const char *drefs[], 
 
     return live->rref_subscribed;
 }
-
+//接收并解析 X-Plane 实时数据
 static void rref_drain_packets(XPlaneLiveData *live)
 {
     char buffer[4096];
@@ -403,7 +470,7 @@ static int rref_find_subscription(const XPlaneLiveData *live, int dref_index, in
 
     return -1;
 }
-
+//把收到的实时数据整理成程序内部可用的数值
 static void rref_copy_values(const XPlaneLiveData *live, float *values[], int dref_count, int sizes[])
 {
     if (live == NULL || values == NULL || sizes == NULL)
@@ -531,7 +598,7 @@ static void apply_frame_to_legacy_modules(
         fmc_data->live_data_active = 1;
     }
 }
-
+//把 X-Plane 的实时数据整理成一帧完整飞行状态
 static int poll_all_data(
     XPlaneLiveData *live,
     PFD_Data *pfd_data,
@@ -830,13 +897,21 @@ void xplane_live_data_init(XPlaneLiveData *live, const char *xp_ip, unsigned sho
 
 void xplane_live_data_shutdown(XPlaneLiveData *live)
 {
-    if (live == NULL || !live->socket_open)
+    if (live == NULL)
     {
         return;
     }
 
-    closeUDP(live->socket);
-    live->socket_open = 0;
+    if (live->socket_open)
+    {
+        closeUDP(live->socket);
+        live->socket_open = 0;
+    }
+    if (live->alarm_socket_open)
+    {
+        closeUDP(live->alarm_socket);
+        live->alarm_socket_open = 0;
+    }
     set_status(live, 0, 0, 0, 0);
 }
 
@@ -1103,6 +1178,17 @@ static int xplane_live_data_update_internal(
     live->elapsed_time += delta_time;
 
     open_socket_once(live);
+    open_alarm_socket_once(live);
+
+    if (live->alarm_socket_open)
+    {
+        live->alarm_poll_elapsed += delta_time;
+        if (live->alarm_poll_elapsed >= XPLANE_ALARM_POLL_INTERVAL_SEC)
+        {
+            live->alarm_poll_elapsed = 0.0f;
+            poll_alarm_drefs(live);
+        }
+    }
 
     if (live->socket_open)
     {
@@ -1153,6 +1239,17 @@ static int xplane_live_data_update_internal(
         set_status(live, 1, 1, 1, fmc_data != NULL);
         frame.connected = live->connected;
         frame.timed_out = 0;
+
+        /* 将 getDREF 查询到的报警状态写入 live frame，供 SimDataCenter 同步。 */
+        if (live->alarm_values_valid)
+        {
+            frame.xplane_master_warning = live->alarm_values[0];
+            frame.xplane_master_caution = live->alarm_values[1];
+            frame.xplane_engine_fire = live->alarm_values[2];
+            frame.xplane_stall_warning = live->alarm_values[3];
+            frame.xplane_overspeed_warning = live->alarm_values[4];
+        }
+
         if (fmc_data != NULL)
         {
             fmc_data->live_data_active = 1;
@@ -1194,7 +1291,7 @@ int xplane_live_data_update(
 {
     return xplane_live_data_update_internal(live, pfd_data, nd_data, eicas_data, systems_data, fmc_data, NULL, delta_time, 1, 0);
 }
-
+//把 X-Plane 实时数据送进统一数据中心
 int xplane_live_data_update_with_sim_data_center(
     XPlaneLiveData *live,
     PFD_Data *pfd_data,
