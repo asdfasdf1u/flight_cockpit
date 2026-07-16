@@ -62,7 +62,7 @@ typedef struct SimXPlaneLiveFrame
     int has_flaps;            // 是否读取到襟翼数据
     int has_parking_brake;    // 是否读取到停留刹车数据
 
-    /* X-Plane 原生报警状态（通过 getDREF 读取 sim/cockpit/warnings/*） */
+    /* X-Plane 原生报警状态（通过 getDREF 读取 sim/cockpit/warnings/ 下的数据引用）。 */
     int xplane_master_warning;   // 主警告
     int xplane_master_caution;   // 主注意
     int xplane_engine_fire;      // 发动机火警

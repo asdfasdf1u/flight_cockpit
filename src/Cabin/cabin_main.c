@@ -680,7 +680,7 @@ static int cabin_main_run_internal(SimDataCenter *sim_data_center, XPlaneSharedR
         last_ticks = now;
         if (run_mode == CABIN_RUN_SHARED_RUNTIME)
         {
-            xplane_shared_runtime_update(runtime, delta_time);
+            xplane_shared_runtime_update(runtime);
         }
         else if (sim_data_center != NULL)
         {

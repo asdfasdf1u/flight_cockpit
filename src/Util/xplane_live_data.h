@@ -6,6 +6,11 @@
 #include "../ND/nd_data.h"
 #include "../PFD/pfd_data.h"
 #include "../Systems/aircraft_systems_data.h"
+#include "../Data/sim_xplane_live_frame.h"
+#include <SDL2/SDL.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "xplaneConnect.h"
 
 #define XPLANE_LIVE_DEFAULT_IP "127.0.0.1"
@@ -61,18 +66,44 @@ typedef struct XPlaneLiveData
     unsigned long long compare_mismatch_mask; // 字段比对差异掩码
 } XPlaneLiveData;
 
+/* X-Plane 采集阶段使用的模块临时数据，避免接口传递过长的指针列表。 */
+typedef struct XPlaneLiveDataTargets
+{
+    PFD_Data *pfd_data;
+    ND_Data *nd_data;
+    EICAS_Data *eicas_data;
+    AircraftSystems_Data *systems_data;
+} XPlaneLiveDataTargets;
+
 typedef struct XPlaneSharedRuntime
 {
-    SimDataCenter *sim_data_center;       // 共享统一数据中心
-    XPlaneLiveData live_data;             // X-Plane 实时连接状态
-    PFD_Data *pfd_shadow;                 // PFD 旧接口影子数据
-    ND_Data *nd_shadow;                   // ND 旧接口影子数据
-    EICAS_Data *eicas_shadow;             // EICAS 旧接口影子数据
-    AircraftSystems_Data *systems_shadow; // 系统旧接口影子数据
-    int initialized;                      // 共享运行时初始化状态
-    int last_frame_id;                    // 上一次日志帧号
-    int last_source;                      // 上一次数据来源
-    int last_valid;                       // 上一次有效状态
+    SimDataCenter *sim_data_center;
+
+    /* 数据线程独占 UDP socket 与临时模块数据；SDL 渲染线程不直接访问它们。 */
+    XPlaneLiveData live_data;
+    PFD_Data *pfd_shadow;
+    ND_Data *nd_shadow;
+    EICAS_Data *eicas_shadow;
+    AircraftSystems_Data *systems_shadow;
+
+    /* 双缓冲只传递完整的飞行帧，避免主线程读到采集中的半帧数据。 */
+#ifdef _WIN32
+    HANDLE data_thread;
+#else
+    SDL_Thread *data_thread;
+#endif
+    SDL_mutex *frame_mutex;
+    SDL_atomic_t data_ready;
+    SDL_atomic_t thread_exit;
+    SimXPlaneLiveFrame frame_buffers[2];
+    int published_frame_index;
+    unsigned int published_frame_revision;
+    unsigned int consumed_frame_revision;
+
+    int initialized;
+    int last_frame_id;
+    int last_source;
+    int last_valid;
 } XPlaneSharedRuntime;
 
 // 初始化 X-Plane 连接
@@ -83,21 +114,22 @@ void xplane_live_data_shutdown(XPlaneLiveData *live);
 // 旧路径：直接写入各模块数据
 int xplane_live_data_update(
     XPlaneLiveData *live,
-    PFD_Data *pfd_data,
-    ND_Data *nd_data,
-    EICAS_Data *eicas_data,
-    AircraftSystems_Data *systems_data,
+    const XPlaneLiveDataTargets *targets,
     FMC_Data *fmc_data,
     float delta_time);
 
 // 新路径：写入统一数据中心
 int xplane_live_data_update_with_sim_data_center(
     XPlaneLiveData *live,
-    PFD_Data *pfd_data,
-    ND_Data *nd_data,
-    EICAS_Data *eicas_data,
-    AircraftSystems_Data *systems_data,
+    const XPlaneLiveDataTargets *targets,
     SimDataCenter *sim_data_center,
+    float delta_time);
+
+/* 仅获取一帧 X-Plane 数据。调用者负责决定在哪个线程写入 SimDataCenter。 */
+int xplane_live_data_collect_frame(
+    XPlaneLiveData *live,
+    const XPlaneLiveDataTargets *targets,
+    SimXPlaneLiveFrame *frame,
     float delta_time);
 
 int xplane_live_data_pfd_active(const XPlaneLiveData *live);
@@ -116,7 +148,7 @@ void xplane_shared_runtime_init(
 // 关闭共享运行时
 void xplane_shared_runtime_shutdown(XPlaneSharedRuntime *runtime);
 // 更新共享实时数据
-int xplane_shared_runtime_update(XPlaneSharedRuntime *runtime, float delta_time);
+int xplane_shared_runtime_update(XPlaneSharedRuntime *runtime);
 // 获取共享数据中心
 SimDataCenter *xplane_shared_runtime_data_center(XPlaneSharedRuntime *runtime);
 // 获取共享快照

@@ -122,7 +122,7 @@ typedef struct SimSnapshot
     int flaps_level;
     int parking_brake_on;
 
-    /* X-Plane 原生报警状态（通过 getDREF 从 sim/cockpit/warnings/* 读取） */
+    /* X-Plane 原生报警状态（通过 getDREF 从 sim/cockpit/warnings/ 下读取）。 */
     int xplane_master_warning;
     int xplane_master_caution;
     int xplane_engine_fire;

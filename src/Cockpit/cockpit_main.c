@@ -50,7 +50,7 @@ int fmc_xplane_send_command(const char *command);
 #define COCKPIT_PFD_TARGET_FRAME_MS COCKPIT_TARGET_FRAME_MS
 #define COCKPIT_SYNC_CHECK_LOG_MS 5000
 #define COCKPIT_PFD_PERF_LOG_MS 2000
-#define COCKPIT_SCENE_TEXTURE_MAX_WIDTH 4096
+#define COCKPIT_SCENE_TEXTURE_MAX_WIDTH 2048
 
 #define COCKPIT_PFD_TEXTURE_WIDTH 900
 #define COCKPIT_PFD_TEXTURE_HEIGHT 800
@@ -1824,7 +1824,7 @@ static int cockpit_main_run_internal(
             delta_time = 0.1f;
         }
 
-        xplane_shared_runtime_update(runtime, delta_time);
+        xplane_shared_runtime_update(runtime);
         if (sim_data_ready)
         {
             sim_snapshot = sim_data_center_snapshot(sim_data_center);
